@@ -62,6 +62,48 @@ def strip_json_comments(text: str) -> str:
     return "".join(out)
 
 
+def strip_trailing_commas(text: str) -> str:
+    """Remove trailing commas outside string literals."""
+    out = []
+    in_string = False
+    escape = False
+    i = 0
+    while i < len(text):
+        char = text[i]
+        if in_string:
+            out.append(char)
+            if escape:
+                escape = False
+            elif char == "\\":
+                escape = True
+            elif char == '"':
+                in_string = False
+            i += 1
+            continue
+        if char == '"':
+            in_string = True
+            out.append(char)
+            i += 1
+            continue
+        if char == ',':
+            lookahead = i + 1
+            while lookahead < len(text) and text[lookahead].isspace():
+                lookahead += 1
+            if lookahead < len(text) and text[lookahead] in '}]':
+                i += 1
+                continue
+        out.append(char)
+        i += 1
+    return "".join(out)
+
+
+def parse_jsonc(text: str) -> dict:
+    parsed = json.loads(strip_trailing_commas(strip_json_comments(text)))
+    if not isinstance(parsed, dict):
+        raise ValueError("Configuration root must be a JSON object")
+    return parsed
+
+
 class ConfigEditor:
     @staticmethod
     def load_jsonc(path: str) -> Tuple[Optional[dict], Optional[str]]:
@@ -78,10 +120,7 @@ class ConfigEditor:
                 raw = f.read()
             if not raw.strip():
                 return {}, ""
-            cleaned = strip_json_comments(raw)
-            # Remove trailing commas
-            cleaned = re.sub(r',\s*([\}\]])', r'\1', cleaned)
-            data = json.loads(cleaned)
+            data = parse_jsonc(raw)
             return data, raw
         except Exception as e:
             return None, raw
@@ -89,46 +128,20 @@ class ConfigEditor:
     @staticmethod
     def update_json_fields_preserving(raw_text: str, updates: Dict[str, Any]) -> str:
         """
-        Updates keys in JSON/JSONC text preserving other keys and comments.
-        If key exists, replaces its value using regex.
-        If key doesn't exist, inserts it before the final closing brace.
+        Updates top-level keys and serializes validated JSON. Comments are removed
+        deliberately because the standard library has no lossless JSONC writer.
         """
-        content = raw_text.strip()
-        if not content:
-            return json.dumps(updates, indent=4, ensure_ascii=False)
-
-        for key, val in updates.items():
-            val_json = json.dumps(val, ensure_ascii=False)
-            pattern = re.compile(
-                r'("' + re.escape(key) + r'"\s*:\s*)(?:"(?:\\.|[^"\\])*"|true|false|null|\d+(?:\.\d+)?|\[[^\]]*\]|\{[^\}]*\})'
-            )
-            if pattern.search(content):
-                content = pattern.sub(r'\g<1>' + val_json.replace('\\', r'\\'), content, count=1)
-            else:
-                last_brace = content.rfind('}')
-                if last_brace != -1:
-                    before = content[:last_brace].rstrip()
-                    needs_comma = bool(before and not before.endswith('{') and not before.endswith(','))
-                    indent = "    "
-                    insert = (",\n" if needs_comma else "\n") + f'{indent}"{key}": {val_json}\n'
-                    content = before + insert + content[last_brace:]
-                else:
-                    content = json.dumps(updates, indent=4, ensure_ascii=False)
-        return content
+        data = parse_jsonc(raw_text) if raw_text.strip() else {}
+        data.update(updates)
+        return json.dumps(data, indent=4, ensure_ascii=False) + "\n"
 
     @staticmethod
     def remove_json_fields_preserving(raw_text: str, keys: list) -> str:
         """Removes specified keys from JSON/JSONC text preserving other structure."""
-        content = raw_text
+        data = parse_jsonc(raw_text) if raw_text.strip() else {}
         for key in keys:
-            pattern = re.compile(
-                r'([ \t]*)"' + re.escape(key) + r'"\s*:\s*(?:"(?:\\.|[^"\\])*"|true|false|null|\d+(?:\.\d+)?|\[[^\]]*\]|\{[^\}]*\})\s*,?'
-            )
-            content = pattern.sub('', content)
-
-        # Cleanup dangling comma before closing brace
-        content = re.sub(r',\s*(\})', r'\1', content)
-        return content
+            data.pop(key, None)
+        return json.dumps(data, indent=4, ensure_ascii=False) + "\n"
 
     @staticmethod
     def atomic_write(path: str, content: str):
@@ -138,10 +151,8 @@ class ConfigEditor:
         # Create backup if file exists
         if os.path.exists(path):
             backup_path = path + ".bak"
-            try:
+            if not os.path.exists(backup_path):
                 shutil.copy2(path, backup_path)
-            except Exception:
-                pass
 
         fd, tmp_path = tempfile.mkstemp(dir=dir_name, prefix="devproxy_tmp_")
         try:

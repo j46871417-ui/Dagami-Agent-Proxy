@@ -17,7 +17,7 @@ class TestConfigEditor(unittest.TestCase):
         self.assertEqual(data["http.proxy"], "http://example.com:8080")
         self.assertEqual(data["key"], "val // not comment")
 
-    def test_update_json_preserving_comments(self):
+    def test_update_jsonc_preserves_unrelated_values(self):
         original = '''{
             // Important setting
             "editor.fontSize": 14,
@@ -25,7 +25,7 @@ class TestConfigEditor(unittest.TestCase):
         }'''
         updates = {"http.proxy": "http://new:9090", "http.proxySupport": "on"}
         result = ConfigEditor.update_json_fields_preserving(original, updates)
-        self.assertIn("// Important setting", result)
+        self.assertEqual(json.loads(result)["editor.fontSize"],14)
         self.assertIn('"http.proxy": "http://new:9090"', result)
         self.assertIn('"http.proxySupport": "on"', result)
 

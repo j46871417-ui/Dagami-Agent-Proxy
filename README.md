@@ -1,12 +1,77 @@
-# DevProxy 2.0 ⚡
+<p align="center">
+  <img src="devproxy_pkg/assets/dagami-logo.jpg" alt="Dagami Agent Proxy" width="380" />
+</p>
+
+<h1 align="center">Dagami Agent Proxy</h1>
+
+<p align="center">
+  <b>Версия 0.1.0 альфа</b> • Универсальный и безопасный менеджер подключения IDE и инструментов разработки через собственный прокси
+</p>
+
+<p align="center">
+  <a href="https://t.me/bright26bot?start=dagami"><img src="https://img.shields.io/badge/Telegram_Bot-@bright26bot-blue?logo=telegram" alt="Telegram Bot" /></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-yellow.svg" alt="License" /></a>
+  <img src="https://img.shields.io/badge/Platform-Windows%20%7C%20Linux%20%7C%20macOS-brightgreen.svg" alt="Platform" />
+  <img src="https://img.shields.io/badge/Security-OS%20Keyring%20%7C%20Fail--Closed-blue.svg" alt="Security" />
+</p>
+
+Ранее — DevProxy. Локальная версия `0.1.0 альфа`: новый бренд, обновлённая неоновая айдентика,
+первый запуск по криптографическому ключу из Telegram-бота [@bright26bot](https://t.me/bright26bot?start=dagami)
+и общая переносимая GUI/CLI-реализация. Нативный Windows GUI: `DagamiAgentProxy.exe`, Windows CLI:
+`dagami-proxy.exe`. **[Установка, команды, архитектура переносимой версии и ограничения](PORTABLE.md)**.
+
+| Система | GUI / CLI | Статус проверки |
+|---|---|---|
+| Windows | Нативные WinForms GUI и CLI; отдельный Python preview | Сборка и локальные проверки выполнены |
+| Linux | Tk GUI, CLI, фоновые сессии, пользовательские `.desktop` | Исходники и ручная сборка готовы; запуск на Linux не проверен |
+| macOS | Tk GUI, CLI, локальные `.app`-обёртки | Исходники и ручная сборка готовы; запуск и подпись на Mac не проверены |
+
+Ручной workflow создаёт архивы и контрольные суммы без GitHub Release.
+Настройки прежнего DevProxy и существующие записи ярлыков сохраняются.
 
 > **Универсальный и безопасный менеджер подключения IDE и инструментов разработки через собственный прокси пользователя.**  
 > Поддержка: **Google Antigravity, VS Code, Cursor, Windsurf, VSCodium, OpenCode, Codex CLI и Codex Desktop (GUI)**.  
 > Кроссплатформенно: Windows, macOS, Linux.
 
-[![Platform](https://img.shields.io/badge/Platform-Windows%20%7C%20Linux%20%7C%20macOS-brightgreen.svg)]()
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
-[![Security: Audited](https://img.shields.io/badge/Security-OS%20Keyring%20%7C%20Fail--Closed-blue.svg)]()
+Основная Windows-сборка `DagamiAgentProxy.exe` использует нативный Windows Forms интерфейс. Окно приложения
+работает без браузера, WebView, HTML и HTTP-сервера интерфейса. Python CLI поддерживает
+отдельные сценарии для Windows, macOS и Linux.
+
+Интерфейс оформлен в стиле Windows 11 Fluent с неоновым акцентом: светлые карточки, спокойный синий
+акцент и боковая навигация между приложениями, настройками подключения и журналом.
+
+В нативном окне доступны настройки HTTP/HTTPS прокси и DNS (`dns.dagami.ru` по умолчанию),
+список автоматически найденных приложений, добавление `.exe` через системный диалог,
+запуск, остановка сессии и создание ярлыков. Выбранная строка определяет приложение
+для всех действий. Основная кнопка меняется по состоянию: **«Настроить» →
+«Запустить» → «Открыть»**, при неудачной TCP-проверке — **«Проверить»**.
+Галочки массового применения убраны. Создание ярлыка, остановка и дополнительные
+операции доступны через **«Ещё»**. Журнал отображается в том же окне.
+
+Переключатель **«Запускать через прокси из обычного ярлыка»** показывает состояние
+обычных ярлыков выбранного приложения. После включения Dagami Agent Proxy запускается в фоне
+при использовании ярлыка; режим действует до выключения. Проверяются наличие и SHA-256
+самих `.lnk`, а не только запись в журнале. Удалённые или изменённые ярлыки отображаются
+как проблема, без ложного состояния «включено»; проверка повторяется каждые три секунды.
+Состояние сессии, локального моста и TCP-доступность прокси различаются. Вход в аккаунт
+и доступность моделей не объявляются успешными на основании запуска или TCP.
+
+**«Пропатчить»** — отдельная кнопка комплексной подготовки выбранного приложения:
+1. Сохраняет и активирует параметры прокси в защищенном хранилище.
+2. **Автоматически создает ярлык на рабочем столе**, если обычный ярлык приложения ещё не был создан, привязывая его к исходному исполняемому файлу.
+3. **Настраивает конфигурацию среды**: прописывает локальный петлевой мост (`http://127.0.0.1:53200`) в файле `settings.json` целевого приложения.
+4. **Готовит бинарные модули Antigravity**: выполняет выравнивание полей protobuf в `resources/bin/language_server.exe` с автоматическим сохранением резервной копии `.devproxy-region.bak` и манифеста `.devproxy-region.json`.
+5. **Переводит пользовательские ярлыки** на рабочем столе, в меню «Пуск» и на панели задач на фоновый запуск Dagami Agent Proxy.
+6. При сбое все новые изменения автоматически откатываются. Повторное нажатие полностью безопасно.
+
+Git for Windows исключён из автоматического обнаружения нативной сборки. Явно добавленные
+пользователем приложения не удаляются.
+
+В боковой панели: [поддержать проект](https://pay.cloudtips.ru/p/671fda86),
+[t.me/dagamvi](https://t.me/dagamvi), [@bright26bot](https://t.me/bright26bot).
+Ссылки открываются обычным обработчиком Windows без запуска оплаты или отправки сообщений.
+
+Сборка нативной версии на Windows: `python build_native_app.py`.
 
 ---
 
@@ -28,9 +93,32 @@
    - `ProxyValidator`: Пошаговое тестирование канала.
    - `ApplicationAdapter`: Индивидуальные адаптеры для Antigravity, VS Code, Cursor, Windsurf, VSCodium, OpenCode, Codex CLI, Codex GUI.
    - `Launcher`: Безопасный запуск процессов (без `shell=True`).
-   - `ConfigEditor`: Бережное редактирование JSONC/TOML с сохранением комментариев и атомарной записью.
+   - `ConfigEditor`: Проверяемое редактирование JSONC с атомарной записью; комментарии удаляются при изменении файла.
    - `Tunnel`: Локальный петлевой мост (loopback `127.0.0.1`) для прозрачного SOCKS5/HTTP подключения.
    - `Recovery`: Точный откат только внесенных утилитой изменений.
+4. **Обычные и управляемые ярлыки Windows**:
+   - Для выбранного приложения переключатель **«Запускать через прокси из обычного ярлыка»** настраивает существующие пользовательские `.lnk` на рабочем столе, в меню «Пуск» и папке закреплений панели задач. Имя, значок, аргументы, горячая клавиша и рабочая папка сохраняются.
+   - Приложение запускается обычным ярлыком: Dagami Agent Proxy автоматически поднимает мост в фоне и остаётся в трее. Повторные запуски обращаются к одному экземпляру Dagami Agent Proxy через локальный канал текущего пользователя.
+   - Разные приложения могут работать одновременно; запуск следующего не завершает предыдущие сессии. Повторный клик без дополнительных аргументов активирует открытую управляемую сессию.
+   - Выключение переключателя восстанавливает исходные `.lnk` из проверенной резервной копии. Если ярлык после настройки изменён пользователем или установщиком, Dagami Agent Proxy отказывается его перезаписывать.
+   - **«Ещё → Создать ярлык»** создаёт дополнительные `Приложение — DevProxy`. Antigravity использует обычный профиль для возврата OAuth; остальные поддерживаемые Electron IDE — отдельный профиль.
+   - Мост поддерживает Smart DNS для двух рабочих API Antigravity (`cloudcode-pa.googleapis.com`, `daily-cloudcode-pa.googleapis.com`), DNS по умолчанию `dns.dagami.ru` (UDP/53). Эти туннели идут напрямую к полученному адресу с сохранением TLS/SNI; остальные — через upstream proxy.
+5. **Подготовка Antigravity Manager**:
+   - Раздел Antigravity в нативном окне содержит диагностику, подготовку клиента и точный откат.
+   - Для проверенной структуры Manager 2.22.0 меняются восемь согласованных имён полей protobuf в `resources/bin/language_server.exe`. Исполняемые инструкции не изменяются.
+   - Перед записью создаются `.devproxy-region.bak` и манифест `.devproxy-region.json` с SHA-256. Неоднозначные сигнатуры, чужие изменения, повреждённые копии и обновлённые файлы не перезаписываются.
+   - Диагностика отправляет запросы без токена аккаунта и проверяет TLS; успешное соединение не подтверждает доступ аккаунта или работу модели.
+   - Подробности анализа и ограничения: [ANTIGRAVITY_INTEGRATION.md](ANTIGRAVITY_INTEGRATION.md).
+6. **Системный Smart DNS Windows**:
+   - **Подключение → Настроить DNS…** открывает настройку по мотивам пользовательского `setup_smartdns_windows.ps1`: DNS-сервер, выбранные активные адаптеры, правила NRPT, очистка кэша.
+   - Адрес по умолчанию — **185.149.145.6**. Полный набор включает 68 доменов исходного скрипта и два API Antigravity; доступен также набор без игр и стриминга.
+   - Изменение адаптеров и NRPT включаются отдельно. Замена конфликтующих существующих правил требует отдельной отметки; сложные DNSSEC/DirectAccess/IPsec-правила автоматически не заменяются.
+   - Перед изменениями сохраняются режим DHCP/статики отдельно для IPv4/IPv6, статические DNS и заменяемые NRPT-правила. Кнопка **«Восстановить прежний DNS»** выполняет проверяемый откат; частичный сбой применения запускает откат автоматически.
+   - Только применение/откат запрашивают UAC. Модуль PowerShell встроен в EXE; администраторский помощник использует защищённое хранилище `%ProgramData%\DevProxy-SystemDns` и системные модули Windows.
+   - Системный DNS действует на весь компьютер и остаётся после выхода из Dagami Agent Proxy. Он применяется только явной кнопкой, отдельно от DNS-маршрута локального моста.
+
+Подробности запуска, хранения и отката: [WINDOWS_SHORTCUTS_AND_DNS.md](WINDOWS_SHORTCUTS_AND_DNS.md).
+
 
 ---
 
@@ -40,18 +128,62 @@
 ```bash
 python devproxy.py
 # или в Windows:
-devproxy.exe
+DagamiAgentProxy.exe
 # или в Linux / macOS:
 ./devproxy
 ```
 Мастер проведет по шагам:  
-**«Вставить свой прокси → проверить → выбрать приложение → запустить»**.
+**«Вставить ключ активации → вставить свой прокси → проверить → выбрать приложение → запустить/пропатчить»**.
+
+---
+
+## 🔑 Первый запуск и активация
+
+При первом запуске Dagami Agent Proxy запрашивает ключ активации в формате:
+`DAGAMI-XXXX-XXXX-XXXX`
+
+- **Где получить ключ**: ключ выдаётся в Telegram-боте [@bright26bot](https://t.me/bright26bot?start=dagami).
+- **Криптографическая проверка**: валидация ключа выполняется локально по криптографической контрольной сумме SHA-256 без обращения к внешним серверам и без телеметрии.
+- **В графическом интерфейсе**: на первом экране появляется окно активации с полем ввода ключа и прямой ссылкой на бота выдачи.
+- **В командной строке (CLI)**:
+  ```bash
+  # Активация ключом:
+  python devproxy.py activate DAGAMI-XXXX-XXXX-XXXX
+  # или в Windows нативным CLI:
+  dagami-proxy.exe activate DAGAMI-XXXX-XXXX-XXXX
+
+  # Проверка статуса лицензии:
+  python devproxy.py license
+  dagami-proxy.exe license
+
+  # Сброс ключа (деактивация):
+  python devproxy.py deactivate
+  dagami-proxy.exe deactivate
+  ```
+- **Генератор ключей для бота**:
+  Для генерации валидных ключей выдачи используется скрипт:
+  ```bash
+  python generate_license_key.py 5           # Сгенерировать 5 ключей
+  python generate_license_key.py --verify KEY # Проверить ключ
+  ```
 
 ---
 
 ## 💻 Команды CLI
 
-### 1. Управление профилями
+### 1. Управление лицензией
+```bash
+# Проверить состояние активации
+dagami-proxy.exe license
+
+# Активировать программу
+dagami-proxy.exe activate DAGAMI-XXXX-XXXX-XXXX
+
+# Сбросить активацию
+dagami-proxy.exe deactivate
+```
+
+### 2. Управление профилями
 ```bash
 # Добавить профиль со своим прокси
 python devproxy.py profile add "socks5://user:password@1.2.3.4:10808" --name mynode
@@ -64,7 +196,7 @@ python devproxy.py profile list
 python devproxy.py profile remove mynode
 ```
 
-### 2. Проверка соединения
+### 3. Проверка соединения
 ```bash
 # Проверить профиль
 python devproxy.py test --profile mynode
@@ -76,13 +208,13 @@ python devproxy.py test --proxy "socks5://127.0.0.1:10808"
 python devproxy.py test --profile mynode --echo
 ```
 
-### 3. Список приложений
+### 4. Список приложений
 ```bash
 python devproxy.py apps list
 ```
 Показывает установленные на компьютере среды разработки (`antigravity`, `vscode`, `cursor`, `windsurf`, `vscodium`, `opencode`, `codex`, `codex-gui`) и пути к их исполняемым файлам.
 
-### 4. Режим сессии (Запуск без изменения системных настроек)
+### 5. Режим сессии (Запуск без изменения системных настроек)
 ```bash
 # Запустить Google Antigravity через профиль mynode
 python devproxy.py run antigravity --profile mynode
@@ -94,7 +226,18 @@ python devproxy.py run cursor --profile mynode -- .
 python devproxy.py run codex --profile mynode
 ```
 
-### 5. Постоянная настройка (Persistent) и Откат (Recovery)
+### 6. Комплексный патчинг и ярлыки
+```bash
+# Пропатчить приложение (настройка settings.json + ярлык + Antigravity binary patch):
+dagami-proxy.exe patch antigravity
+
+# Управление управляемыми ярлыками для фонового запуска:
+dagami-proxy.exe shortcuts antigravity --enable
+dagami-proxy.exe shortcuts antigravity --disable
+dagami-proxy.exe shortcuts antigravity --status
+```
+
+### 7. Постоянная настройка (Persistent) и Откат (Recovery)
 ```bash
 # Применить настройки к выбранному приложению
 python devproxy.py apply --app antigravity --profile mynode
@@ -105,7 +248,7 @@ python devproxy.py restore --app antigravity
 python devproxy.py restore --app vscode,cursor
 ```
 
-### 6. Дополнительно: Поиск локальных клиентов
+### 8. Дополнительно: Поиск локальных клиентов
 ```bash
 python devproxy.py detect
 python devproxy.py detect --save
@@ -123,9 +266,9 @@ python devproxy.py detect --save
 ## 🛡️ Безопасность и проверка подлинности сборок
 
 - Исходный код C# скомпилирован через официальный компилятор платформы.
-- Контрольная сумма `devproxy.exe`:
-  - **SHA-256**: `D1104B97008E7E7EBD3A329109BF4CFFF616B0CC6E210429A50F0AADE383794A`
+- Контрольные суммы новых Windows GUI/CLI: `SHA256-native.json`; переносимых архивов: `dist-portable/SHA256-ОС-АРХИТЕКТУРА.json`.
 - Запуск тестов:
   ```bash
   python -m unittest discover -s tests -p "test_*.py"
   ```
+

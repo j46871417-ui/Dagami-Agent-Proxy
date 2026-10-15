@@ -57,13 +57,15 @@ class OpenCodeAdapter(ApplicationAdapter):
         return []
 
     def apply_persistent(self, profile: ProxyProfile) -> Tuple[bool, str]:
+        if profile.has_auth:
+            return False, "Authenticated proxies are supported only in isolated session mode; credentials are kept in the local tunnel."
         configs = self.detect_config_files()
         target_path = configs[0]
         parsed, raw = ConfigEditor.load_jsonc(target_path)
         if parsed is None:
             return False, f"Failed to parse config in {target_path}"
 
-        proxy_url = profile.to_safe_url() if profile.has_auth else profile.to_url()
+        proxy_url = profile.to_url()
         orig_proxy = parsed.get("proxy")
 
         updates = {"proxy": proxy_url}

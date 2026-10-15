@@ -1,56 +1,23 @@
-name: Build Linux Binary
-
+name: Linux portable artifacts (manual)
 on:
-  push:
-    tags:
-      - 'v*'
   workflow_dispatch:
-
 permissions:
-  contents: write
-
+  contents: read
 jobs:
-  build-linux:
-    runs-on: ubuntu-latest
+  linux:
+    runs-on: ubuntu-22.04
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
         with:
-          python-version: '3.11'
-
-      - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install pyinstaller
-
-      - name: Build standalone Linux executable
-        run: |
-          pyinstaller --onefile --clean --name devproxy-linux-x86_64 devproxy.py
-          chmod +x dist/devproxy-linux-x86_64
-          chmod +x devproxy
-          chmod +x install.sh
-
-      - name: Create release archive
-        run: |
-          mkdir -p package
-          cp dist/devproxy-linux-x86_64 package/devproxy-bin
-          cp devproxy package/devproxy
-          cp install.sh package/install.sh
-          cp README.md package/README.md
-          cp LICENSE package/LICENSE
-          tar -czvf devproxy-linux-x86_64.tar.gz -C package .
-
-      - name: Upload to Release
-        uses: softprops/action-gh-release@v2
-        if: startsWith(github.ref, 'refs/tags/')
+          python-version: '3.12'
+      - run: sudo apt-get update && sudo apt-get install -y python3-tk xvfb libsecret-tools desktop-file-utils
+      - run: python -m pip install 'pyinstaller>=6.16,<7'
+      - run: python -m unittest discover -s tests -p 'test_*.py' -v
+      - run: xvfb-run -a python build_portable.py
+      - uses: actions/upload-artifact@v4
         with:
-          files: |
-            dist/devproxy-linux-x86_64
-            devproxy-linux-x86_64.tar.gz
-            devproxy
-            install.sh
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          name: dagami-agent-proxy-linux
+          path: |
+            dist-portable/dagami-agent-proxy-*.zip
+            dist-portable/SHA256-*.json

@@ -57,10 +57,10 @@ class ProxyValidator:
     @staticmethod
     def test_tcp_connect(host: str, port: int, timeout: float = 4.0) -> (bool, Optional[float], Optional[str]):
         """Tests pure TCP socket connection and measures round-trip time."""
-        t0 = time.time()
+        t0 = time.monotonic()
         try:
             sock = socket.create_connection((host, port), timeout=timeout)
-            latency = (time.time() - t0) * 1000.0
+            latency = (time.monotonic() - t0) * 1000.0
             sock.close()
             return True, round(latency, 2), None
         except Exception as e:
@@ -154,7 +154,7 @@ class ProxyValidator:
             else:
                 sock.sendall(b"\x05\x01\x00")
 
-            resp = sock.recv(2)
+            resp = cls._recv_exact(sock, 2)
             if len(resp) < 2 or resp[0] != 0x05:
                 sock.close()
                 return False, False, False, "Invalid SOCKS5 greeting response"
@@ -168,9 +168,11 @@ class ProxyValidator:
                 # Username/password subnegotiation
                 user_bytes = (profile.username or "").encode("utf-8")
                 pwd_bytes = (profile.password or "").encode("utf-8")
+                if len(user_bytes) > 255 or len(pwd_bytes) > 255:
+                    return False, False, False, "SOCKS5 credentials exceed the 255-byte protocol limit"
                 auth_req = bytearray([0x01, len(user_bytes)]) + user_bytes + bytearray([len(pwd_bytes)]) + pwd_bytes
                 sock.sendall(auth_req)
-                auth_resp = sock.recv(2)
+                auth_resp = cls._recv_exact(sock, 2)
                 if len(auth_resp) < 2 or auth_resp[1] != 0x00:
                     sock.close()
                     return False, False, False, "SOCKS5 Authentication failed (bad username or password)"
@@ -178,11 +180,13 @@ class ProxyValidator:
             # CONNECT request
             # Domain name (0x03) allows remote DNS resolution (SOCKS5h)
             host_bytes = target_host.encode("utf-8")
+            if len(host_bytes) > 255:
+                return False, True, False, "SOCKS5 target hostname exceeds the 255-byte protocol limit"
             port_bytes = target_port.to_bytes(2, byteorder="big")
             cmd = bytearray([0x05, 0x01, 0x00, 0x03, len(host_bytes)]) + host_bytes + port_bytes
             sock.sendall(cmd)
 
-            conn_resp = sock.recv(4)
+            conn_resp = cls._recv_exact(sock, 4)
             if len(conn_resp) < 4 or conn_resp[1] != 0x00:
                 rep_code = conn_resp[1] if len(conn_resp) >= 2 else -1
                 sock.close()
@@ -191,12 +195,12 @@ class ProxyValidator:
             # Skip bound address
             atyp = conn_resp[3]
             if atyp == 0x01:
-                sock.recv(4 + 2)
+                cls._recv_exact(sock, 4 + 2)
             elif atyp == 0x03:
-                dlen = sock.recv(1)[0]
-                sock.recv(dlen + 2)
+                dlen = cls._recv_exact(sock, 1)[0]
+                cls._recv_exact(sock, dlen + 2)
             elif atyp == 0x04:
-                sock.recv(16 + 2)
+                cls._recv_exact(sock, 16 + 2)
 
             # Now perform strict TLS handshake to target
             ctx = ssl.create_default_context()
@@ -212,6 +216,16 @@ class ProxyValidator:
             return False, False, False, f"Strict TLS Verification Failed: {e}"
         except Exception as e:
             return False, False, False, str(e)
+
+    @staticmethod
+    def _recv_exact(sock: socket.socket, length: int) -> bytes:
+        data = bytearray()
+        while len(data) < length:
+            chunk = sock.recv(length - len(data))
+            if not chunk:
+                raise ConnectionError("Unexpected end of proxy response")
+            data.extend(chunk)
+        return bytes(data)
 
     @classmethod
     def validate(cls, profile: ProxyProfile, targets: Optional[List[tuple]] = None, timeout: float = 5.0) -> ValidationResult:
@@ -230,13 +244,13 @@ class ProxyValidator:
         # 2. Check each target
         passed_any = False
         for label, host, port in check_targets:
-            t_start = time.time()
+            t_start = time.monotonic()
             if profile.is_socks:
                 ok, auth_ok, tls_ok, msg = cls.test_socks5_proxy(profile, host, port, timeout=timeout)
             else:
                 ok, auth_ok, tls_ok, msg = cls.test_http_proxy(profile, host, port, timeout=timeout)
             
-            elapsed = round((time.time() - t_start) * 1000.0, 1)
+            elapsed = round((time.monotonic() - t_start) * 1000.0, 1)
             target_entry = {
                 "name": label,
                 "host": host,
@@ -255,7 +269,7 @@ class ProxyValidator:
                 res.auth_required = True
                 res.errors.append(f"Auth error on {label}: {msg}")
 
-        res.overall_success = passed_any
-        if not passed_any and not res.errors:
-            res.errors.append("Failed to establish secure tunnel to any target endpoint.")
+        res.overall_success = bool(res.target_checks) and all(item["success"] for item in res.target_checks)
+        if not res.overall_success and not res.errors:
+            res.errors.append("Failed to establish a secure tunnel to every requested target endpoint.")
         return res

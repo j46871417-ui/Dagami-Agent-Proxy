@@ -1,77 +1,59 @@
 #!/usr/bin/env bash
-# ==============================================================================
-# DevProxy 1-Line Installer for Linux & macOS
-# Run: curl -fsSL https://raw.githubusercontent.com/j46871417-ui/devproxy/main/install.sh | bash
-# ==============================================================================
+set -euo pipefail
 
-set -e
+REPOSITORY="j46871417-ui/devproxy"
+ARCHIVE_URL="https://github.com/${REPOSITORY}/archive/refs/heads/main.tar.gz"
 
-GREEN='\033[0;32m'
-CYAN='\033[0;36m'
-YELLOW='\033[1;33m'
-BOLD='\033[1m'
-NC='\033[0m'
-
-printf "${CYAN}${BOLD}"
-cat <<'EOF'
-  _____              _____                     
- |  __ \            |  __ \                    
- | |  | | _____   __| |__) | __ _____  ___   _ 
- | |  | |/ _ \ \ / /|  ___/ '__/ _ \ \/ / | | |
- | |__| |  __/\ V / | |   | | | (_) >  <| |_| |
- |_____/ \___| \_/  |_|   |_|  \___/_/\_\\__, |
-                                          __/ |
-                                         |___/ 
-EOF
-printf "${NC}\n"
-echo "Установка DevProxy CLI для Linux & macOS..."
-
-# Determine installation directory
-if [ "$(id -u)" -eq 0 ]; then
-    INSTALL_DIR="/usr/local/bin"
-else
-    INSTALL_DIR="$HOME/.local/bin"
-    mkdir -p "$INSTALL_DIR"
-
-    # Ensure ~/.local/bin is in PATH
-    SHELL_RC=""
-    if [ -n "$BASH_VERSION" ] || [ -f "$HOME/.bashrc" ]; then
-        SHELL_RC="$HOME/.bashrc"
-    elif [ -n "$ZSH_VERSION" ] || [ -f "$HOME/.zshrc" ]; then
-        SHELL_RC="$HOME/.zshrc"
-    fi
-
-    if [[ ":$PATH:" != *":$HOME/.local/bin:"* ]]; then
-        if [ -n "$SHELL_RC" ]; then
-            echo 'export PATH="$HOME/.local/bin:$PATH"' >> "$SHELL_RC"
-            echo "Добавлен ~/.local/bin в PATH ($SHELL_RC)"
-        fi
-        export PATH="$HOME/.local/bin:$PATH"
-    fi
-fi
-
-RAW_URL="https://raw.githubusercontent.com/j46871417-ui/devproxy/main/devproxy"
-TARGET="$INSTALL_DIR/devproxy"
-
-echo "Скачивание утилиты в $TARGET..."
-if command -v curl >/dev/null 2>&1; then
-    curl -fsSL "$RAW_URL" -o "$TARGET"
-elif command -v wget >/dev/null 2>&1; then
-    wget -qO "$TARGET" "$RAW_URL"
-else
-    echo "Ошибка: требуется curl или wget для загрузки." >&2
+if ! command -v python3 >/dev/null 2>&1; then
+    echo "[-] Python 3 is required." >&2
     exit 1
 fi
 
-chmod +x "$TARGET"
+if [ "$(id -u)" -eq 0 ]; then
+    BIN_DIR="/usr/local/bin"
+    APP_DIR="/usr/local/lib/devproxy"
+else
+    BIN_DIR="${HOME}/.local/bin"
+    APP_DIR="${HOME}/.local/lib/devproxy"
+fi
 
-printf "\n${GREEN}${BOLD}✓ DevProxy CLI успешно установлен в $TARGET!${NC}\n\n"
-echo "Для запуска просто введите в терминале:"
-printf "  ${CYAN}devproxy${NC}            - интерактивное меню\n"
-printf "  ${CYAN}devproxy [ПРОКСИ]${NC}   - применить прокси сразу\n"
-printf "  ${CYAN}devproxy --status${NC}   - проверить текущие настройки\n"
-printf "  ${CYAN}devproxy --remove${NC}   - сбросить все прокси\n\n"
+mkdir -p "$BIN_DIR" "$(dirname "$APP_DIR")"
+TEMP_DIR="$(mktemp -d)"
+trap 'rm -rf "$TEMP_DIR"' EXIT INT TERM
+ARCHIVE="$TEMP_DIR/devproxy.tar.gz"
 
-if [ "$INSTALL_DIR" = "$HOME/.local/bin" ] && [[ ":$PATH:" != *":$HOME/.local/bin:"* ]]; then
-    printf "${YELLOW}Примечание: Перезапустите терминал или выполните: source %s${NC}\n\n" "$SHELL_RC"
+if command -v curl >/dev/null 2>&1; then
+    curl -fsSL "$ARCHIVE_URL" -o "$ARCHIVE"
+elif command -v wget >/dev/null 2>&1; then
+    wget -qO "$ARCHIVE" "$ARCHIVE_URL"
+else
+    echo "[-] curl or wget is required." >&2
+    exit 1
+fi
+
+tar -xzf "$ARCHIVE" -C "$TEMP_DIR"
+SOURCE_DIR="$(find "$TEMP_DIR" -mindepth 1 -maxdepth 1 -type d -name 'devproxy-*' -print -quit)"
+if [ -z "$SOURCE_DIR" ] || [ ! -f "$SOURCE_DIR/devproxy.py" ] || [ ! -d "$SOURCE_DIR/devproxy_pkg" ]; then
+    echo "[-] Downloaded archive does not contain a complete DevProxy application." >&2
+    exit 1
+fi
+
+STAGE_DIR="${APP_DIR}.new.$$"
+rm -rf "$STAGE_DIR"
+mkdir -p "$STAGE_DIR"
+cp "$SOURCE_DIR/devproxy.py" "$STAGE_DIR/devproxy.py"
+cp -R "$SOURCE_DIR/devproxy_pkg" "$STAGE_DIR/devproxy_pkg"
+cp "$SOURCE_DIR/devproxy" "$STAGE_DIR/devproxy"
+chmod +x "$STAGE_DIR/devproxy"
+
+if [ -d "$APP_DIR" ]; then
+    mv "$APP_DIR" "${APP_DIR}.old.$$"
+fi
+mv "$STAGE_DIR" "$APP_DIR"
+rm -rf "${APP_DIR}.old.$$"
+ln -sfn "$APP_DIR/devproxy" "$BIN_DIR/devproxy"
+
+echo "[+] DevProxy installed: $BIN_DIR/devproxy"
+if [[ ":$PATH:" != *":$BIN_DIR:"* ]]; then
+    echo "[!] Add $BIN_DIR to PATH."
 fi

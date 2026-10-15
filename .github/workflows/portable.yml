@@ -1,0 +1,37 @@
+name: Dagami Agent Proxy GUI and CLI (manual artifacts only)
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-22.04, ubuntu-24.04-arm, macos-15-intel, macos-15, windows-2022]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Linux desktop dependencies
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y python3-tk xvfb libsecret-tools desktop-file-utils
+      - name: Build dependencies
+        run: python -m pip install 'pyinstaller>=6.16,<7'
+      - name: Unit and real loopback/process tests
+        run: python -m unittest discover -s tests -p 'test_*.py' -v
+      - name: Build Linux artifacts with GUI smoke test
+        if: runner.os == 'Linux'
+        run: xvfb-run -a python build_portable.py
+      - name: Build Windows or macOS artifacts with GUI smoke test
+        if: runner.os != 'Linux'
+        run: python build_portable.py
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dagami-agent-proxy-${{ matrix.os }}
+          path: |
+            dist-portable/dagami-agent-proxy-*.zip
+            dist-portable/SHA256-*.json
+          if-no-files-found: error

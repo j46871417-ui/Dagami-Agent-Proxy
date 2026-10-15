@@ -13,7 +13,7 @@ from .config_editor import ConfigEditor
 
 def get_devproxy_state_path() -> str:
     home = os.path.expanduser("~")
-    state_dir = os.path.join(home, ".devproxy")
+    state_dir = os.environ.get("DEVPROXY_HOME") or os.path.join(home, ".devproxy")
     os.makedirs(state_dir, exist_ok=True)
     return os.path.join(state_dir, "state.json")
 
@@ -44,6 +44,7 @@ class StateManager:
             if os.path.exists(tmp_path):
                 try: os.remove(tmp_path)
                 except Exception: pass
+            raise
 
     @classmethod
     def record_applied_change(cls, app_id: str, file_path: str, modified_keys: Dict[str, Any], original_values: Dict[str, Any]):
@@ -51,10 +52,16 @@ class StateManager:
         state = cls.load_state()
         applied = state.setdefault("applied", {})
         app_record = applied.setdefault(app_id, {})
-        app_record[file_path] = {
-            "modified_keys": list(modified_keys.keys()),
-            "original_values": original_values
-        }
+        existing = app_record.get(file_path)
+        if existing:
+            existing["modified_keys"] = sorted(set(existing.get("modified_keys", [])) | set(modified_keys.keys()))
+            existing["applied_values"] = dict(modified_keys)
+        else:
+            app_record[file_path] = {
+                "modified_keys": list(modified_keys.keys()),
+                "original_values": dict(original_values),
+                "applied_values": dict(modified_keys),
+            }
         cls.save_state(state)
 
     @classmethod
