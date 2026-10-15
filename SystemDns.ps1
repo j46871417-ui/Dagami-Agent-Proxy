@@ -117,7 +117,9 @@ function Get-ProviderDomains([string]$Preset) {
         'ttvnw.net',
         'usher.ttvnw.net',
         'challenges.cloudflare.com'
-    ) + @('cloudcode-pa.googleapis.com','daily-cloudcode-pa.googleapis.com')
+    ) + @('cloudcode-pa.googleapis.com','daily-cloudcode-pa.googleapis.com',
+        'accounts.google.com','oauth2.googleapis.com','www.googleapis.com',
+        'lh3.googleusercontent.com','www.gstatic.com','ssl.gstatic.com')
     if($Preset -eq 'Full'){return @($all | Select-Object -Unique)}
     if($Preset -ne 'Development'){throw 'Unknown DNS preset.'}
     @($all | Where-Object {$_ -notmatch '^(strava\.com|www\.strava\.com|cdn-1\.strava\.com|graphql\.strava\.com|twitch\.tv|gql\.twitch\.tv|ttvnw\.net|usher\.ttvnw\.net|xboxlive\.com|xbox\.com)$'} | Select-Object -Unique)
@@ -228,7 +230,8 @@ function Undo-State($State,[bool]$FailureRollback=$false) {
             Restore-Adapter $original
         }catch{$errors.Add($_.Exception.Message)}
     }
-    $rules=@(Get-DnsClientNrptRule)
+    $rules=@()
+    if($State.UseNrpt -or @($State.CreatedRules).Count -or @($State.OriginalRules).Count){$rules=@(Get-DnsClientNrptRule)}
     $blocked=@()
     foreach($created in @($State.CreatedRules)){
         $found=@($rules | Where-Object {$_.Name -eq $created.Name})

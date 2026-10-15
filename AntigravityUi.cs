@@ -20,10 +20,10 @@ namespace DevProxyApp
             var card = new FluentCard { Dock = DockStyle.Fill };
             var body = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 3, BackColor = FluentTheme.Surface };
             body.Controls.Add(FluentLabel("Вход и проверка Antigravity", 15, true), 0, 0);
-            _prepareAntigravity = new CheckBox { Text = "Подготавливать клиент перед запуском через Dagami Agent Proxy", AutoSize = true, Checked = ConfigManager.Instance.PrepareAntigravityClient };
+            _prepareAntigravity = new CheckBox { Text = "Дополнительная бинарная подготовка совместимых версий", AutoSize = true, Checked = ConfigManager.Instance.PrepareAntigravityClient };
             body.Controls.Add(_prepareAntigravity, 0, 1);
             body.Controls.Add(new Label { Dock = DockStyle.Fill, ForeColor = FluentTheme.Muted,
-                Text = "Локальная проверка региона в language_server.exe. Перед изменением создаётся проверенная резервная копия.\nПрава аккаунта и моделей проверяет Google. Для подготовки и отката закройте Antigravity." }, 0, 2);
+                Text = "Прокси и обычные ярлыки настраиваются независимо от совместимости бинарного патча. Неизвестная версия backend не изменяется.\nДля поддерживаемых версий сохраняются резервная копия и откат. Доступ аккаунта и моделей проверяет Google." }, 0, 2);
             body.RowStyles.Add(new RowStyle(SizeType.Absolute, 32)); body.RowStyles.Add(new RowStyle(SizeType.Absolute, 30)); body.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
             card.Controls.Add(body); page.Controls.Add(card, 0, 0);
             var actions = new FlowLayoutPanel { Dock = DockStyle.Fill, WrapContents = false, AutoScroll = true };
@@ -66,6 +66,10 @@ namespace DevProxyApp
                         catch (Exception ex) { report.AppendLine("Клиент: " + ex.Message); }
                         try { report.AppendLine(AntigravityDiagnostics.ProbeToken(bridgePort)); }
                         catch (Exception ex) { report.AppendLine("OAuth POST /token: " + ex.GetType().Name + ": " + ex.Message); }
+                        foreach (string host in new[] { "accounts.google.com", "lh3.googleusercontent.com", "gemini.google.com" }) {
+                            try { report.AppendLine(AntigravityDiagnostics.ProbePublic(host, bridgePort)); }
+                            catch (Exception ex) { report.AppendLine(host + ": " + ex.Message); }
+                        }
                         foreach (string host in ScopedDnsResolver.Hosts) {
                             try {
                                 if (useDns) report.AppendLine("DNS " + dnsHost + ": " + host + " → " + new ScopedDnsResolver(dnsHost).Resolve(host));

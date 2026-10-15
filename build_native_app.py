@@ -34,7 +34,7 @@ def main() -> None:
         "DevProxyApp.cs", "NativeUi.cs", "FluentUi.cs", "AntigravityIntegration.cs",
         "AntigravityUi.cs", "AntigravityLogin.cs", "NativeShortcuts.cs",
         "NativeLaunchBroker.cs", "NativeSessions.cs", "SystemDnsManager.cs", "NativeCli.cs", "Brand.cs",
-        "LicenseManager.cs"
+        "LicenseManager.cs", "AppProxyPolicy.cs"
     ]
     command.extend(sources)
     command.append(r"/win32icon:devproxy_pkg\assets\dagami-agent-proxy.ico")

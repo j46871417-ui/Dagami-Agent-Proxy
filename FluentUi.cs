@@ -182,7 +182,7 @@ namespace DevProxyApp
             var nav = new FlowLayoutPanel { Dock = DockStyle.Fill, FlowDirection = FlowDirection.TopDown, WrapContents = false, Margin = Padding.Empty };
             sidebar.Controls.Add(nav, 0, 1);
             var footer = new FlowLayoutPanel { Dock = DockStyle.Fill, FlowDirection = FlowDirection.TopDown, WrapContents = false, Margin = Padding.Empty };
-            var version = FluentLabel("Dagami · 0.1.0 альфа", 9, false);
+            var version = FluentLabel("Dagami · " + Brand.Version, 9, false);
             version.AccessibleName = "Dagami Agent Proxy, версия 0.1.0 альфа";
             version.AutoSize = false; version.Size = new Size(148, 24);
             footer.Controls.Add(version);
@@ -229,7 +229,7 @@ namespace DevProxyApp
             apps.RowStyles.Add(new RowStyle(SizeType.Absolute, 42));
             apps.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
             apps.RowStyles.Add(new RowStyle(SizeType.Absolute, 178));
-            var connection = new FluentCard { Dock = DockStyle.Fill, Padding = new Padding(12, 6, 12, 6), Margin = new Padding(0, 0, 0, 8) };
+            var connection = new FluentCard { Dock = DockStyle.Fill, Padding = new Padding(12, 2, 12, 2), Margin = new Padding(0, 0, 0, 8) };
             _connectionSummary = FluentLabel("Подключение", 9, true);
             _connectionSummary.Dock = DockStyle.Fill;
             _connectionSummary.AutoSize = false;
@@ -310,7 +310,7 @@ namespace DevProxyApp
             settings.Controls.Add(_proxyBox, 0, 2);
             var reveal = new CheckBox { Text = "Показать адрес", AutoSize = true, Anchor = AnchorStyles.Top | AnchorStyles.Left, Margin = new Padding(14, 3, 0, 0) };
             reveal.CheckedChanged += (s, e) => _proxyBox.UseSystemPasswordChar = !reveal.Checked; settings.Controls.Add(reveal, 1, 2);
-            _dnsEnabled = new CheckBox { Text = "DNS-маршрут Antigravity", Checked = ConfigManager.Instance.UseDagamiDns, AutoSize = true };
+            _dnsEnabled = new CheckBox { Text = "Smart DNS для входа Google, Antigravity и Gemini", Checked = ConfigManager.Instance.UseDagamiDns, AutoSize = true };
             settings.Controls.Add(_dnsEnabled, 0, 3);
             _dnsBox = new TextBox { Text = ConfigManager.Instance.DnsHost, Dock = DockStyle.Fill, BorderStyle = BorderStyle.FixedSingle, AccessibleName = "Имя DNS сервера", Enabled = _dnsEnabled.Checked };
             _dnsEnabled.CheckedChanged += (s, e) => _dnsBox.Enabled = _dnsEnabled.Checked; settings.Controls.Add(_dnsBox, 0, 4);
@@ -319,7 +319,7 @@ namespace DevProxyApp
             AddNativeButton(settingsActions, "Сохранить", () => { SaveNativeSettings(); Logger.Log("[✓] Настройки сохранены."); });
             ((FluentButton)_nativeButtons[_nativeButtons.Count - 1]).Primary = true;
             AddNativeButton(settingsActions, "Проверить прокси", CheckFluentProxy);
-            AddNativeButton(settingsActions, "Настроить DNS…", () => { using (var dialog = new SystemDnsForm()) dialog.ShowDialog(this); });
+            AddNativeButton(settingsActions, "Записать DNS в систему…", () => { using (var dialog = new SystemDnsForm(_dnsBox.Text.Trim())) dialog.ShowDialog(this); UpdateNativeStatus(); });
             settingsCard.Controls.Add(settings); settingsPage.Controls.Add(settingsCard, 0, 0);
             var behaviorCard = new FluentCard { Dock = DockStyle.Fill };
             var behavior = new FlowLayoutPanel { Dock = DockStyle.Fill, FlowDirection = FlowDirection.TopDown, WrapContents = false };
@@ -327,7 +327,7 @@ namespace DevProxyApp
             _systemEnvironment = new CheckBox { Text = "Записывать переменные прокси пользователя Windows", AutoSize = true, Checked = ConfigManager.Instance.SetSystemEnv };
             behavior.Controls.Add(_systemEnvironment); behavior.Controls.Add(FluentLabel("Применяются через «Ещё → Дополнительно → Записать настройки».", 9, false));
             behaviorCard.Controls.Add(behavior); settingsPage.Controls.Add(behaviorCard, 0, 1);
-            var note = new Label { Dock = DockStyle.Fill, ForeColor = FluentTheme.Muted, Text = "DNS по умолчанию: dns.dagami.ru (UDP/53). При включении два рабочих хоста Antigravity идут напрямую через Smart DNS.\nОстальной трафик идёт через ваш прокси. TLS сквозной; сертификаты проверяются клиентом.", Padding = new Padding(2, 4, 2, 0) };
+            var note = new Label { Dock = DockStyle.Fill, ForeColor = FluentTheme.Muted, Text = "Smart DNS: вход Google, OAuth, аватар, Gemini и API Antigravity. Остальные адреса — через прокси; TLS проверяется.\nСистемный DNS: «Записать DNS в систему…» → подтвердить запись и UAC. Есть резервная копия и откат.", Padding = new Padding(2, 4, 2, 0) };
             settingsPage.Controls.Add(note, 0, 2);
 
             var logCard = new FluentCard { Dock = DockStyle.Fill };

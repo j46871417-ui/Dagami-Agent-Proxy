@@ -172,7 +172,8 @@ namespace DevProxyApp
                 string error;
                 if (!LaunchTarget(target, out error)) throw new InvalidOperationException(error);
                 _proxyCheckMessage = null;
-                _appFeedback.Text = "Приложение запущено. Закрытие окна Dagami Agent Proxy оставляет прокси в трее.";
+                string notice;
+                _appFeedback.Text = _nativeClientNotices.TryGetValue(target.Id,out notice) ? "Приложение запущено через прокси. "+notice : "Приложение запущено. Закрытие окна Dagami Agent Proxy оставляет прокси в трее.";
             } finally { _nativeBusy = false; SetNativeButtonsEnabled(true); UpdateNativeStatus(); }
         }
 
@@ -318,7 +319,8 @@ namespace DevProxyApp
                 " | Приложений: " + _cachedTargets.Count + session;
             if (_connectionSummary != null)
                 _connectionSummary.Text = (_bridgePort > 0 ? "Прокси настроен" : "Настройте подключение") +
-                    "  ·  " + (ConfigManager.Instance.UseDagamiDns ? "DNS: " + ConfigManager.Instance.DnsHost : "DNS-маршрут отключён");
+                    "  ·  " + (ConfigManager.Instance.UseDagamiDns ? "Smart DNS: " + ConfigManager.Instance.DnsHost : "DNS-маршрут отключён") +
+                    "\nСистемный DNS: " + SystemDnsManager.BriefStatus() + " · запись в разделе «Подключение»";
             UpdateAppActionState();
         }
 

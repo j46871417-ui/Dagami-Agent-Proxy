@@ -139,6 +139,28 @@ namespace DevProxyApp
                 return "Последняя операция: " + (labels.ContainsKey(value) ? labels[value] : value) + ". DNS: " + Convert.ToString(state["Server"]) + ".\r\nЭто сохранённый результат операции; текущие DNS показаны в списке адаптеров.";
             } catch (Exception ex) { return "Не удалось прочитать резервную копию: " + ex.GetType().Name; }
         }
+        public static string BriefStatus() {
+            string path=Path.Combine(StoreRoot,"state.json");
+            if(!File.Exists(path))return "не записывался приложением";
+            try {
+                var state=new JavaScriptSerializer().Deserialize<Dictionary<string,object>>(File.ReadAllText(path));
+                string status=Convert.ToString(state["Status"]);
+                if(status=="Restored")return "прежние настройки восстановлены";
+                if(status!="Applied")return "нужна проверка: "+status;
+                string server=Convert.ToString(state["Server"]);
+                var originals=state["OriginalAdapters"] as System.Collections.IEnumerable;
+                var adapters=Adapters();int verified=0;
+                if(originals!=null)foreach(object item in originals) {
+                    var record=item as Dictionary<string,object>;if(record==null)continue;
+                    var adapter=adapters.Find(a=>a.Guid.Equals(Convert.ToString(record["Guid"]),StringComparison.OrdinalIgnoreCase));
+                    if(adapter==null)return "адаптер недоступен — проверьте";
+                    string[] servers=adapter.CurrentServers.Split(new[]{", "},StringSplitOptions.RemoveEmptyEntries);
+                    if(servers.Length!=1 || servers[0]!=server)return "изменён вне приложения — проверьте";
+                    verified++;
+                }
+                return verified>0?"записан: "+server:"последняя операция: правила NRPT";
+            } catch {return "не удалось проверить";}
+        }
         public static string Execute(SystemDnsRequest request) {
             string payload = EncodeRequest(request);
             var psi = new ProcessStartInfo(Process.GetCurrentProcess().MainModule.FileName, "--system-dns-helper " + request.Operation + " " + payload);
@@ -171,16 +193,17 @@ namespace DevProxyApp
         readonly ComboBox _preset = new ComboBox { Dock = DockStyle.Fill, DropDownStyle = ComboBoxStyle.DropDownList };
         readonly CheckedListBox _adapters = new CheckedListBox { Dock = DockStyle.Fill, CheckOnClick = true, HorizontalScrollbar = true };
         readonly CheckBox _changeAdapters = new CheckBox { Text = "Изменить DNS отмеченных адаптеров (для всей системы)", AutoSize = true, Checked = true };
-        readonly CheckBox _nrpt = new CheckBox { Text = "Добавить доменные правила NRPT из выбранного набора", AutoSize = true, Checked = true };
+        readonly CheckBox _nrpt = new CheckBox { Text = "Дополнительно: записать доменные правила NRPT", AutoSize = true, Checked = false };
         readonly CheckBox _replace = new CheckBox { Text = "Заменить конфликтующие NRPT-правила с резервной копией", AutoSize = true };
         readonly TextBox _report = new TextBox { Multiline = true, ReadOnly = true, Dock = DockStyle.Fill, ScrollBars = ScrollBars.Vertical, Font = new Font("Consolas", 9) };
-        readonly Button _apply = new Button { Text = "Применить DNS в системе", AutoSize = true, Height = 34 };
+        readonly Button _apply = new Button { Text = "Записать DNS в систему", AutoSize = true, Height = 34 };
         readonly Button _restore = new Button { Text = "Восстановить прежний DNS", AutoSize = true, Height = 34 };
         readonly Button _refresh = new Button { Text = "Обновить", AutoSize = true, Height = 34 };
         bool _busy;
         bool _loading;
-        public SystemDnsForm() {
-            Text = "DevProxy — системный Smart DNS"; StartPosition = FormStartPosition.CenterParent; ClientSize = new Size(820, 650); MinimumSize = new Size(720, 600);
+        public SystemDnsForm(string server = null) {
+            if(!string.IsNullOrWhiteSpace(server))_server.Text=server.Trim();
+            Text = Brand.Name + " — запись DNS в Windows"; StartPosition = FormStartPosition.CenterParent; ClientSize = new Size(820, 650); MinimumSize = new Size(720, 600);
             Font = new Font("Segoe UI", 10); BackColor = FluentTheme.Background;
             var body = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 9, Padding = new Padding(18) };
             body.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
@@ -191,7 +214,7 @@ namespace DevProxyApp
             fields.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 130)); fields.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
             fields.Controls.Add(new Label { Text = "DNS-сервер (IP)", AutoSize = true }, 0, 0); fields.Controls.Add(_server, 1, 0);
             fields.Controls.Add(new Label { Text = "Домены NRPT", AutoSize = true }, 0, 1); fields.Controls.Add(_preset, 1, 1);
-            _preset.Items.AddRange(new object[] { "Полный список из скрипта + Antigravity (70 доменов)", "Разработка и ИИ (без игр и стриминга)" }); _preset.SelectedIndex = 0;
+            _preset.Items.AddRange(new object[] { "Полный список + вход Google/Antigravity", "Разработка и ИИ (без игр и стриминга)" }); _preset.SelectedIndex = 1;
             body.Controls.Add(fields, 0, 1); body.Controls.Add(_changeAdapters, 0, 2); body.Controls.Add(_nrpt, 0, 3); body.Controls.Add(_replace, 0, 4); body.Controls.Add(_adapters, 0, 5);
             var actions = new FlowLayoutPanel { Dock = DockStyle.Fill, WrapContents = false, Margin = Padding.Empty };
             actions.Controls.AddRange(new Control[] { _apply, _restore, _refresh }); body.Controls.Add(actions, 0, 6);
@@ -206,12 +229,18 @@ namespace DevProxyApp
             bool first = _adapters.Items.Count == 0;
             var selected = new HashSet<string>(); foreach (SystemDnsAdapter adapter in _adapters.CheckedItems) selected.Add(adapter.Guid);
             _loading = true; _apply.Enabled = _restore.Enabled = _refresh.Enabled = false;
+            string requestedServer=_server.Text.Trim();
             _report.Text = (operationMessage == null ? "" : operationMessage + "\r\n\r\n") + "Чтение сетевых адаптеров…";
             ThreadPool.QueueUserWorkItem(o => {
-                List<SystemDnsAdapter> adapters = null; string error = null;
-                try { adapters = SystemDnsManager.Adapters(); } catch (Exception ex) { error = ex.Message; }
+                List<SystemDnsAdapter> adapters = null; string error = null; string resolvedServer=null;
+                try {
+                    adapters = SystemDnsManager.Adapters(); IPAddress ip;
+                    if(IPAddress.TryParse(requestedServer,out ip))resolvedServer=ip.ToString();
+                    else {ip=Array.Find(Dns.GetHostAddresses(requestedServer),a=>a.AddressFamily==System.Net.Sockets.AddressFamily.InterNetwork);if(ip==null)throw new InvalidOperationException("Не найден IPv4 DNS-сервера. Введите его IP вручную.");resolvedServer=ip.ToString();}
+                } catch (Exception ex) { error = ex.Message; }
                 try { BeginInvoke(new Action(() => {
                     _loading = false; _apply.Enabled = _restore.Enabled = _refresh.Enabled = true;
+                    if(resolvedServer!=null && _server.Text.Trim()==requestedServer)_server.Text=resolvedServer;
                     _adapters.Items.Clear(); if (adapters != null) foreach (var adapter in adapters) _adapters.Items.Add(adapter, first || selected.Contains(adapter.Guid));
                     _report.Text = SystemDnsManager.LastStatus() + (error == null ? "" : "\r\nОшибка чтения адаптеров: " + error) + (operationMessage == null ? "" : "\r\n\r\n" + operationMessage);
                 })); } catch (InvalidOperationException) { }

@@ -5,8 +5,11 @@ if(-not (Test-Path -LiteralPath $engine)){$engine=Join-Path $PSScriptRoot '..\..
 $script:Checks=0
 function Assert($Value,[string]$Message){$script:Checks++;if(-not $Value){throw $Message}}
 function Reject([scriptblock]$Action,[string]$Message){$caught=$false;try{& $Action | Out-Null}catch{$caught=$true};Assert $caught $Message}
-Assert (@(Get-ProviderDomains Full).Count -eq 70) 'Script domain list mismatch'
-Assert (@(Get-ProviderDomains Development).Count -lt 70) 'Development preset not filtered'
+Assert (@(Get-ProviderDomains Full).Count -eq 76) 'Script domain list mismatch'
+Assert (@(Get-ProviderDomains Development).Count -lt 76) 'Development preset not filtered'
+foreach($domain in @('accounts.google.com','oauth2.googleapis.com','lh3.googleusercontent.com','www.gstatic.com','ssl.gstatic.com')) {
+    Assert ($domain -in @(Get-ProviderDomains Development)) ('Missing Google dependency: '+$domain)
+}
 $script:BaseRoot=Join-Path $env:TEMP ('DevProxy-systemdns-tests-'+[guid]::NewGuid().ToString('N'))
 [IO.Directory]::CreateDirectory($script:BaseRoot) | Out-Null
 
@@ -118,6 +121,19 @@ try {
     Reject {Invoke-SystemDns $request} 'DNS command injection accepted'
     $request=Request;$request.JobId='../escape'
     Reject {Invoke-SystemDns $request} 'Result path traversal accepted'
+
+    Reset-Fixture
+    $savedNrpt=(Get-Item Function:\Get-DnsClientNrptRule).ScriptBlock
+    function Get-DnsClientNrptRule {throw 'NRPT cmdlet unavailable in this fixture'}
+    try {
+        $request=Request;$request.UseNrpt=$false;$request.ReplaceExisting=$false
+        $null=Invoke-SystemDns $request
+        Assert ((Read-State).Status -eq 'Applied') 'Adapter-only apply requires NRPT'
+        Assert (@($script:Rules).Count -eq 2) 'Adapter-only apply changed foreign NRPT'
+        $null=Invoke-SystemDns (Request Restore)
+        Assert ((Read-State).Status -eq 'Restored') 'Adapter-only rollback requires NRPT'
+        Assert ($script:Families[$script:Adapters[0].InterfaceGuid].IPv4.Static.Count -eq 0) 'Adapter-only rollback lost DHCP'
+    } finally {Set-Item Function:\Get-DnsClientNrptRule $savedNrpt}
     "PASS $script:Checks DNS preset, preflight, DHCP/static IPv4/IPv6, NRPT backup, conflict, rollback and validation checks (fixtures only)."
 } finally {
     $resolved=[IO.Path]::GetFullPath($script:BaseRoot);$temp=[IO.Path]::GetFullPath($env:TEMP).TrimEnd('\')+'\'

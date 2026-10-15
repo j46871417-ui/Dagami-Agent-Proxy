@@ -214,6 +214,28 @@ namespace DevProxyApp
             return AssignProcessToJobObject(handle, hProcess);
         }
 
+        [DllImport("kernel32.dll", SetLastError = true)]
+        static extern bool QueryInformationJobObject(IntPtr job, int infoClass, IntPtr buffer, uint length, out uint returned);
+        public int[] ProcessIds() {
+            if(handle==IntPtr.Zero)return new int[0];
+            int size=4096;
+            for(int attempt=0;attempt<4;attempt++,size*=2) {
+                IntPtr buffer=Marshal.AllocHGlobal(size);
+                try {
+                    uint returned;
+                    if(QueryInformationJobObject(handle,3,buffer,(uint)size,out returned)) {
+                        int count=Marshal.ReadInt32(buffer,4);
+                        if(count<0 || count>(size-8)/IntPtr.Size)throw new InvalidDataException("Invalid job process list.");
+                        var ids=new int[count];
+                        for(int i=0;i<count;i++)ids[i]=checked((int)Marshal.ReadIntPtr(buffer,8+i*IntPtr.Size).ToInt64());
+                        return ids;
+                    }
+                    if(Marshal.GetLastWin32Error()!=234) return new int[0];
+                } finally {Marshal.FreeHGlobal(buffer);}
+            }
+            return new int[0];
+        }
+
         public void Dispose()
         {
             if (handle != IntPtr.Zero)
@@ -657,7 +679,8 @@ namespace DevProxyApp
             lock (_routeLock)
             {
                 var lines = new List<string>();
-                foreach (string host in ScopedDnsResolver.Hosts)
+                var hosts = new List<string>(ScopedDnsResolver.Hosts); hosts.AddRange(ScopedDnsResolver.GoogleDependencies);
+                foreach (string host in hosts)
                             lines.Add(host + ": установленных туннелей через Smart DNS — " + (_routeCounts.ContainsKey(host) ? _routeCounts[host] : 0));
                 return string.Join(Environment.NewLine, lines.ToArray());
             }
@@ -2020,11 +2043,18 @@ namespace DevProxyApp
             try
             {
                 bool antigravity = Path.GetFileName(target.ExePath).Equals("Antigravity.exe", StringComparison.OrdinalIgnoreCase);
-                if (!reuse && IsElectronTarget(target)) NativeLogin.RequireStopped(target.ExePath);
+                bool gemini = AppProxyPolicy.IsGemini(target);
+                string executable = AppProxyPolicy.Executable(target);
+                if (!reuse && (IsElectronTarget(target) || gemini)) NativeLogin.RequireStopped(executable);
                 if (antigravity && !reuse && ConfigManager.Instance.PrepareAntigravityClient)
-                    Logger.Log("[Antigravity] " + AntigravityIntegration.Prepare(target.ExePath));
+                {
+                    var preparation=AntigravityIntegration.PrepareForProxy(target.ExePath);
+                    if(preparation.Prepared)_nativeClientNotices.Remove(target.Id);
+                    else _nativeClientNotices[target.Id]=preparation.Message;
+                    Logger.Log("[Antigravity] " + preparation.Message);
+                }
                 string localProxy = "http://127.0.0.1:" + _bridgePort;
-                var psi = new ProcessStartInfo(target.ExePath);
+                var psi = new ProcessStartInfo(executable);
                 psi.UseShellExecute = false;
                 psi.WorkingDirectory = string.IsNullOrEmpty(originalDirectory) ? Path.GetDirectoryName(target.ExePath) : Environment.ExpandEnvironmentVariables(originalDirectory);
                 psi.Arguments = originalArguments ?? "";
@@ -2039,6 +2069,11 @@ namespace DevProxyApp
                 psi.EnvironmentVariables["AGY_PROXY_URL"] = localProxy;
                 psi.EnvironmentVariables["agy_proxy_url"] = localProxy;
                 psi.EnvironmentVariables["DEVPROXY_DNS_HOST"] = ConfigManager.Instance.DnsHost;
+
+                if(gemini) {
+                    AppProxyPolicy.ConfigureGemini(psi,localProxy);
+                    Logger.Log("[Gemini] Chromium/WebView2/Qt proxy parameters configured; normal account profile retained. Network/account success requires verification.");
+                }
 
                 if (IsElectronTarget(target))
                 {
@@ -2055,7 +2090,7 @@ namespace DevProxyApp
                 Process launched = Process.Start(psi);
                 if (launched == null) { error = "Процесс приложения не был создан."; return false; }
                 session.Processes.Add(launched);
-                try { session.Job.AssignProcess(launched.Handle); }
+                try { if(!session.Job.AssignProcess(launched.Handle)) Logger.Log("[!] Job Object assignment failed; child-process tracking may be incomplete. Win32="+Marshal.GetLastWin32Error()); }
                 catch (Exception jobEx) { Logger.Log("[!] Процесс запущен без Job Object: " + jobEx.GetType().Name); }
                 _activeSessionProc = session.RunningProcess ?? launched; _activeJobMgr = session.Job;
                 Logger.Log("[✓] Процесс запущен: " + target.DisplayName + " (PID: " + launched.Id + "). Маршрут передан дочерним процессам.");

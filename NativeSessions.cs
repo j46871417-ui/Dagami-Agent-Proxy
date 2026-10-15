@@ -10,7 +10,18 @@ namespace DevProxyApp
         public readonly JobObjectManager Job = new JobObjectManager();
         public readonly List<Process> Processes = new List<Process>();
         public Process RunningProcess {
-            get { foreach (var process in Processes) try { if (!process.HasExited) return process; } catch (InvalidOperationException) { } return null; }
+            get {
+                Process first=null;
+                foreach (var process in Processes) try { if (!process.HasExited) { if(process.MainWindowHandle!=IntPtr.Zero)return process; if(first==null)first=process; } } catch (InvalidOperationException) { }
+                // Launchers often exit after starting the actual app. The Job owns
+                // its descendants, so do not lose proxy/session state with the parent.
+                foreach(int id in Job.ProcessIds()) {
+                    if(Processes.Exists(p=>p.Id==id))continue;
+                    try { var process=Process.GetProcessById(id); if(process.HasExited){process.Dispose();continue;} Processes.Add(process); if(process.MainWindowHandle!=IntPtr.Zero)return process; if(first==null)first=process; }
+                    catch(ArgumentException){} catch(System.ComponentModel.Win32Exception){}
+                }
+                return first;
+            }
         }
         public void Dispose() {
             Job.Dispose();
@@ -27,6 +38,7 @@ namespace DevProxyApp
         public static List<string> Apply(AppTarget target, string manager, IEnumerable<string> folders, NativeShortcuts shortcuts, string proxyUrl, out string summary, bool autoCreateShortcut = true) {
             if (target == null || !target.IsInstalled) throw new InvalidOperationException("Приложение не найдено.");
             string backend = null, before = null;
+            bool binaryPrepared=false, binaryChanged=false;
             bool antigravity = string.Equals(Path.GetFileName(target.ExePath), "Antigravity.exe", StringComparison.OrdinalIgnoreCase);
 
             string configResult = null;
@@ -44,11 +56,18 @@ namespace DevProxyApp
             try {
                 var paths = shortcuts.EnablePrepared(target, manager, folders, () => {
                     if (!antigravity) return;
-                    backend = AntigravityIntegration.BackendPath(target.ExePath);
-                    before = AntigravityIntegration.Hash(File.ReadAllBytes(backend));
-                    Logger.Log("[Patch] " + AntigravityIntegration.Prepare(target.ExePath));
+                    try { backend = AntigravityIntegration.BackendPath(target.ExePath); }
+                    catch(UnsupportedAntigravityBinaryException) { backend=null; }
+                    if(backend!=null)before = AntigravityIntegration.Hash(File.ReadAllBytes(backend));
+                    // Unexpected write/verification failures still enter the guarded
+                    // rollback path. Only a classified incompatibility is optional.
+                    binaryChanged=true;
+                    var result=AntigravityIntegration.PrepareForProxy(target.ExePath);
+                    binaryPrepared=result.Prepared;
+                    binaryChanged=binaryPrepared && backend!=null && before!=AntigravityIntegration.Hash(File.ReadAllBytes(backend));
+                    Logger.Log("[Patch] " + result.Message);
                 }, () => {
-                    if (backend != null && before != null && before != AntigravityIntegration.Hash(File.ReadAllBytes(backend))) {
+                    if (binaryChanged && backend != null && before != null && before != AntigravityIntegration.Hash(File.ReadAllBytes(backend))) {
                         AntigravityIntegration.Restore(target.ExePath);
                         if (before != AntigravityIntegration.Hash(File.ReadAllBytes(backend))) throw new IOException("Не удалось вернуть исходное состояние клиента.");
                     }
@@ -57,8 +76,10 @@ namespace DevProxyApp
                 var parts = new List<string>();
                 parts.Add("ярлыков: " + paths.Count);
                 if (!string.IsNullOrEmpty(configResult)) parts.Add(configResult);
-                if (antigravity) parts.Add("клиент подготовлен");
+                if (antigravity && binaryPrepared) parts.Add("бинарная подготовка проверена");
+                if (AppProxyPolicy.IsGemini(target)) parts.Add("параметры Chromium/WebView2 при запуске; доступ к сервису проверяется отдельно");
                 summary = "Готово (" + string.Join(", ", parts.ToArray()) + "). Запускайте приложение привычным ярлыком.";
+                if(antigravity && !binaryPrepared)summary="Прокси и ярлыки настроены: "+paths.Count+". Бинарная подготовка пропущена — несовместимые сигнатуры, backend не изменялся. Проверьте вход и модели в Antigravity.";
                 return paths;
             } catch (Exception) {
                 if (configApplied) {
@@ -73,6 +94,7 @@ namespace DevProxyApp
     {
         internal string InitialShortcutKey;
         readonly Dictionary<string, NativeSession> _nativeSessions = new Dictionary<string, NativeSession>();
+        readonly Dictionary<string,string> _nativeClientNotices = new Dictionary<string,string>();
         bool HasRunningSessions() { foreach (var session in _nativeSessions.Values) if (session.RunningProcess != null) return true; return false; }
         [DllImport("user32.dll")] static extern bool SetForegroundWindow(IntPtr window);
         [DllImport("user32.dll")] static extern bool ShowWindowAsync(IntPtr window, int command);

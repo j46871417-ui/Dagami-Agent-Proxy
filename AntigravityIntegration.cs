@@ -12,6 +12,14 @@ using System.Web.Script.Serialization;
 
 namespace DevProxyApp
 {
+    public sealed class UnsupportedAntigravityBinaryException : InvalidOperationException {
+        public UnsupportedAntigravityBinaryException(string message) : base(message) { }
+    }
+    public sealed class AntigravityPreparationResult {
+        public bool Prepared { get; private set; }
+        public string Message { get; private set; }
+        internal AntigravityPreparationResult(bool prepared, string message) { Prepared=prepared; Message=message; }
+    }
     // Independent implementation. Only protobuf descriptor/tag names are changed;
     // executable instructions, TLS verification and server authentication are preserved.
     public static class AntigravityIntegration
@@ -28,7 +36,7 @@ namespace DevProxyApp
         {
             string candidate = Path.Combine(Path.GetDirectoryName(executable), "resources", "bin", "language_server.exe");
             if (!File.Exists(candidate))
-                throw new InvalidOperationException("Не найден backend Antigravity Manager. Этот способ предназначен для Manager 2.x с resources/bin/language_server.exe.");
+                throw new UnsupportedAntigravityBinaryException("Не найден поддерживаемый backend resources/bin/language_server.exe. Бинарная подготовка этой структуры Antigravity не поддерживается.");
             return candidate;
         }
 
@@ -49,20 +57,27 @@ namespace DevProxyApp
             return result;
         }
 
-        public static byte[] PatchData(byte[] original, out int changes)
+        private static List<int> ValidatePatterns(byte[] original, out List<byte[]> replacements)
         {
             // Validate every signature before touching any byte. Every descriptor
             // and its matching Go tag must agree; partial or ambiguous builds fail.
             var offsets = new List<int>();
-            var replacements = new List<byte[]>();
+            replacements = new List<byte[]>();
             foreach (string pattern in Patterns) {
                 byte[] from = Encoding.ASCII.GetBytes(pattern);
                 byte[] to = Encoding.ASCII.GetBytes(pattern.Replace("ineligible", "dpeligible"));
                 List<int> matches = FindAll(original, from);
                 if (matches.Count != 1)
-                    throw new InvalidOperationException("Сигнатуры этой версии не поддерживаются или файл уже изменён. Подготовка отменена (совпадений: " + matches.Count + ").");
+                    throw new UnsupportedAntigravityBinaryException("Бинарная подготовка: несовместимые сигнатуры (шаблон " + (offsets.Count+1) + "/" + Patterns.Length + ", совпадений: " + matches.Count + "). Файл может относиться к другой версии или быть уже изменён. SHA-256: " + Hash(original) + ".");
                 offsets.Add(matches[0]); replacements.Add(to);
             }
+            return offsets;
+        }
+
+        public static byte[] PatchData(byte[] original, out int changes)
+        {
+            List<byte[]> replacements;
+            var offsets=ValidatePatterns(original,out replacements);
             byte[] patched = (byte[])original.Clone();
             for (int i = 0; i < offsets.Count; i++) Array.Copy(replacements[i], 0, patched, offsets[i], replacements[i].Length);
             changes = offsets.Count;
@@ -90,7 +105,7 @@ namespace DevProxyApp
                     throw new InvalidDataException("Подготовленный клиент найден, но резервная копия повреждена или отсутствует.");
                 return "Клиент подготовлен; резервная копия проверена.";
             }
-            int count; PatchData(current, out count);
+            List<byte[]> replacements; int count=ValidatePatterns(current,out replacements).Count;
             return "Antigravity " + FileVersionInfo.GetVersionInfo(executable).ProductVersion + ": найдено " + count + " сигнатур; требуется подготовка клиента.";
         }
 
@@ -148,6 +163,24 @@ namespace DevProxyApp
             }
         }
 
+        public static AntigravityPreparationResult PrepareForProxy(string executable) {
+            try {
+                // Classify compatibility using reads only. An unsupported client
+                // must not require writable installation files or a binary lock.
+                string backend=BackendPath(executable);
+                byte[] current=File.ReadAllBytes(backend);
+                var manifest=Manifest(backend);
+                if(manifest!=null && Hash(current)==Convert.ToString(manifest["patched_sha256"]))
+                    return new AntigravityPreparationResult(true,Inspect(executable));
+                List<byte[]> replacements;ValidatePatterns(current,out replacements);
+                return new AntigravityPreparationResult(true,Prepare(executable));
+            }
+            catch(UnsupportedAntigravityBinaryException ex) {
+                Logger.Log("[Antigravity compatibility] "+ex.Message+" Binary left unchanged; proxy setup may continue.");
+                return new AntigravityPreparationResult(false,"Бинарная подготовка пропущена: эта версия или состояние файла не поддерживаются. Backend не изменялся.");
+            }
+        }
+
         public static string Restore(string executable)
         {
             string backend = BackendPath(executable);
@@ -170,12 +203,21 @@ namespace DevProxyApp
     public sealed class ScopedDnsResolver
     {
         public static readonly string[] Hosts = new string[] { "cloudcode-pa.googleapis.com", "daily-cloudcode-pa.googleapis.com" };
+        // Exact names served by the configured Smart DNS. No suffix/wildcard bypass.
+        public static readonly string[] GoogleDependencies = new string[] {
+            "accounts.google.com", "oauth2.googleapis.com", "www.googleapis.com",
+            "lh3.googleusercontent.com", "gemini.google.com", "gemini.google",
+            "www.gstatic.com", "ssl.gstatic.com", "geminiweb-pa.clients6.google.com",
+            "apis.google.com", "alkalimakersuite-pa.clients6.google.com", "alkalicore-pa.clients6.google.com",
+            "waa-pa.clients6.google.com", "generativelanguage.googleapis.com", "proactivebackend-pa.googleapis.com",
+            "robinfrontend-pa.googleapis.com", "aisandbox-pa.googleapis.com"
+        };
         private readonly string _server;
         private readonly object _sync = new object();
         private readonly Dictionary<string, KeyValuePair<DateTime, IPAddress>> _cache = new Dictionary<string, KeyValuePair<DateTime, IPAddress>>();
         public ScopedDnsResolver(string server) { _server = server; }
 
-        public static bool IsScoped(string host) { return Array.Exists(Hosts, x => x.Equals(host, StringComparison.OrdinalIgnoreCase)); }
+        public static bool IsScoped(string host) { return host != null && (Array.Exists(Hosts, x => x.Equals(host, StringComparison.OrdinalIgnoreCase)) || Array.Exists(GoogleDependencies, x => x.Equals(host, StringComparison.OrdinalIgnoreCase))); }
         private static int Read16(byte[] data, int offset) { if (offset < 0 || offset + 2 > data.Length) throw new InvalidDataException("Обрезанный DNS ответ."); return (data[offset] << 8) | data[offset + 1]; }
         private static int SkipName(byte[] data, int offset)
         {
@@ -192,7 +234,7 @@ namespace DevProxyApp
 
         public IPAddress Resolve(string host)
         {
-            if (!IsScoped(host)) throw new InvalidOperationException("DNS-маршрут ограничен рабочими хостами Antigravity.");
+            if (!IsScoped(host)) throw new InvalidOperationException("DNS-маршрут ограничен явным списком Google/Antigravity.");
             lock (_sync) {
                 KeyValuePair<DateTime, IPAddress> cached;
                 if (_cache.TryGetValue(host, out cached) && cached.Key > DateTime.UtcNow) return cached.Value;
@@ -246,7 +288,7 @@ namespace DevProxyApp
         private static string Header(Stream stream)
         {
             var data = new List<byte>();
-            while (data.Count < 8192) {
+            while (data.Count < 32768) {
                 int next = stream.ReadByte();
                 if (next < 0) throw new IOException("Соединение закрыто до получения HTTP заголовка.");
                 data.Add((byte)next);
@@ -270,6 +312,11 @@ namespace DevProxyApp
                 "grant_type=authorization_code&code=devproxy-invalid-diagnostic&client_id=devproxy-invalid-diagnostic&redirect_uri=http%3A%2F%2Flocalhost", bridgePort, true);
         }
 
+        public static string ProbePublic(string host, int bridgePort) {
+            if (!ScopedDnsResolver.IsScoped(host)) throw new ArgumentException("Неподдерживаемый диагностический хост.");
+            return ProbeRequest(host, "/", null, null, bridgePort, false);
+        }
+
         private static string ProbeRequest(string host, string path, string contentType, string body, int bridgePort, bool token)
         {
             using (var client = new TcpClient()) {
@@ -288,7 +335,7 @@ namespace DevProxyApp
                 using (var tls = new SslStream(stream, false)) {
                     tls.ReadTimeout = 10000; tls.WriteTimeout = 10000;
                     tls.AuthenticateAsClient(host, null, SslProtocols.Tls12, true);
-                    byte[] request = Encoding.ASCII.GetBytes("POST " + path + " HTTP/1.1\r\nHost: " + host + "\r\nContent-Type: " + contentType + "\r\nContent-Length: " + Encoding.ASCII.GetByteCount(body) + "\r\nConnection: close\r\n\r\n" + body);
+                    byte[] request = Encoding.ASCII.GetBytes(body == null ? "GET " + path + " HTTP/1.1\r\nHost: " + host + "\r\nConnection: close\r\n\r\n" : "POST " + path + " HTTP/1.1\r\nHost: " + host + "\r\nContent-Type: " + contentType + "\r\nContent-Length: " + Encoding.ASCII.GetByteCount(body) + "\r\nConnection: close\r\n\r\n" + body);
                     tls.Write(request, 0, request.Length); tls.Flush();
                     status = Header(tls);
                     return host + ": сертификат TLS проверен; " + status + (token ? ". Тест POST /token с вымышленными данными: ожидается HTTP 400/401; это проверка транспорта, вход не выполнен." : ". Запрос без токена аккаунта.");
