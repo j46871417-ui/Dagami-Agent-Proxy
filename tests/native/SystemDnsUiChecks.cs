@@ -24,6 +24,9 @@ class SystemDnsUiChecks {
    Assert(SystemDnsManager.Friendly("Conflicting NRPT rule for x").Contains("резервной копией"),"NRPT conflict instruction untranslated");
    Application.EnableVisualStyles();
    using(var form=new SystemDnsForm()) {
+    var fields=System.Reflection.BindingFlags.Instance|System.Reflection.BindingFlags.NonPublic;
+    Assert(!((CheckBox)typeof(SystemDnsForm).GetField("_nrpt",fields).GetValue(form)).Checked,"Default DNS write unexpectedly requires NRPT");
+    Assert(((Button)typeof(SystemDnsForm).GetField("_apply",fields).GetValue(form)).Text.Contains("Записать DNS"),"Explicit system DNS write action missing");
     form.StartPosition=FormStartPosition.Manual;form.Location=new Point(-20000,-20000);form.Show();Application.DoEvents();
     using(var image=new Bitmap(form.Width,form.Height)){form.DrawToBitmap(image,new Rectangle(0,0,image.Width,image.Height));image.Save("native-system-dns.png");}
     Assert(form.Visible,"DNS UI did not open");form.Close();

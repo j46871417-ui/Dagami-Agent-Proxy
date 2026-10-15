@@ -31,10 +31,27 @@ class PatchChecks {
    Assert(!Directory.Exists(Path.Combine(root,"resources")),"Missing links changed client");
    string one=Path.Combine(links,"One.lnk"),two=Path.Combine(links,"Two.lnk");Link(one,exe);Link(two,exe);
    string originalOne=Hash(one),originalTwo=Hash(two);
-   Assert(Reject(()=>NativeAppPatcher.Apply(target,manager,new[]{links},store)).Contains("backend"),"Unsupported client failure hidden");
-   Assert(Hash(one)==originalOne&&Hash(two)==originalTwo&&store.Count(target.Id)==0,"Failed preparation altered shortcuts");
+   string unsupportedSummary;
+   Assert(NativeAppPatcher.Apply(target,manager,new[]{links},store,null,out unsupportedSummary,false).Count==2,"Unsupported layout blocked proxy shortcuts");
+   Assert(unsupportedSummary.Contains("пропущена")&&!unsupportedSummary.Contains("клиент подготовлен"),"Skipped preparation reported as successful binary patch");
+   Assert(!Directory.Exists(Path.Combine(root,"resources")),"Unsupported layout created a fake backend");
+   store.Restore(target.Id);
+   Assert(Hash(one)==originalOne&&Hash(two)==originalTwo&&store.Count(target.Id)==0,"Unsupported-layout shortcut rollback was not exact");
    string backend=Path.Combine(root,"resources","bin","language_server.exe");Directory.CreateDirectory(Path.GetDirectoryName(backend));
    string[] patterns=(string[])typeof(AntigravityIntegration).GetField("Patterns",BindingFlags.Static|BindingFlags.NonPublic).GetValue(null);
+   File.WriteAllBytes(backend,Encoding.ASCII.GetBytes("unknown-new-version-with-zero-supported-signatures"));string unknownHash=Hash(backend);
+   using(var heldBinaryLock=new FileStream(backend+".devproxy.lock",FileMode.OpenOrCreate,FileAccess.ReadWrite,FileShare.None)){
+    var unsupported=AntigravityIntegration.PrepareForProxy(exe);
+    Assert(!unsupported.Prepared&&unsupported.Message.Contains("пропущена"),"Zero signatures required a writable/unlocked backend");
+   }
+   Assert(NativeAppPatcher.Apply(target,manager,new[]{links},store,null,out unsupportedSummary,false).Count==2,"Zero signatures blocked ordinary shortcuts");
+   Assert(Hash(backend)==unknownHash&&!File.Exists(backend+".devproxy-region.bak")&&!File.Exists(backend+".devproxy-region.json"),"Unsupported backend or recovery data was changed");
+   store.Restore(target.Id);
+   byte[] known=Encoding.ASCII.GetBytes(string.Join("\0fixture\0",patterns));int count;
+   File.WriteAllBytes(backend,AntigravityIntegration.PatchData(known,out count));string foreignPrepared=Hash(backend);
+   Assert(NativeAppPatcher.Apply(target,manager,new[]{links},store,null,out unsupportedSummary,false).Count==2,"Pre-modified backend without manifest blocked proxy setup");
+   Assert(Hash(backend)==foreignPrepared&&!File.Exists(backend+".devproxy-region.json"),"Foreign preparation was overwritten or assigned a false manifest");
+   store.Restore(target.Id);
    File.WriteAllBytes(backend,Encoding.ASCII.GetBytes(string.Join("\0fixture\0",patterns)));string originalBackend=Hash(backend);
    // The second shell link can be read but not replaced. The first link must roll back.
    using(var held=new FileStream(two,FileMode.Open,FileAccess.Read,FileShare.Read)){
@@ -70,6 +87,10 @@ class PatchChecks {
    Assert(File.Exists(autoConfig)&&File.ReadAllText(autoConfig).Contains("127.0.0.1:53200"),"Proxy settings not written to config file");
    Console.WriteLine("PASS "+checks+" patch preparation, real links, idempotency, partial failure rollback, existing-state protection and Git discovery checks");return 0;
   }catch(Exception ex){Console.Error.WriteLine(ex);return 1;}
-  finally{if(shell!=null)Marshal.FinalReleaseComObject(shell);if(Directory.Exists(root))Directory.Delete(root,true);}
+  finally{if(shell!=null)Marshal.FinalReleaseComObject(shell);if(Directory.Exists(root)){
+   string resolved=Path.GetFullPath(root),temp=Path.GetFullPath(Path.GetTempPath()).TrimEnd(Path.DirectorySeparatorChar)+Path.DirectorySeparatorChar;
+   if(!resolved.StartsWith(temp,StringComparison.OrdinalIgnoreCase)||!Path.GetFileName(resolved).StartsWith("DevProxy-patch-",StringComparison.Ordinal))throw new IOException("Unsafe fixture cleanup");
+   Directory.Delete(resolved,true);
+  }}
  }
 }
