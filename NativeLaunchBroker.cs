@@ -86,8 +86,15 @@ namespace DevProxyApp
             using (var mutex = new Mutex(false, @"Local\" + UserName)) {
                 try { owner = mutex.WaitOne(0); } catch (AbandonedMutexException) { owner = true; }
                 if (!owner) {
+                    if (!LicenseManager.IsActivated()) {
+                        using (var activation = new ActivationForm()) {
+                            if (activation.ShowDialog() != DialogResult.OK) {
+                                return;
+                            }
+                        }
+                    }
                     string error = Send(UserName, initial ?? new NativeLaunchRequest(), 12000);
-                    if (!string.IsNullOrEmpty(error)) MessageBox.Show(error, "DevProxy", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                    if (!string.IsNullOrEmpty(error)) MessageBox.Show(error, Brand.Name, MessageBoxButtons.OK, MessageBoxIcon.Warning);
                     return;
                 }
                 try {

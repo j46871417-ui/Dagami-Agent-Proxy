@@ -1877,12 +1877,14 @@ namespace DevProxyApp
         private List<AppTarget> _cachedTargets = new List<AppTarget>();
         private readonly List<string> _logQueue = new List<string>();
         private readonly object _logLock = new object();
+        private readonly bool _preview;
         private readonly bool _shortcutSession;
         private readonly string _shortcutTargetId;
         private bool _exitRequested;
 
         public MainForm(string shortcutTargetId = null, bool shortcutSession = false, bool preview = false)
         {
+            _preview = preview;
             _shortcutTargetId = shortcutTargetId;
             _shortcutSession = shortcutSession;
             this.ShowInTaskbar = false;
