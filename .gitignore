@@ -1,13 +1,31 @@
-# Binaries
+# Binaries & Temporary files
 *.bak
 *.pdb
 *.tmp
 *.tar.gz
+*.log
+.devproxy-build-*/
+.devproxy-ready-*.exe
+devproxy-cli.exe
+devproxy.fluent.exe
+devproxy.updated.exe
+
+# Build and review artifacts
+.review/
+artifacts/
+dist-portable/
+*-preview.png
+*-verified.png
+index.html
+ui/
 
 # Python
 __pycache__/
 *.pyc
+*.egg-info/
+.venv/
 
 # OS
 Thumbs.db
 .DS_Store
+

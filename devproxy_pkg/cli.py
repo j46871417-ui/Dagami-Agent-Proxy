@@ -1,5 +1,5 @@
 """
-CLI Interface for DevProxy v2.0.0.
+CLI Interface for Dagami Agent Proxy v2.0.0.
 Implements commands:
 - devproxy profile add [URL] [--name NAME]
 - devproxy profile list
@@ -49,7 +49,7 @@ class Colors:
 def print_banner():
     print(f"{Colors.CYAN}{Colors.BOLD}")
     print("============================================================")
-    print("  DevProxy 2.0.0 — Universal IDE & Dev Tools Proxy Manager  ")
+    print("  Dagami Agent Proxy 0.1.0 альфа — Universal IDE & Dev Tools Proxy Manager  ")
     print("  Google Antigravity | VS Code | Cursor | Windsurf | Codex  ")
     print("============================================================")
     print(f"{Colors.RESET}")
@@ -81,19 +81,28 @@ def resolve_profile(profile_name: Optional[str] = None, proxy_str: Optional[str]
 
 def cmd_profile_add(args):
     raw = args.proxy
+    if not raw:
+        import getpass
+        raw = getpass.getpass("Прокси URL (ввод скрыт): ")
     name = args.name or "default"
     try:
         profile = ProxyProfile.parse(raw, name=name)
+        requires_password = bool(profile.password)
         if profile.password:
             backend = SecretStore.store_password(name, profile.username or "", profile.password)
+            if backend != "os_keychain":
+                raise RuntimeError("Пароль не сохранён в хранилище ОС. Linux: установите libsecret-tools и разблокируйте Secret Service; macOS: разблокируйте Keychain.")
             print(f"{Colors.GREEN}[✓] Пароль надежно сохранен ({backend}).{Colors.RESET}")
             # Do not persist plaintext password in JSON state
             profile.password = None
 
-        StateManager.save_profile(profile.to_dict(include_password=False))
+        data = profile.to_dict(include_password=False)
+        data["requires_password"] = requires_password
+        StateManager.save_profile(data)
         print(f"{Colors.GREEN}[✓] Профиль '{name}' успешно сохранен: {profile.to_safe_url()}{Colors.RESET}")
     except Exception as e:
         print(f"{Colors.RED}[-] Ошибка добавления профиля: {e}{Colors.RESET}")
+        return 1
 
 
 def cmd_profile_list(args):
@@ -132,7 +141,7 @@ def cmd_test(args):
     profile = resolve_profile(args.profile, args.proxy)
     if not profile:
         print(f"{Colors.RED}[-] Профиль не найден. Укажите --profile или строку прокси.{Colors.RESET}")
-        return
+        return 2
 
     print(f"Тестирование подключения через: {profile.to_safe_url()}")
     res = ProxyValidator.validate(profile)
@@ -141,7 +150,7 @@ def cmd_test(args):
         print(f"  {Colors.RED}✗ Хост прокси недоступен по TCP{Colors.RESET}")
         for err in res.errors:
             print(f"    {Colors.RED}! {err}{Colors.RESET}")
-        return
+        return 1
 
     print(f"  {Colors.GREEN}✓ TCP соединение с прокси установлено (пинг: {res.tcp_latency_ms} ms){Colors.RESET}")
     for t in res.target_checks:
@@ -160,8 +169,10 @@ def cmd_test(args):
 
     if res.overall_success:
         print(f"\n{Colors.GREEN}[✓] Прокси готов к работе!{Colors.RESET}\n")
+        return 0
     else:
         print(f"\n{Colors.RED}[-] Соединение не готово к работе.{Colors.RESET}\n")
+        return 1
 
 
 def cmd_run(args):
@@ -391,14 +402,20 @@ def interactive_wizard():
 
 
 def main():
-    parser = argparse.ArgumentParser(description="DevProxy — Universal IDE & Dev Tools Proxy Manager", add_help=True)
+    portable = {"run", "patch", "unpatch", "session", "sessions", "stop", "shortcuts", "login", "logs", "gui", "register"}
+    if len(sys.argv) > 1 and sys.argv[1] in portable:
+        from .portable_runtime import main as portable_main
+        return portable_main(sys.argv[1:])
+    parser = argparse.ArgumentParser(description="Dagami Agent Proxy — Universal IDE & Dev Tools Proxy Manager", add_help=True)
+    from . import __version__
+    parser.add_argument('--version', action='version', version=__version__)
     subparsers = parser.add_subparsers(dest="subcommand")
 
     # profile
     p_prof = subparsers.add_parser("profile", help="Manage proxy profiles")
     p_prof_sub = p_prof.add_subparsers(dest="profile_action")
     p_add = p_prof_sub.add_parser("add", help="Add proxy profile")
-    p_add.add_argument("proxy", help="Proxy URL or host:port:user:pass")
+    p_add.add_argument("proxy", nargs="?", help="Proxy URL; omit to enter privately without shell history")
     p_add.add_argument("--name", "-n", default="default", help="Profile name")
 
     p_list = p_prof_sub.add_parser("list", help="List proxy profiles")
@@ -423,6 +440,8 @@ def main():
     p_run.add_argument("--proxy", help="Ad-hoc proxy string")
     p_run.add_argument("--dry-run", action="store_true", help="Show command without launching")
     p_run.add_argument("extra_args", nargs="*", help="Extra arguments passed to application")
+    for name, help_text in [("patch", "Prepare normal launchers"), ("unpatch", "Restore launchers"), ("sessions", "Active background sessions"), ("stop", "Stop an app session"), ("shortcuts", "Launcher status"), ("login", "Google login through session proxy"), ("logs", "Session log"), ("gui", "Open desktop GUI"), ("register", "Set application executable path")]:
+        subparsers.add_parser(name, help=help_text)
 
     # apply
     p_apply = subparsers.add_parser("apply", help="Apply persistent settings")
@@ -464,7 +483,7 @@ def main():
         args.extra_args = (args.extra_args or []) + extra_after_dash
 
     if args.subcommand == "profile":
-        if args.profile_action == "add": cmd_profile_add(args)
+        if args.profile_action == "add": return cmd_profile_add(args)
         elif args.profile_action == "list": cmd_profile_list(args)
         elif args.profile_action == "remove": cmd_profile_remove(args)
         else: p_prof.print_help()
@@ -472,7 +491,7 @@ def main():
         if args.apps_action == "list": cmd_apps_list(args)
         else: p_apps.print_help()
     elif args.subcommand == "test":
-        cmd_test(args)
+        return cmd_test(args)
     elif args.subcommand == "run":
         cmd_run(args)
     elif args.subcommand == "apply":
@@ -485,7 +504,8 @@ def main():
         cmd_status(args)
     else:
         parser.print_help()
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

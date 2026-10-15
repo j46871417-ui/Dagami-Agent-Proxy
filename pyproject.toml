@@ -1,0 +1,28 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "dagami-agent-proxy"
+version = "0.1.0a0"
+description = "Dagami Agent Proxy: application proxy sessions and reversible launchers"
+requires-python = ">=3.10"
+readme = "PORTABLE.md"
+license = {text = "MIT"}
+
+[project.optional-dependencies]
+build = ["pyinstaller>=6.16,<7"]
+
+[project.scripts]
+dagami-proxy = "devproxy_pkg.cli:main"
+devproxy = "devproxy_pkg.cli:main"
+
+[project.gui-scripts]
+dagami-agent-proxy = "devproxy_pkg.desktop:main"
+devproxy-gui = "devproxy_pkg.desktop:main"
+
+[tool.setuptools.packages.find]
+include = ["devproxy_pkg*"]
+
+[tool.setuptools.package-data]
+devproxy_pkg = ["assets/*.png", "assets/*.svg", "assets/*.ico", "assets/*.icns"]

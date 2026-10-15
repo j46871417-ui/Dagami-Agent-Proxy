@@ -65,12 +65,15 @@ class CodexCliAdapter(ApplicationAdapter):
         return []
 
     def apply_persistent(self, profile: ProxyProfile) -> Tuple[bool, str]:
+        return False, "Codex persistent proxy configuration is not supported. Use isolated session mode so proxy settings are passed through the process environment."
+
+        # Kept below for migration/restore compatibility with older DevProxy state.
         configs = self.detect_config_files()
         target_path = configs[0]
         if not os.path.exists(target_path):
             return False, f"Codex config not found at {target_path}"
 
-        proxy_url = profile.to_safe_url() if profile.has_auth else profile.to_url()
+        proxy_url = profile.to_url()
         try:
             with open(target_path, "r", encoding="utf-8") as f:
                 content = f.read()

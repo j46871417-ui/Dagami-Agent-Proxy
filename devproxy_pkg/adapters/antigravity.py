@@ -78,10 +78,13 @@ class AntigravityAdapter(ApplicationAdapter):
         # If proxy requires auth or is SOCKS5, LocalTunnel will bridge it to http://127.0.0.1:port
         return [
             "--proxy-server={PROXY_URL}",
-            "--enable-features=NetworkService,NetworkServiceInProcess"
+            "--disable-quic",
+            "--proxy-bypass-list=localhost;127.0.0.1;[::1]"
         ]
 
     def apply_persistent(self, profile: ProxyProfile) -> Tuple[bool, str]:
+        if profile.has_auth:
+            return False, "Authenticated proxies are supported only in isolated session mode; credentials are kept in the local tunnel."
         configs = self.detect_config_files()
         if not configs:
             return False, "No configuration paths determined for Antigravity"
@@ -91,7 +94,7 @@ class AntigravityAdapter(ApplicationAdapter):
         if parsed is None:
             return False, f"Failed to parse JSONC in {target_path} (file may contain syntax errors). Refusing to overwrite."
 
-        proxy_url = profile.to_safe_url() if profile.has_auth else profile.to_url()
+        proxy_url = profile.to_url()
         # Track original values
         orig_proxy = parsed.get("http.proxy")
         orig_support = parsed.get("http.proxySupport")

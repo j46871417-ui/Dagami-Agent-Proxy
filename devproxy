@@ -8,11 +8,13 @@ set -e
 
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd)"
 
-if command -v python3 >/dev/null 2>&1; then
+if [ -x "$DIR/devproxy-bin" ]; then
+    exec "$DIR/devproxy-bin" "$@"
+elif [ -f "$DIR/devproxy.py" ] && command -v python3 >/dev/null 2>&1; then
     exec python3 "$DIR/devproxy.py" "$@"
-elif command -v python >/dev/null 2>&1; then
+elif [ -f "$DIR/devproxy.py" ] && command -v python >/dev/null 2>&1; then
     exec python "$DIR/devproxy.py" "$@"
 else
-    echo "[-] Ошибка: Python 3 требуется для запуска devproxy." >&2
+    echo "[-] Ошибка: рядом с launcher отсутствуют devproxy-bin и devproxy.py." >&2
     exit 1
 fi
