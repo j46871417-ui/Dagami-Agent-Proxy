@@ -387,6 +387,13 @@ namespace DevProxyApp
 
         private void ShowNativeWindow()
         {
+            if (!_preview && !LicenseManager.IsActivated()) {
+                using (var activation = new ActivationForm()) {
+                    if (activation.ShowDialog() != DialogResult.OK) {
+                        return;
+                    }
+                }
+            }
             Opacity = 1;
             ShowInTaskbar = true;
             if (WindowState == FormWindowState.Minimized) WindowState = _nativeRestoreState;
