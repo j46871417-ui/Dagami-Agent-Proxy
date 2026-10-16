@@ -169,7 +169,7 @@ namespace DevProxyApp
             sidebar.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
             sidebar.RowStyles.Add(new RowStyle(SizeType.Absolute, 54));
             sidebar.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
-            sidebar.RowStyles.Add(new RowStyle(SizeType.Absolute, 208));
+            sidebar.RowStyles.Add(new RowStyle(SizeType.Absolute, 220));
             shell.Controls.Add(sidebar, 0, 0);
             var brand = new FlowLayoutPanel { Dock = DockStyle.Fill, FlowDirection = FlowDirection.TopDown, WrapContents = false, Margin = Padding.Empty };
             var brandIcon = new PictureBox { Location = new Point(0, 3), Size = new Size(36, 36), SizeMode = PictureBoxSizeMode.Zoom, Image = Brand.LoadImage() };
@@ -182,10 +182,9 @@ namespace DevProxyApp
             var nav = new FlowLayoutPanel { Dock = DockStyle.Fill, FlowDirection = FlowDirection.TopDown, WrapContents = false, Margin = Padding.Empty };
             sidebar.Controls.Add(nav, 0, 1);
             var footer = new FlowLayoutPanel { Dock = DockStyle.Fill, FlowDirection = FlowDirection.TopDown, WrapContents = false, Margin = Padding.Empty };
-            var version = FluentLabel("Dagami · " + Brand.Version, 9, false);
-            version.AccessibleName = "Dagami Agent Proxy, версия 0.1.0 альфа";
-            version.AutoSize = false; version.Size = new Size(148, 24);
-            footer.Controls.Add(version);
+            _updateLink = new LinkLabel { Text = "Обновления\n"+Brand.ReleaseTag, Size = new Size(148,36), AutoSize=false, Font=new Font("Segoe UI",9), LinkColor=FluentTheme.Accent, AccessibleName="Обновления GitHub; установлено "+Brand.ReleaseTag, Margin=new Padding(0,0,0,8) };
+            _updateLink.LinkClicked+=(sender,e)=>ExecuteNativeAction(OpenUpdates);
+            footer.Controls.Add(_updateLink);
             AddNativeButton(footer, "Поддержать", () => OpenCommunityLink("https://pay.cloudtips.ru/p/671fda86"));
             var donate = _nativeButtons[_nativeButtons.Count - 1];
             donate.Tag = "https://pay.cloudtips.ru/p/671fda86"; donate.AccessibleName = "Поддержать проект — CloudTips";

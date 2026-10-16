@@ -199,6 +199,10 @@ namespace DevProxyApp
             _shortcutExplanation.Text = target == null ? "Выберите приложение, чтобы настроить его ярлыки." : _shortcutIssue ??
                 (_shortcutRecords > 0 ? "Включено · ярлыков: " + _shortcutRecords + ". Dagami Agent Proxy запускается в фоне до выключения режима." :
                 "Выключено. Для запуска привычным ярлыком нажмите «Пропатчить».");
+            bool cli=NativeCliApps.IsCli(target);
+            _shortcutToggle.Text=cli?"Запускать обычную команду через прокси":"Запускать через прокси из обычного ярлыка";
+            if(cli&&_shortcutIssue==null)_shortcutExplanation.Text=_shortcutRecords>0?"Включено для команды. После изменения полностью перезапустите терминал. Явный путь к исходному EXE обходит запускатель.":"Выключено. «Пропатчить» настроит команду CLI в пользовательском PATH; ярлыки не нужны.";
+            _restoreShortcutItem.Text=cli?"Восстановить прямой запуск команды":"Восстановить обычные ярлыки";
             if (_proxyCheckMessage != null) _appFeedback.Text = _proxyCheckMessage;
         }
 
@@ -301,7 +305,7 @@ namespace DevProxyApp
                 _shortcutRecords = 0; _shortcutIssue = null;
                 if (_targetList.SelectedItems.Count > 0) {
                     AppTarget target = (AppTarget)_targetList.SelectedItems[0].Tag;
-                    try { _shortcutRecords = NativeShortcuts.Current.VerifiedCount(target.Id, out _shortcutIssue); }
+                    try { _shortcutRecords = NativeCliApps.IsCli(target)?NativeCliApps.Current.VerifiedCount(target.Id,out _shortcutIssue):NativeShortcuts.Current.VerifiedCount(target.Id, out _shortcutIssue); }
                     catch (Exception) { _shortcutIssue = "Не удалось прочитать настройки ярлыков. Откройте журнал для проверки."; }
                 }
                 _shortcutToggle.Checked = _shortcutRecords > 0 && _shortcutIssue == null;
@@ -327,7 +331,7 @@ namespace DevProxyApp
         private void AddNativeTarget()
         {
             using (var picker = new OpenFileDialog {
-                Title = "Выберите исполняемый файл приложения", Filter = "Приложения Windows (*.exe)|*.exe",
+                Title = "Выберите приложение или CLI", Filter = "Приложения и CLI (*.exe;*.cmd;*.bat;*.ps1)|*.exe;*.cmd;*.bat;*.ps1",
                 CheckFileExists = true, Multiselect = false
             }) {
                 if (picker.ShowDialog(this) != DialogResult.OK) return;

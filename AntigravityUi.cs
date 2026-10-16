@@ -41,7 +41,7 @@ namespace DevProxyApp
             _antigravityReport = new TextBox { Dock = DockStyle.Fill, Multiline = true, ReadOnly = true, WordWrap = true,
                 ScrollBars = ScrollBars.Vertical, BorderStyle = BorderStyle.None, Font = new Font("Consolas", 10),
                 BackColor = FluentTheme.Surface, ForeColor = FluentTheme.Text, AccessibleName = "Отчёт проверки Antigravity",
-                Text = "Диагностика проверяет POST /token с вымышленными данными, сигнатуры клиента, DNS и TLS через локальный мост.\r\n\r\nHTTP 400/401 в тесте OAuth ожидаем: Google отклоняет вымышленный код. Это проверка связи, вход в аккаунт нужно завершить в Antigravity.\r\n\r\nЗакрытие окна Dagami Agent Proxy оставляет мост в трее. Для полного завершения используйте «Выход» в меню значка." };
+                Text = "Проверка выполняет GET /oauth2/v2/userinfo без токена и POST /token с вымышленными данными. Проверяются HTTP-ответы внутри TLS, сигнатуры клиента и DNS.\r\n\r\nHTTP 401 для userinfo ожидаем без токена; 502 означает ошибку маршрута. При сбое userinfo сравниваются два маршрута без изменения настроек.\r\n\r\nВход аккаунта нужно завершить в Antigravity. Отчёт можно выделить и скопировать Ctrl+A, Ctrl+C." };
             reportCard.Controls.Add(_antigravityReport); page.Controls.Add(reportCard, 0, 2);
             return page;
         }
@@ -56,12 +56,14 @@ namespace DevProxyApp
             int bridgePort = _bridgePort;
             string dnsHost = ConfigManager.Instance.DnsHost;
             bool useDns = ConfigManager.Instance.UseDagamiDns;
+            string proxy = ConfigManager.Instance.LastProxy;
             System.Threading.ThreadPool.QueueUserWorkItem(o => {
                 var report = new StringBuilder();
                 try {
                     if (operation == "prepare") report.AppendLine(AntigravityIntegration.Prepare(target.ExePath));
                     else if (operation == "restore") report.AppendLine(AntigravityIntegration.Restore(target.ExePath));
                     else {
+                        report.AppendLine(AntigravityDiagnostics.LoginRouteReport(bridgePort,useDns,dnsHost,proxy));
                         try { report.AppendLine(AntigravityIntegration.Inspect(target.ExePath)); }
                         catch (Exception ex) { report.AppendLine("Клиент: " + ex.Message); }
                         try { report.AppendLine(AntigravityDiagnostics.ProbeToken(bridgePort)); }

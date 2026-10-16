@@ -37,13 +37,19 @@ namespace DevProxyApp
                 Logger.Log("[CRITICAL THREAD EXCEPTION] " + (e.Exception != null ? e.Exception.ToString() : "null"));
             };
 
+            bool cliInvocation=false;
+            IDisposable activity=null;
             try
             {
+                if(args!=null&&args.Length==2&&args[0]=="--update-helper"){Environment.ExitCode=UpdateInstaller.RunHelper(args[1]);return;}
+                cliInvocation=NativeCliApps.IsShimLocation();
+                activity=NativeUpdates.AcquireActivity(false);
+                if(NativeCliApps.TryRunShim(args ?? new string[0]))return;
                 if (args != null && args.Length == 3 && args[0] == "--system-dns-helper") {
                     Environment.Exit(SystemDnsManager.RunElevatedHelper(args[1], args[2]));
                     return;
                 }
-                Logger.Log("[MAIN START] args: " + (args != null && args.Length > 0 ? string.Join(", ", args) : "(none)"));
+                Logger.Log("[MAIN START] argument_count=" + (args==null?0:args.Length));
                 if (args != null && args.Length >= 2 && args[0].Equals("--shortcut-launch", StringComparison.OrdinalIgnoreCase))
                 {
                     Application.EnableVisualStyles();
@@ -71,9 +77,10 @@ namespace DevProxyApp
             catch (Exception ex)
             {
                 Logger.Log("[CRASH] " + ex.ToString());
-                if (args != null && args.Length > 0) { Console.Error.WriteLine(ex.Message); Environment.ExitCode = 1; }
+                if (cliInvocation || (args != null && args.Length > 0)) { Console.Error.WriteLine(ex.Message); Environment.ExitCode = 1; }
                 else MessageBox.Show(ex.ToString(), Brand.Name + " — ошибка запуска", MessageBoxButtons.OK, MessageBoxIcon.Error);
             }
+            finally {if(activity!=null)activity.Dispose();}
         }
 
         static void RunCli(string[] args)
@@ -102,7 +109,10 @@ namespace DevProxyApp
             {
                 Console.WriteLine(Brand.Name + " " + Brand.Version + " (Windows)");
                 Console.WriteLine("apps | proxy set | proxy status | run APP | patch APP | unpatch APP | shortcuts APP");
+                Console.WriteLine("CLI: patch APP настраивает обычную команду; run APP [-- ARGS] запускает без изменения PATH.");
                 Console.WriteLine("dns status | dns adapters | dns apply REQUEST.json | dns restore (UAC)");
+                Console.WriteLine("diagnose login — проверить userinfo без токена и сравнить маршруты при сбое");
+                Console.WriteLine("update check | update download — релизы GitHub; установка по кнопке в GUI");
                 Console.WriteLine("Использование:");
                 Console.WriteLine("  DagamiAgentProxy.exe                    - Открыть графический интерфейс (GUI)");
                 Console.WriteLine("  DagamiAgentProxy.exe [ПРОКСИ]           - Применить прокси во все найденные IDE");
@@ -318,6 +328,8 @@ namespace DevProxyApp
         private readonly object _routeLock = new object();
         private readonly Dictionary<string, int> _routeCounts = new Dictionary<string, int>();
         private static int _connectionSequence;
+        private int _activeConnections;
+        public int ActiveConnections {get{return Interlocked.CompareExchange(ref _activeConnections,0,0);}}
         public int BoundPort { get; private set; }
 
         public bool Start(int port, string proxyUrl, string dnsHost = null)
@@ -390,6 +402,7 @@ namespace DevProxyApp
 
         private void HandleConnection(object state)
         {
+            Interlocked.Increment(ref _activeConnections);
             TcpClient client = (TcpClient)state;
             TcpClient upstream = null;
             string connection = "[Bridge #" + Interlocked.Increment(ref _connectionSequence) + "]";
@@ -428,6 +441,9 @@ namespace DevProxyApp
                 string target = parts[1];
                 string routedHost = null;
                 IPAddress dnsEndpoint = null;
+                string destinationLabel = method.Equals("CONNECT", StringComparison.OrdinalIgnoreCase)
+                    ? SafeAuthority(target) : "HTTP";
+                connection += " " + destinationLabel;
                 if (method.Equals("CONNECT", StringComparison.OrdinalIgnoreCase))
                 {
                     int colon = target.LastIndexOf(':');
@@ -436,17 +452,15 @@ namespace DevProxyApp
                     {
                         if (colon <= 0 || target.Substring(colon + 1) != "443")
                             throw new InvalidDataException("Antigravity DNS route supports only TLS port 443.");
+                        phase = "smart-dns-resolve";
                         dnsEndpoint = _scopedDns.Resolve(host);
                         routedHost = host;
                         Logger.Log("[DNS] " + host + " → " + dnsEndpoint + ":443 через Smart DNS напрямую; SNI сохраняется клиентом.");
                     }
                 }
 
-                string destinationLabel = method.Equals("CONNECT", StringComparison.OrdinalIgnoreCase)
-                    ? SafeAuthority(target) : "HTTP";
-                connection += " " + destinationLabel;
                 Logger.Log(connection + " start route=" + (dnsEndpoint == null ? "upstream" : "smart-dns"));
-                phase = "upstream-connect";
+                phase = dnsEndpoint == null ? "upstream-connect" : "smart-dns-connect";
                 Stream upstreamStream;
                 upstream = ConnectUpstream(dnsEndpoint, out upstreamStream);
                 if (dnsEndpoint != null)
@@ -552,6 +566,7 @@ namespace DevProxyApp
                 try { client.Close(); } catch { }
                 try { if (upstream != null) upstream.Close(); } catch { }
             }
+            finally {Interlocked.Decrement(ref _activeConnections);}
         }
 
         private TcpClient ConnectUpstream(IPAddress endpoint, out Stream stream)
@@ -619,20 +634,25 @@ namespace DevProxyApp
             // handshake deadline. Preserve the tunnel until one side closes it.
             if (s1.CanTimeout) s1.ReadTimeout = Timeout.Infinite;
             if (s2.CanTimeout) s2.ReadTimeout = Timeout.Infinite;
+            // HandleConnection returns after handing off the streams. Keep a
+            // separate lease until both relay directions have finished.
+            Interlocked.Increment(ref _activeConnections);
             int remaining = 2;
             Action finished = () => {
                 if (Interlocked.Decrement(ref remaining) == 0)
                 {
                     try { d1.Dispose(); } catch { }
                     try { d2.Dispose(); } catch { }
+                    Interlocked.Decrement(ref _activeConnections);
                 }
             };
             Thread t1 = new Thread(() => Pipe(s1, s2, d2 as TcpClient, finished, connection + " client->upstream"));
             Thread t2 = new Thread(() => Pipe(s2, s1, d1 as TcpClient, finished, connection + " upstream->client"));
             t1.IsBackground = true;
             t2.IsBackground = true;
-            t1.Start();
-            t2.Start();
+            bool firstStarted=false;
+            try { t1.Start();firstStarted=true;t2.Start(); }
+            catch { try{d1.Dispose();}catch{}try{d2.Dispose();}catch{}if(!firstStarted)finished();finished();throw; }
         }
 
         private void Pipe(Stream from, Stream to, TcpClient destination, Action finished, string connection)
@@ -1146,12 +1166,18 @@ namespace DevProxyApp
                 }
                 catch { }
             }
+            codexExe=NativeCliApps.FindCommand("codex",Environment.GetEnvironmentVariable("PATH"),NativeCliApps.Current.BinDirectory)??codexExe;
             list.Add(new AppTarget {
                 Id = "codex",
                 DisplayName = "Codex CLI",
                 ExePath = codexExe,
                 ConfigPath = null
             });
+
+            foreach(string command in new[]{"agy","opencode","gemini","claude"}) {
+                string exe=NativeCliApps.FindCommand(command,Environment.GetEnvironmentVariable("PATH"),NativeCliApps.Current.BinDirectory);
+                list.Add(new AppTarget{Id=command+"_cli",DisplayName=command=="gemini"?"Gemini CLI":command=="claude"?"Claude Code":command=="opencode"?"OpenCode CLI":"agy CLI",ExePath=exe,ConfigPath=null});
+            }
 
             // 8. JetBrains IDEs
             ScanJetBrains(list, progFiles, localAppData);
@@ -1922,6 +1948,7 @@ namespace DevProxyApp
         protected override void OnLoad(EventArgs e)
         {
             base.OnLoad(e);
+            if(!_preview)StartUpdateChecks();
             if (_shortcutSession)
             {
                 this.Opacity = 0;
@@ -1948,6 +1975,7 @@ namespace DevProxyApp
             if (_trayIcon != null) _trayIcon.Dispose();
             if (_nativeLogTimer != null) _nativeLogTimer.Dispose();
             Logger.OnLog = null;
+            if(_updateTimer!=null)_updateTimer.Dispose();
             base.OnFormClosed(e);
         }
 
@@ -2058,6 +2086,12 @@ namespace DevProxyApp
                 psi.UseShellExecute = false;
                 psi.WorkingDirectory = string.IsNullOrEmpty(originalDirectory) ? Path.GetDirectoryName(target.ExePath) : Environment.ExpandEnvironmentVariables(originalDirectory);
                 psi.Arguments = originalArguments ?? "";
+                if(NativeCliApps.IsCli(target)) {
+                    // GUI launch gets a real console; ordinary command launch
+                    // uses NativeCliApps.Run and retains the caller's console.
+                    psi=NativeCliApps.CreateStart(executable,new string[0],localProxy,psi.WorkingDirectory);
+                    if(!string.IsNullOrEmpty(originalArguments))throw new InvalidOperationException("Для CLI с аргументами используйте обычную команду или dagami-proxy run APP -- ARGS.");
+                }
 
                 string noProxy = "localhost,127.0.0.1,::1";
                 foreach (string name in new string[] { "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "all_proxy" })
