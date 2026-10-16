@@ -317,6 +317,64 @@ namespace DevProxyApp
             return ProbeRequest(host, "/", null, null, bridgePort, false);
         }
 
+        public static string ProbeUserInfo(int bridgePort) {
+            // The exact endpoint used after OAuth; no account token is read/sent.
+            return ProbeRequest("www.googleapis.com", "/oauth2/v2/userinfo", null, null, bridgePort, false);
+        }
+
+        private static int HttpStatus(string status) {
+            string[] parts=status.Split(' '); int code;
+            if(parts.Length<2 || (parts[0]!="HTTP/1.1" && parts[0]!="HTTP/1.0") || parts[1].Length!=3 ||
+                !int.TryParse(parts[1],out code) || code<100 || code>599)
+                throw new InvalidDataException("Некорректный статус HTTP в диагностике.");
+            return code;
+        }
+
+        private static string DescribeHttpResult(string host,string path,string status,bool token) {
+            int code=HttpStatus(status);
+            string endpoint=host+path;
+            // Successful CONNECT/TLS is not proof of a healthy inner HTTP route.
+            if(code>=500 || code==407 || code==429)
+                throw new IOException(endpoint+": TLS проверен, но запрос вернул HTTP "+code+". Маршрут не прошёл проверку; вход не подтверждён.");
+            if(path=="/oauth2/v2/userinfo") {
+                if(code!=401)throw new IOException(endpoint+": неожиданный HTTP "+code+" без токена (ожидается 401). Доступ аккаунта не проверен.");
+                return endpoint+": TLS проверен; HTTP 401 ожидаем без токена. Путь userinfo доступен; вход аккаунта не проверен.";
+            }
+            if(token && code!=400 && code!=401)
+                throw new IOException(endpoint+": неожиданный HTTP "+code+" для вымышленного OAuth-кода (ожидается 400/401).");
+            return endpoint+": сертификат TLS проверен; HTTP "+code+(token
+                ? ". Тест POST /token с вымышленными данными: ожидаемый отказ, вход не выполнен."
+                : ". Запрос без токена аккаунта; доступ аккаунта не проверен.");
+        }
+
+        public static string LoginRouteReport(int bridgePort,bool useDns,string dnsHost,string proxy) {
+            var report=new StringBuilder();
+            report.AppendLine("Dagami Agent Proxy "+Brand.Version+"; FileVersion="+FileVersionInfo.GetVersionInfo(typeof(AntigravityDiagnostics).Assembly.Location).FileVersion);
+            report.AppendLine("Проверяемый мост: 127.0.0.1:"+bridgePort+"; Smart DNS: "+(useDns?"включён":"выключен"));
+            report.AppendLine("userinfo: GET /oauth2/v2/userinfo, без токена; ожидается HTTP 401. Этот тест не выполняет вход.");
+            try {report.AppendLine(ProbeUserInfo(bridgePort));}
+            catch(Exception ex) {
+                report.AppendLine("ОШИБКА userinfo: "+ex.GetType().Name+": "+ex.Message);
+                // Compare only synthetic diagnostics, never replay the user's
+                // authenticated request and never change the running bridge.
+                bool compareDns=!useDns;
+                if(string.IsNullOrWhiteSpace(proxy) || (compareDns && string.IsNullOrWhiteSpace(dnsHost))) {
+                    report.AppendLine("Сравнение маршрутов недоступно: нет настроенного прокси или DNS.");
+                    return report.ToString();
+                }
+                string route=compareDns?"Smart DNS":"выбранный upstream без Smart DNS";
+                report.AppendLine("Сравнение: "+route+"; отдельный временный мост, настройки не меняются.");
+                try {
+                    using(var comparison=new LocalProxyBridge()) {
+                        if(!comparison.Start(0,proxy,compareDns?dnsHost:null))throw new IOException("Не удалось запустить временный мост.");
+                        report.AppendLine(ProbeUserInfo(comparison.BoundPort));
+                    }
+                    report.AppendLine("Альтернативный маршрут прошёл userinfo без токена. Проверьте режим Smart DNS в «Подключение»; настройки автоматически не изменялись.");
+                } catch(Exception alternative) {report.AppendLine("ОШИБКА альтернативного маршрута: "+alternative.GetType().Name+": "+alternative.Message);}
+            }
+            return report.ToString();
+        }
+
         private static string ProbeRequest(string host, string path, string contentType, string body, int bridgePort, bool token)
         {
             using (var client = new TcpClient()) {
@@ -330,15 +388,15 @@ namespace DevProxyApp
                 byte[] connect = Encoding.ASCII.GetBytes("CONNECT " + host + ":443 HTTP/1.1\r\nHost: " + host + ":443\r\n\r\n");
                 stream.Write(connect, 0, connect.Length);
                 string status = Header(stream);
-                if (!status.StartsWith("HTTP/1.1 200") && !status.StartsWith("HTTP/1.0 200"))
-                    throw new IOException("Мост вернул " + status + ". DNS или upstream proxy не пропускает маршрут.");
+                if (HttpStatus(status)!=200)
+                    throw new IOException("CONNECT "+host+": мост вернул HTTP " + HttpStatus(status) + ". DNS или upstream proxy не пропускает маршрут.");
                 using (var tls = new SslStream(stream, false)) {
                     tls.ReadTimeout = 10000; tls.WriteTimeout = 10000;
                     tls.AuthenticateAsClient(host, null, SslProtocols.Tls12, true);
                     byte[] request = Encoding.ASCII.GetBytes(body == null ? "GET " + path + " HTTP/1.1\r\nHost: " + host + "\r\nConnection: close\r\n\r\n" : "POST " + path + " HTTP/1.1\r\nHost: " + host + "\r\nContent-Type: " + contentType + "\r\nContent-Length: " + Encoding.ASCII.GetByteCount(body) + "\r\nConnection: close\r\n\r\n" + body);
                     tls.Write(request, 0, request.Length); tls.Flush();
                     status = Header(tls);
-                    return host + ": сертификат TLS проверен; " + status + (token ? ". Тест POST /token с вымышленными данными: ожидается HTTP 400/401; это проверка транспорта, вход не выполнен." : ". Запрос без токена аккаунта.");
+                    return DescribeHttpResult(host,path,status,token);
                 }
             }
         }

@@ -27,6 +27,7 @@ def main() -> None:
     references = [
         "System.dll", "System.Core.dll", "System.Drawing.dll",
         "System.Windows.Forms.dll", "System.Security.dll", "System.Web.Extensions.dll",
+        "System.IO.Compression.dll",
     ]
     command = [str(compiler), "/nologo", '/target:exe' if args.cli else '/target:winexe', "/platform:anycpu", "/optimize+"]
     command.extend(f"/reference:{name}" for name in references)
@@ -34,7 +35,7 @@ def main() -> None:
         "DevProxyApp.cs", "NativeUi.cs", "FluentUi.cs", "AntigravityIntegration.cs",
         "AntigravityUi.cs", "AntigravityLogin.cs", "NativeShortcuts.cs",
         "NativeLaunchBroker.cs", "NativeSessions.cs", "SystemDnsManager.cs", "NativeCli.cs", "Brand.cs",
-        "LicenseManager.cs", "AppProxyPolicy.cs"
+        "LicenseManager.cs", "AppProxyPolicy.cs", "NativeCliApps.cs", "NativeUpdates.cs", "UpdateInstaller.cs", "UpdateUi.cs"
     ]
     command.extend(sources)
     command.append(r"/win32icon:devproxy_pkg\assets\dagami-agent-proxy.ico")

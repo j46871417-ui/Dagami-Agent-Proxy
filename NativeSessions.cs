@@ -37,6 +37,11 @@ namespace DevProxyApp
 
         public static List<string> Apply(AppTarget target, string manager, IEnumerable<string> folders, NativeShortcuts shortcuts, string proxyUrl, out string summary, bool autoCreateShortcut = true) {
             if (target == null || !target.IsInstalled) throw new InvalidOperationException("Приложение не найдено.");
+            if(NativeCliApps.IsCli(target)) {
+                string shim=NativeCliApps.Current.Enable(target,manager);
+                summary="Команда «"+Path.GetFileNameWithoutExtension(target.ExePath)+"» настроена через прокси. Полностью перезапустите терминал. Исходный CLI не изменялся.";
+                return new List<string>{shim};
+            }
             string backend = null, before = null;
             bool binaryPrepared=false, binaryChanged=false;
             bool antigravity = string.Equals(Path.GetFileName(target.ExePath), "Antigravity.exe", StringComparison.OrdinalIgnoreCase);
@@ -105,6 +110,7 @@ namespace DevProxyApp
         public string HandleShortcutRequest(NativeLaunchRequest request) {
             try {
                 if (string.IsNullOrEmpty(request.TargetId)) { ShowNativeWindow(); return null; }
+                if(_updatePreparing)return "Готовится обновление Dagami. Повторите запуск после перезапуска.";
                 if (_patchInProgress) return "Идёт подготовка приложения. Дождитесь завершения и снова откройте ярлык.";
                 var target = _cachedTargets.Find(x => x.Id == request.TargetId);
                 if (target == null) { _cachedTargets = ProxyEngine.ScanAllTargets(); target = _cachedTargets.Find(x => x.Id == request.TargetId); }
@@ -123,6 +129,13 @@ namespace DevProxyApp
         void ConfigureNativeShortcuts(bool restore) {
             var target = SelectedNativeTarget();
             if (!restore) SaveNativeSettings();
+            if(NativeCliApps.IsCli(target)) {
+                if(restore)NativeCliApps.Current.Restore(target.Id);
+                else NativeCliApps.Current.Enable(target,Process.GetCurrentProcess().MainModule.FileName);
+                UpdateNativeDetails();
+                _appFeedback.Text=restore?"Прямой запуск CLI восстановлен. Перезапустите терминал.":"Обычная команда CLI настроена через прокси. Полностью перезапустите терминал.";
+                return;
+            }
             var store = NativeShortcuts.Current;
             List<string> paths = restore ? store.Restore(target.Id) : store.Enable(target, Process.GetCurrentProcess().MainModule.FileName, NativeShortcuts.UserFolders());
             if (paths.Count == 0) throw new InvalidOperationException(restore ? "Настроенных обычных ярлыков нет." : "Обычные ярлыки приложения на рабочем столе и в меню «Пуск» не найдены. Используйте «Ещё → Создать ярлык».");

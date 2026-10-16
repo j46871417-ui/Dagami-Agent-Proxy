@@ -57,6 +57,23 @@ namespace DevProxyApp {
                 return true;
             }
             if(command=="logs"){Console.WriteLine(Logger.LogFilePath);return true;}
+            if(command=="update"){
+                if(args.Length!=2||(args[1]!="check"&&args[1]!="download"))throw new ArgumentException("update check | download; установка — в окне GUI «Обновления».");
+                var release=NativeUpdates.Check(NativeUpdates.Preferences().IncludePrereleases);Console.WriteLine("Установлено: "+Brand.ReleaseTag+"; GitHub: "+(release==null?"нет подходящего релиза":release.Tag));
+                if(args[1]=="download"&&NativeUpdates.IsNewer(release))Console.WriteLine("Скачано и проверено: "+NativeUpdates.Download(release,Console.WriteLine));
+                return true;
+            }
+            if(command=="diagnose") {
+                if(args.Length!=2 || args[1]!="login")throw new ArgumentException("diagnose login — проверка userinfo без токена; настройки не меняются.");
+                var config=ConfigManager.Instance;
+                if(string.IsNullOrWhiteSpace(config.LastProxy))throw new InvalidOperationException("Прокси не настроен.");
+                using(var bridge=new LocalProxyBridge()) {
+                    if(!bridge.Start(0,config.LastProxy,config.UseDagamiDns?config.DnsHost:null))throw new IOException("Не удалось запустить диагностический мост.");
+                    Console.WriteLine(AntigravityDiagnostics.LoginRouteReport(bridge.BoundPort,config.UseDagamiDns,config.DnsHost,config.LastProxy));
+                    Console.WriteLine(bridge.RouteReport());
+                }
+                return true;
+            }
             if(command=="apps"){
                 foreach(var target in ProxyEngine.ScanAllTargets()) Console.WriteLine(target.Id+"\t"+target.DisplayName+"\t"+(target.IsInstalled?"installed":"missing"));
                 return true;
@@ -92,18 +109,25 @@ namespace DevProxyApp {
                 request.JobId=Guid.NewGuid().ToString("N");SystemDnsManager.Validate(request);Console.WriteLine(SystemDnsManager.Execute(request));return true;
             }
             if(command!="run"&&command!="patch"&&command!="unpatch"&&command!="shortcuts")return false;
-            if(args.Length!=2)throw new ArgumentException(command+" APP_ID; список: apps");
+            if(args.Length<2||(command!="run"&&args.Length!=2))throw new ArgumentException(command+" APP_ID; run APP_ID [-- ARGS]; список: apps");
             var app=ProxyEngine.ScanAllTargets().Find(x=>x.Id==args[1]);if(app==null)throw new ArgumentException("Неизвестное приложение.");
             string current=Process.GetCurrentProcess().MainModule.FileName;
             string companion=Path.Combine(Path.GetDirectoryName(current),"DevProxy.exe");
             string branded=Path.Combine(Path.GetDirectoryName(current),"DagamiAgentProxy.exe");
             string manager=File.Exists(branded)?branded:File.Exists(companion)?companion:current;
             if(command=="run"){
+                if(NativeCliApps.IsCli(app)) {
+                    int offset=args.Length>2&&args[2]=="--"?3:2;
+                    string[] forwarded=new string[args.Length-offset];Array.Copy(args,offset,forwarded,0,forwarded.Length);
+                    var config=ConfigManager.Instance;
+                    Environment.ExitCode=NativeCliApps.Run(app.ExePath,forwarded,config.LastProxy,config.UseDagamiDns?config.DnsHost:null);return true;
+                }
+                if(args.Length!=2)throw new ArgumentException("Аргументы run поддерживаются здесь только для CLI.");
                 Process.Start(new ProcessStartInfo(manager,"--shortcut-launch "+NativeShortcuts.Quote(app.Id)){UseShellExecute=false,CreateNoWindow=true});Console.WriteLine("Запрос запуска отправлен фоновому Dagami Agent Proxy.");return true;
             }
             var store=NativeShortcuts.Current;
             if(command=="shortcuts"){
-                string issue;int count=store.VerifiedCount(app.Id,out issue);
+                string issue;int count=NativeCliApps.IsCli(app)?NativeCliApps.Current.VerifiedCount(app.Id,out issue):store.VerifiedCount(app.Id,out issue);
                 Console.WriteLine(new JavaScriptSerializer().Serialize(new{app=app.Id,enabled=count>0&&issue==null,count=count,error=issue}));return true;
             }
             List<string> paths;
@@ -112,7 +136,7 @@ namespace DevProxyApp {
                 string summary;
                 paths=NativeAppPatcher.Apply(app,manager,NativeShortcuts.UserFolders(),store,ConfigManager.Instance.LastProxy,out summary,true);
                 Console.WriteLine(summary);
-            }else paths=store.Restore(app.Id);
+            }else paths=NativeCliApps.IsCli(app)?NativeCliApps.Current.Restore(app.Id):store.Restore(app.Id);
             foreach(string path in paths)Console.WriteLine(path);Console.WriteLine("Ярлыков: "+paths.Count);return true;
         }
     }
