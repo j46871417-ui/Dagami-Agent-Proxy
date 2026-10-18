@@ -1,16 +1,20 @@
-# Файлы в Git
+# Source files in Git
 
-В Git храним код, тесты, словари, значки и общие инструкции.
-Готовые EXE, архивы и их хеши идут в GitHub Releases.
+Keep code, tests, build recipes and required assets in Git. Put ready-made
+packages in Releases. Keep keys, cookies, sessions, databases, logs, build
+output, private notes and backup copies out of Git.
 
-Логи, копии, локальные отчёты, файлы `.env`, ключи, базы и частные заметки
-исключены через `.gitignore`. Примеры `.env.example` можно хранить без ключей.
-Правила не скрывают файл, если он уже добавлен в Git: такой файл нужно
-убрать из индекса через `git rm --cached`, оставив копию на диске.
+Before a commit, run `python tools/check_source_hygiene.py`. To run the
+same check on every local commit, use `git config core.hooksPath .githooks`.
+The check reads the Git index, so a changed working copy cannot hide a
+staged secret. CI also runs Gitleaks on all fetched Git history. Neither
+check prints secret values. Duplicate install assets must be listed in
+`tools/source-policy.json`; new unexplained copies fail the check.
 
-Перед коммитом запустите `python tools/check_source_hygiene.py`.
-Та же проверка есть в CI: она ищет файлы из списка исключений и ряд
-известных форматов ключей. Значения найденных ключей в лог не выводятся.
+`.gitignore` does not untrack existing files. Use `git rm --cached` after
+review; keep local files if needed. Never force-add a live credential.
+Use placeholder values in `.env.example` and secrets in the CI secret store.
 
-Удаление файла из новой версии не стирает его из истории. При утечке
-ключ нужно отозвать; чистка истории Git требует отдельного плана и копии.
+If a real key leaks, revoke it. History cleanup cannot revoke access or
+remove other people's clones and GitHub's cached views. After a history
+rewrite, clone again rather than merging the old history back.

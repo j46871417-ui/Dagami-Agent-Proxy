@@ -1,9 +1,17 @@
 # Binaries & Temporary files
-*.bak
-*.pdb
-*.tmp
-*.tar.gz
-*.log
+
+# Build and review artifacts
+
+# Python
+
+# OS
+
+# Secrets, local state and private notes
+
+# Generated packages belong in Releases, not the source tree
+
+
+# Binaries & Temporary files
 .devproxy-build-*/
 .devproxy-ready-*.exe
 devproxy-cli.exe
@@ -11,7 +19,6 @@ devproxy.fluent.exe
 devproxy.updated.exe
 
 # Build and review artifacts
-.review/
 artifacts/
 dist-portable/
 *-preview.png
@@ -20,26 +27,47 @@ index.html
 ui/
 
 # Python
-__pycache__/
 *.pyc
 *.egg-info/
-.venv/
 
 # OS
-Thumbs.db
-.DS_Store
 
 # Secrets, local state and private notes
+/AGENTS.md
+/DNS_FIX_*.md
+
+# Generated packages belong in Releases, not the source tree
+/SHA256SUMS.txt
+/native-*.png
+env/
+
+
+# Source hygiene: local data, credentials, build output and accidental copies
 .env
 .env.*
 *.env
 !.env.example
 !.env.*.example
 !*.env.example
-.aws/
-.ssh/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.venv/
+venv/
+node_modules/
+.cache/
+.gradle/
+.idea/
+.vscode/
+.vs/
 .codex/
 .agents/
+.gemini/
+.aws/
+.ssh/
+.review/
 secrets/
 credentials/
 private/
@@ -47,46 +75,66 @@ private/
 *.key
 *.p12
 *.pfx
+*.jks
+*.keystore
 *.kdbx
 id_rsa
 id_ed25519
 credentials.json
 secrets.json
+auth.json
+tokens.json
+storage-state.json
 *.secret.json
 *.local.json
-*.sqlite
-*.sqlite3
 *.db
 *.db-wal
 *.db-shm
 *.db-journal
-/AGENTS.md
-/docs/dagami-infra/
-/DNS_FIX_*.md
-
-# Generated packages belong in Releases, not the source tree
+*.sqlite
+*.sqlite3
+*.log
+*.tmp
+*.temp
+*.bak
+*.bak.*
+*.orig
+*.rej
+*~
 *.exe
+*.dll
+*.pdb
+*.obj
+*.o
+*.lib
 *.msi
 *.msix
 *.zip
 *.7z
+*.tar.gz
+*.tar.xz
 *.dmg
 *.deb
 *.rpm
-*.tar.xz
-/SHA256-native.json
-/SHA256SUMS.txt
+*.nupkg
+*.vsix
 /build/
 /dist/
 /release_dist/
-/tmp*/
 /piptmp/
 /.piptmp/
-/native-*.png
-.pytest_cache/
-.mypy_cache/
-.ruff_cache/
-venv/
-env/
-node_modules/
+/tmp*/
+/artifacts/
+Thumbs.db
+desktop.ini
+.DS_Store
+/* - Copy.*
+/* - копия.*
+/* (1).*
+/*_backup.*
+/*_copy.*
 
+/*_2026-??-??.md
+/SHA256-native.json
+/finalize_local.py
+/docs/dagami-infra/
