@@ -1,5 +1,6 @@
+param([string]$EnginePath='')
 $ErrorActionPreference='Stop'
-$engine=Join-Path $PSScriptRoot 'SystemDns.ps1'
+$engine=if($EnginePath){$EnginePath}else{Join-Path $PSScriptRoot 'SystemDns.ps1'}
 if(-not (Test-Path -LiteralPath $engine)){$engine=Join-Path $PSScriptRoot '..\..\SystemDns.ps1'}
 . $engine -LibraryOnly
 $script:Checks=0
@@ -19,8 +20,25 @@ function Assert-Administrator {}
 function Protect-Path {param($Path,$Directory)}
 function Get-StoreRoot {$script:TestRoot}
 function Read-State { $path=Join-Path (Get-StoreRoot) 'state.json';if(Test-Path -LiteralPath $path){Get-Content -LiteralPath $path -Raw | ConvertFrom-Json} }
-function Get-ProviderDomains {param($Preset) @('aistudio.google.com','cloudcode-pa.googleapis.com','daily-cloudcode-pa.googleapis.com')}
+function Get-ProviderDomains {param($Preset) if($script:RecoveryDomains){return $script:RecoveryDomains};@('aistudio.google.com','cloudcode-pa.googleapis.com','daily-cloudcode-pa.googleapis.com')}
 function Get-NetAdapter {param([switch]$IncludeHidden) $script:Adapters}
+function Test-FixtureManagedDns {
+    @($script:Families.Values | Where-Object {$_.IPv4.Static -contains '185.149.145.6'}).Count -gt 0
+}
+function Test-DnsProbe {param($HostName,$Server='')
+    if($Server){return $script:TargetDnsReachable}
+    if($script:NoNetworkBaseline){return $false}
+    if((Test-FixtureManagedDns) -and $script:BreakDnsAfterApply){$script:PostApplyFailed=$true;return $false}
+    if(-not (Test-FixtureManagedDns) -and $script:PostApplyFailed -and $script:RecoveryNetworkBroken){return $false}
+    return $true
+}
+function Test-HttpsProbe {param($Uri)
+    if($script:NoNetworkBaseline){return $false}
+    if((Test-FixtureManagedDns) -and $script:BreakHttpsAfterApply){$script:PostApplyFailed=$true;return $false}
+    if(-not (Test-FixtureManagedDns) -and $script:PostApplyFailed -and $script:RecoveryNetworkBroken){return $false}
+    return $true
+}
+function Test-ServerHttpsProbe {param($Target,$Server) return $script:TargetHttpsReachable}
 function Get-ItemProperty {param($LiteralPath,$Name,$ErrorAction)
     $id=[regex]::Match($LiteralPath,'\{([0-9a-fA-F-]+)\}$').Groups[1].Value
     $family=if($LiteralPath -match '\\Tcpip6\\'){'IPv6'}else{'IPv4'}
@@ -32,12 +50,16 @@ function Get-DnsClientServerAddress { [CmdletBinding()]param([int]$InterfaceInde
 }
 function Set-DnsClientServerAddress { [CmdletBinding()]param([int]$InterfaceIndex,$InputObject,[string[]]$ServerAddresses,[switch]$ResetServerAddresses)
     $script:Mutations++
-    if($InterfaceIndex -eq 2 -and $script:FailOnce){$script:FailOnce=$false;throw 'injected second adapter failure'}
     $index=if($InputObject){$InputObject.InterfaceIndex}else{$InterfaceIndex}
+    if($index -eq 2 -and $script:FailOnce){$script:FailOnce=$false;throw 'injected second adapter failure'}
+    if($script:IgnoreDnsWrite){return}
     $adapter=@($script:Adapters | Where-Object InterfaceIndex -eq $index)[0]
     $families=if($InputObject){@($InputObject.Family)}else{@('IPv4','IPv6')}
     foreach($family in $families){
         $values=@($ServerAddresses | Where-Object {if($family -eq 'IPv4'){$_ -notmatch ':'}else{$_ -match ':'}})
+        # Windows can retain existing DNS in the other family, as the WWAN
+        # adapter did in the reported failure. Do not erase it in the fixture.
+        if(-not $InputObject -and -not $ResetServerAddresses -and -not $values.Count){continue}
         if($ResetServerAddresses){$values=@()}
         $script:Families[$adapter.InterfaceGuid][$family]=@{Static=@($values);Servers=@($values)}
     }
@@ -50,6 +72,7 @@ function Add-DnsClientNrptRule { [CmdletBinding()]param([string[]]$Namespace,[st
     $script:Rules+=@($rule);if($PassThru){$rule}
 }
 function Remove-DnsClientNrptRule { [CmdletBinding()]param([string]$Name,[switch]$Force)
+    if($script:FailRemove){throw 'injected NRPT remove failure'}
     $script:Mutations++;$script:Rules=@($script:Rules | Where-Object Name -ne $Name)
 }
 function Clear-DnsClientCache { [CmdletBinding()]param() $script:Flushed++ }
@@ -58,7 +81,8 @@ function Reset-Fixture {
     $script:Adapters=@([pscustomobject]@{InterfaceGuid='11111111-1111-1111-1111-111111111111';InterfaceIndex=1;Name='Wi Fi';Status='Up'},[pscustomobject]@{InterfaceGuid='22222222-2222-2222-2222-222222222222';InterfaceIndex=2;Name='Ethernet';Status='Up'})
     $script:Families=@{}
     foreach($adapter in $script:Adapters){$script:Families[$adapter.InterfaceGuid]=@{IPv4=@{Static=@();Servers=@('10.0.0.1')};IPv6=@{Static=@('2001:db8::53');Servers=@('2001:db8::53')}}}
-    $script:Rules=@();$script:Mutations=0;$script:Flushed=0;$script:FailOnce=$false
+    $script:Rules=@();$script:Mutations=0;$script:Flushed=0;$script:FailOnce=$false;$script:FailRemove=$false;$script:IgnoreDnsWrite=$false;$script:RecoveryDomains=$null
+    $script:TargetDnsReachable=$true;$script:TargetHttpsReachable=$true;$script:NoNetworkBaseline=$false;$script:BreakDnsAfterApply=$false;$script:BreakHttpsAfterApply=$false;$script:PostApplyFailed=$false;$script:RecoveryNetworkBroken=$false
     Add-DnsClientNrptRule -Namespace 'aistudio.google.com' -NameServers '1.1.1.1' -DisplayName 'Previous provider' -Comment 'USER_PREVIOUS'
     Add-DnsClientNrptRule -Namespace 'intranet.example' -NameServers '10.0.0.2' -DisplayName 'Company' -Comment 'UNRELATED'
     $script:Mutations=0
@@ -68,6 +92,42 @@ function Request([string]$Operation='Apply'){
         Adapters=@($script:Adapters | ForEach-Object {[pscustomobject]@{Index=$_.InterfaceIndex;Guid=$_.InterfaceGuid}})}
 }
 try {
+    Reset-Fixture;$script:TargetDnsReachable=$false
+    Reject {Invoke-SystemDns (Request)} 'Unreachable DNS server was applied'
+    Assert ($script:Mutations -eq 0) 'Server preflight failure changed DNS or NRPT'
+    Assert (-not (Test-Path -LiteralPath (Join-Path $script:TestRoot 'state.json'))) 'Server preflight created an active backup'
+
+    Reset-Fixture;$script:TargetHttpsReachable=$false
+    Reject {Invoke-SystemDns (Request)} 'DNS answers that break HTTPS were applied'
+    Assert ($script:Mutations -eq 0) 'HTTPS preflight failure changed DNS or NRPT'
+
+    Reset-Fixture;$script:NoNetworkBaseline=$true
+    Reject {Invoke-SystemDns (Request)} 'Unverifiable initial network was modified'
+    Assert ($script:Mutations -eq 0) 'Baseline failure changed the network'
+
+    Reset-Fixture;$null=Invoke-SystemDns (Request);$prior=Read-State;$backup=[IO.File]::ReadAllText((Join-Path $script:TestRoot 'state.json'));$mutations=$script:Mutations
+    $script:TargetDnsReachable=$false
+    $request=Request;$request | Add-Member ReplaceActiveSetup $true;$request | Add-Member KeepExternalChanges $true
+    Reject {Invoke-SystemDns $request} 'Unreachable new DNS server replaced a working setup'
+    Assert ($script:Mutations -eq $mutations) 'Reapply preflight rolled back the working network'
+    Assert ([IO.File]::ReadAllText((Join-Path $script:TestRoot 'state.json')) -eq $backup) 'Reapply preflight overwrote the active backup'
+
+    foreach($failureKind in @('Dns','Https')){
+        Reset-Fixture
+        if($failureKind -eq 'Dns'){$script:BreakDnsAfterApply=$true}else{$script:BreakHttpsAfterApply=$true}
+        Reject {Invoke-SystemDns (Request)} ($failureKind+' outage after DNS write was reported as success')
+        $state=Read-State
+        Assert ($state.Status -eq 'Restored') ($failureKind+' outage left managed DNS active')
+        Assert ($state.RecoveryConnectivityVerified -eq $true) ($failureKind+' rollback did not check network recovery')
+        Assert ($script:Families[$script:Adapters[0].InterfaceGuid].IPv4.Static.Count -eq 0) ($failureKind+' outage did not restore DHCP')
+        Assert (@($script:Rules | Where-Object Comment -eq 'USER_PREVIOUS').Count -eq 1) ($failureKind+' outage lost previous NRPT')
+    }
+
+    Reset-Fixture;$script:BreakHttpsAfterApply=$true;$script:RecoveryNetworkBroken=$true
+    $message='';try{$null=Invoke-SystemDns (Request)}catch{$message=$_.Exception.Message}
+    Assert ($message -like '*Previous settings restored, but connectivity could not be verified:*') 'Unverified network after rollback falsely reported healthy'
+    Assert ((Read-State).Status -eq 'Restored' -and (Read-State).RecoveryConnectivityVerified -eq $false) 'Rollback network failure lost the saved settings outcome'
+
     Reset-Fixture
     $request=Request;$request.ReplaceExisting=$false
     Reject {Invoke-SystemDns $request} 'Conflicting foreign NRPT was overwritten without opt-in'
@@ -75,6 +135,7 @@ try {
     Assert (-not (Test-Path -LiteralPath (Join-Path $script:TestRoot 'state.json'))) 'Preflight created a false active backup'
     $request=Request;$null=Invoke-SystemDns $request;$state=Read-State
     Assert ($state.Status -eq 'Applied') 'Apply status incorrect'
+    Assert ($state.ConnectivityVerified -eq $true -and @($state.ConnectivityTargets).Count -ge 2) 'Apply committed without DNS and HTTPS verification'
     Assert (@($state.AppliedAdapters).Count -eq 2) 'Adapter backups incomplete'
     Assert (@($script:Rules | Where-Object Comment -eq 'UNRELATED').Count -eq 1) 'Unrelated NRPT rule changed'
     Assert (@($script:Rules | Where-Object Comment -eq $state.Tag).Count -eq 3) 'Owned NRPT rules missing'
@@ -91,17 +152,181 @@ try {
     Assert (@($script:Rules).Count -eq 2) 'Rollback duplicated rules'
     $null=Invoke-SystemDns (Request Restore);Assert (@($script:Rules).Count -eq 2) 'Repeat rollback duplicated rules'
 
+    # Mobile broadband retained two static IPv6 resolvers after a valid IPv4
+    # update. Only the selected server's address family should be verified.
+    Reset-Fixture
+    $mobile=$script:Adapters[1];$mobile.Name='Mobile broadband';$id=$mobile.InterfaceGuid
+    $script:Families[$id].IPv4=@{Static=@('192.0.2.53');Servers=@('192.0.2.53')}
+    $script:Families[$id].IPv6=@{Static=@('2001:db8:1::53','2001:db8:2::53');Servers=@('2001:db8:1::53','2001:db8:2::53')}
+    $request=Request;$request.UseNrpt=$false;$request.Adapters=@([pscustomobject]@{Index=2;Guid=$id})
+    $message=Invoke-SystemDns $request
+    Assert ((Read-State).Status -eq 'Applied' -and (Read-State).ServerFamily -eq 'IPv4') 'Mobile IPv6 resolvers rejected a valid IPv4 DNS write'
+    Assert ($script:Families[$id].IPv4.Static[0] -eq $request.Server) 'Mobile IPv4 DNS not set'
+    Assert (($script:Families[$id].IPv6.Static -join ',') -eq '2001:db8:1::53,2001:db8:2::53') 'IPv4 DNS write erased carrier IPv6 DNS'
+    Assert ($message -match 'Family: IPv4\.') 'IPv4 apply report omitted its scope'
+    $null=Invoke-SystemDns (Request Restore)
+    Assert ($script:Families[$id].IPv4.Static[0] -eq '192.0.2.53') 'Mobile original IPv4 DNS not restored'
+    Assert (($script:Families[$id].IPv6.Static -join ',') -eq '2001:db8:1::53,2001:db8:2::53') 'Mobile rollback altered untouched IPv6 DNS'
+
+    Reset-Fixture;$id=$script:Adapters[0].InterfaceGuid
+    $request=Request;$request.Server='2001:db8::6';$request.UseNrpt=$false
+    $message=Invoke-SystemDns $request
+    Assert ((Read-State).ServerFamily -eq 'IPv6' -and (Read-State).Status -eq 'Applied') 'IPv6 DNS write rejected due to IPv4 resolvers'
+    Assert ($script:Families[$id].IPv4.Static.Count -eq 0 -and $script:Families[$id].IPv4.Servers[0] -eq '10.0.0.1') 'IPv6 DNS write changed IPv4 DHCP DNS'
+    Assert ($script:Families[$id].IPv6.Static[0] -eq '2001:db8::6') 'IPv6 DNS not set'
+    $null=Invoke-SystemDns (Request Restore)
+    Assert ($script:Families[$id].IPv6.Static[0] -eq '2001:db8::53') 'IPv6 baseline not restored'
+
+    Reset-Fixture;$script:IgnoreDnsWrite=$true
+    Reject {Invoke-SystemDns (Request)} 'Verification accepted a failed write to the selected family'
+    Assert ((Read-State).Status -eq 'Restored') 'Failed target-family write did not roll back'
+
+    Reset-Fixture;$null=Invoke-SystemDns (Request);$prior=Read-State
+    $request=Request;$request.Server='8.8.4.4';$request | Add-Member ReplaceActiveSetup $true;$request | Add-Member KeepExternalChanges $true
+    $null=Invoke-SystemDns $request
+    Assert ((Read-State).Status -eq 'Applied' -and (Read-State).Server -eq '8.8.4.4') 'One-request reapply still blocked by active backup'
+    $history=Get-Content -LiteralPath (Join-Path $script:TestRoot ('history-'+$prior.Id+'.json')) -Raw | ConvertFrom-Json
+    Assert ($history.Status -eq 'Restored') 'Reapply did not archive the prior setup'
+    Assert ((Read-State).OriginalAdapters[0].Families[0].Source -eq 'Dhcp') 'Reapply captured old managed DNS instead of baseline'
+    $null=Invoke-SystemDns (Request Restore)
+    Assert ($script:Families[$script:Adapters[0].InterfaceGuid].IPv4.Static.Count -eq 0) 'Reapply rollback lost original DHCP mode'
+
+    Reset-Fixture;$null=Invoke-SystemDns (Request);$prior=Read-State;$mutations=$script:Mutations
+    $request=Request;$request.Adapters[0].Index=999;$request | Add-Member ReplaceActiveSetup $true;$request | Add-Member KeepExternalChanges $true
+    Reject {Invoke-SystemDns $request} 'Reapply accepted stale adapter selection'
+    Assert ($script:Mutations -eq $mutations -and (Read-State).Status -eq 'Applied') 'Invalid reapply touched the current setup'
+
+    Reset-Fixture;$null=Invoke-SystemDns (Request);$prior=Read-State;$script:FailRemove=$true
+    $request=Request;$request.Server='8.8.4.4';$request | Add-Member ReplaceActiveSetup $true;$request | Add-Member KeepExternalChanges $true
+    Reject {Invoke-SystemDns $request} 'Reapply ignored a real NRPT removal failure'
+    Assert ((Read-State).Id -eq $prior.Id -and (Read-State).Status -eq 'RollbackFailed') 'Failed reapply discarded the active backup'
+
     Reset-Fixture;$script:FailOnce=$true
     Reject {Invoke-SystemDns (Request)} 'Injected failure was swallowed'
     Assert ((Read-State).Status -eq 'Restored') 'Partial apply not automatically rolled back'
     Assert ($script:Families[$script:Adapters[0].InterfaceGuid].IPv4.Static.Count -eq 0) 'Partial failure left changed DNS'
     Assert (@($script:Rules | Where-Object Comment -eq 'USER_PREVIOUS').Count -eq 1) 'Partial failure lost previous NRPT'
 
+    # Two old rules for one domain caused one false foreign-rule error per
+    # duplicate, leaving the backup active after every retry.
+    Reset-Fixture
+    Add-DnsClientNrptRule -Namespace 'aistudio.google.com' -NameServers '8.8.8.8' -DisplayName 'Second previous rule' -Comment 'SECOND_PREVIOUS'
+    $null=Invoke-SystemDns (Request)
+    $null=Invoke-SystemDns (Request Restore)
+    Assert ((Read-State).Status -eq 'Restored') 'Overlapping baseline NRPT rules block rollback'
+    Assert (@($script:Rules).Count -eq 3) 'Overlapping baseline rules were lost or duplicated'
+    Assert (@($script:Rules | Where-Object Comment -eq 'SECOND_PREVIOUS').Count -eq 1) 'Second baseline rule not restored'
+    $null=Invoke-SystemDns (Request Restore)
+    Assert (@($script:Rules).Count -eq 3) 'Retry duplicated overlapping baseline rules'
+
+    # Resume an old RollbackFailed state that already restored the first rule.
+    Reset-Fixture
+    Add-DnsClientNrptRule -Namespace 'aistudio.google.com' -NameServers '8.8.8.8' -Comment 'SECOND_PREVIOUS'
+    $null=Invoke-SystemDns (Request);$state=Read-State
+    foreach($rule in @($script:Rules | Where-Object Comment -eq $state.Tag)){Remove-DnsClientNrptRule -Name $rule.Name}
+    $restored=Restore-Rule $state.OriginalRules[0];$state.OriginalRules[0].RestoredName=$restored.Name
+    $state.Status='RollbackFailed';Save-State $state
+    $null=Invoke-SystemDns (Request Restore)
+    Assert ((Read-State).Status -eq 'Restored') 'Old partial rollback cannot resume'
+    Assert (@($script:Rules).Count -eq 3) 'Old partial rollback duplicated rules'
+
     Reset-Fixture;$null=Invoke-SystemDns (Request)
     Set-DnsClientServerAddress -InterfaceIndex 1 -ServerAddresses '9.9.9.9'
     Reject {Invoke-SystemDns (Request Restore)} 'External DNS change overwritten'
     Assert ($script:Families[$script:Adapters[0].InterfaceGuid].IPv4.Static[0] -eq '9.9.9.9') 'Foreign DNS edit not preserved'
     Assert ((Read-State).Status -eq 'RollbackFailed') 'Incomplete rollback reported success'
+
+    # IPv4 still belongs to this operation even if IPv6 changed elsewhere.
+    Reset-Fixture;$null=Invoke-SystemDns (Request)
+    $id=$script:Adapters[0].InterfaceGuid
+    $script:Families[$id].IPv6=@{Static=@('2001:db8::99');Servers=@('2001:db8::99')}
+    Reject {Invoke-SystemDns (Request Restore)} 'External IPv6 change was overwritten'
+    Assert ($script:Families[$id].IPv4.Static.Count -eq 0) 'External IPv6 edit blocked owned IPv4 restore'
+    Assert ($script:Families[$id].IPv6.Static[0] -eq '2001:db8::99') 'External IPv6 edit lost'
+    $request=Request Restore;$request | Add-Member KeepExternalChanges $true
+    $message=Invoke-SystemDns $request;$state=Read-State
+    Assert ($state.Status -eq 'Released') 'Explicit preserve mode did not release backup'
+    Assert (@($state.Warnings).Count -eq 1) 'Preserved IPv6 edit not reported'
+    Assert ($message -like 'DNS rollback completed with preserved external settings.*') 'Preserve mode claims full restore'
+    $null=Invoke-SystemDns $request
+    Assert ($script:Families[$id].IPv6.Static[0] -eq '2001:db8::99') 'Repeated preserve rollback changed DNS'
+    $null=Invoke-SystemDns (Request)
+    $history=Join-Path $script:TestRoot ('history-'+$state.Id+'.json')
+    Assert (Test-Path -LiteralPath $history) 'Released backup not archived before apply'
+    $saved=Get-Content -LiteralPath $history -Raw | ConvertFrom-Json
+    Assert ($saved.OriginalAdapters[0].Families[1].Servers[0] -eq '2001:db8::53') 'Original backup lost after new apply'
+
+    Reset-Fixture;$null=Invoke-SystemDns (Request)
+    $script:Adapters=@($script:Adapters | Where-Object InterfaceIndex -ne 2)
+    Reject {Invoke-SystemDns (Request Restore)} 'Missing device silently dropped from strict restore'
+    $request=Request Restore;$request | Add-Member KeepExternalChanges $true
+    $null=Invoke-SystemDns $request;$state=Read-State
+    Assert ($state.Status -eq 'Released') 'Missing device blocks explicit preserve mode'
+    Assert (@($state.OriginalAdapters).Count -eq 2) 'Missing device backup discarded'
+
+    Reset-Fixture;$null=Invoke-SystemDns (Request)
+    Add-DnsClientNrptRule -Namespace 'aistudio.google.com' -NameServers '9.9.9.9' -Comment 'NEW_FOREIGN'
+    Reject {Invoke-SystemDns (Request Restore)} 'Foreign overlapping NRPT rule overwritten'
+    $request=Request Restore;$request | Add-Member KeepExternalChanges $true
+    $null=Invoke-SystemDns $request
+    Assert ((Read-State).Status -eq 'Released') 'Foreign NRPT prevents explicit preserve mode'
+    Assert (@($script:Rules | Where-Object Comment -eq 'NEW_FOREIGN').Count -eq 1) 'Foreign NRPT removed in preserve mode'
+    Assert (@($script:Rules | Where-Object Comment -eq 'USER_PREVIOUS').Count -eq 0) 'Old NRPT reintroduced over foreign rule'
+
+    Reset-Fixture;$null=Invoke-SystemDns (Request);$script:FailRemove=$true
+    $request=Request Restore;$request | Add-Member KeepExternalChanges $true
+    Reject {Invoke-SystemDns $request} 'Preserve mode swallowed a DNS cmdlet failure'
+    Assert ((Read-State).Status -eq 'RollbackFailed') 'Failed NRPT removal released active backup'
+
+    # The reported shape: 62 old rules over 31 namespaces, 31 already
+    # restored, two external adapter edits and two devices now missing.
+    Reset-Fixture
+    $script:RecoveryDomains=@(1..31 | ForEach-Object {"nrpt$_.example"});$script:Rules=@()
+    foreach($domain in $script:RecoveryDomains){
+        Add-DnsClientNrptRule -Namespace $domain -NameServers '1.1.1.1' -Comment 'PREVIOUS_A'
+        Add-DnsClientNrptRule -Namespace $domain -NameServers '8.8.8.8' -Comment 'PREVIOUS_B'
+    }
+    foreach($index in 3..4){
+        $id=([guid]::NewGuid()).ToString()
+        $script:Adapters+=@([pscustomobject]@{InterfaceGuid=$id;InterfaceIndex=$index;Name="Removed $index";Status='Up'})
+        $script:Families[$id]=@{IPv4=@{Static=@();Servers=@('10.0.0.1')};IPv6=@{Static=@();Servers=@()}}
+    }
+    $null=Invoke-SystemDns (Request);$state=Read-State
+    foreach($rule in @($script:Rules)) {Remove-DnsClientNrptRule -Name $rule.Name}
+    for($index=0;$index -lt 62;$index+=2){
+        $rule=Restore-Rule $state.OriginalRules[$index];$state.OriginalRules[$index].RestoredName=$rule.Name
+    }
+    $state.Status='RollbackFailed';Save-State $state
+    $script:Adapters=@($script:Adapters | Where-Object InterfaceIndex -lt 3)
+    foreach($adapter in $script:Adapters){Set-DnsClientServerAddress -InterfaceIndex $adapter.InterfaceIndex -ServerAddresses '9.9.9.9'}
+    Reject {Invoke-SystemDns (Request Restore)} 'Reported case silently discarded external edits'
+    Assert (@((Read-State).Errors).Count -eq 4) 'Duplicate baseline rules still treated as foreign'
+    Assert (@($script:Rules).Count -eq 62) 'Reported case lost baseline NRPT rules'
+    $request=Request Restore;$request | Add-Member KeepExternalChanges $true
+    $null=Invoke-SystemDns $request;$state=Read-State
+    Assert ($state.Status -eq 'Released') 'Reported case still blocks new apply'
+    Assert (@($state.Warnings).Count -eq 4) 'Reported case skips not fully reported'
+    Assert (@($state.OriginalRules).Count -eq 62 -and @($state.OriginalAdapters).Count -eq 4) 'Reported case lost recovery baseline'
+    Assert ($script:Families[$script:Adapters[0].InterfaceGuid].IPv4.Static[0] -eq '9.9.9.9') 'Reported case overwrote external DNS'
+    $mutations=$script:Mutations;$null=Invoke-SystemDns $request
+    Assert ($script:Mutations -eq $mutations) 'Released rollback retry changed DNS'
+
+    # The GUI now handles the same old RollbackFailed state while applying a
+    # fresh selection, in one elevated helper. VMware is not selected again.
+    $state.Status='RollbackFailed';Save-State $state
+    $id=([guid]::NewGuid()).ToString()
+    $script:Adapters+=@([pscustomobject]@{InterfaceGuid=$id;InterfaceIndex=5;Name='Main network';Status='Up'})
+    $script:Families[$id]=@{IPv4=@{Static=@();Servers=@('10.0.0.1')};IPv6=@{Static=@();Servers=@()}}
+    $request=Request;$request.UseNrpt=$false;$request.Adapters=@([pscustomobject]@{Index=5;Guid=$id})
+    $request | Add-Member ReplaceActiveSetup $true;$request | Add-Member KeepExternalChanges $true
+    $message=Invoke-SystemDns $request;$current=Read-State
+    Assert ($current.Status -eq 'Applied' -and @($current.OriginalAdapters).Count -eq 1) 'Reported case still needs separate manual restore before apply'
+    Assert (@($current.PreviousWarnings).Count -eq 4) 'Automatic recovery hid VMware or missing-device skips'
+    $history=Get-Content -LiteralPath (Join-Path $script:TestRoot ('history-'+$state.Id+'.json')) -Raw | ConvertFrom-Json
+    Assert ($history.Status -eq 'Released' -and @($history.OriginalRules).Count -eq 62) 'Automatic recovery lost the old NRPT baseline'
+    Assert ($script:Families[$script:Adapters[0].InterfaceGuid].IPv4.Static[0] -eq '9.9.9.9') 'Automatic recovery touched unselected VMware DNS'
+    Assert ($script:Families[$id].IPv4.Static[0] -eq '185.149.145.6') 'Automatic recovery did not apply DNS to the new selection'
+    Assert ($message -match 'Previous setup closed with preserved external settings:') 'Apply report omitted automatic recovery details'
 
     Reset-Fixture;$null=Invoke-SystemDns (Request)
     $owned=@($script:Rules | Where-Object {$_.Namespace -contains 'cloudcode-pa.googleapis.com'})[0]

@@ -13,9 +13,15 @@ ROOT = Path(__file__).resolve().parent
 
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument('--cli', action='store_true', help='Build the native console companion')
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument('--cli', action='store_true', help='Build the native console companion')
+    mode.add_argument('--dns-window', action='store_true', help='Build the direct DNS window without the main app broker')
+    parser.add_argument('--output-dir', type=Path, default=ROOT,
+                        help='Destination for the executable (defaults to the source directory)')
     args = parser.parse_args()
-    executable_name = 'dagami-proxy.exe' if args.cli else 'DagamiAgentProxy.exe'
+    executable_name = 'DagamiDns.exe' if args.dns_window else ('dagami-proxy.exe' if args.cli else 'DagamiAgentProxy.exe')
+    destination = args.output_dir.resolve()
+    destination.mkdir(parents=True, exist_ok=True)
     windows = Path(os.environ.get("WINDIR", r"C:\Windows"))
     candidates = [
         windows / "Microsoft.NET/Framework64/v4.0.30319/csc.exe",
@@ -38,6 +44,8 @@ def main() -> None:
         "LicenseManager.cs", "AppProxyPolicy.cs", "NativeCliApps.cs", "NativeUpdates.cs", "UpdateInstaller.cs", "UpdateUi.cs"
     ]
     command.extend(sources)
+    if args.dns_window:
+        command.extend(['SystemDnsWindow.cs', '/main:DevProxyApp.SystemDnsWindow'])
     command.append(r"/win32icon:devproxy_pkg\assets\dagami-agent-proxy.ico")
     command.append(r"/resource:devproxy_pkg\assets\dagami-agent-proxy.ico,Dagami.AgentProxy.ico")
     command.append(r"/resource:devproxy_pkg\assets\icon-64.png,Dagami.AgentProxy.png")
@@ -47,10 +55,10 @@ def main() -> None:
     with tempfile.TemporaryDirectory(prefix=".devproxy-build-") as build:
         output = Path(build) / executable_name
         subprocess.run([command[0], f"/out:{output}", *command[1:]], cwd=ROOT, check=True)
-        ready = ROOT / f".devproxy-ready-{uuid.uuid4().hex}.exe"
+        ready = destination / f".devproxy-ready-{uuid.uuid4().hex}.exe"
         try:
             shutil.copyfile(output, ready)
-            os.replace(ready, ROOT / executable_name)
+            os.replace(ready, destination / executable_name)
         finally:
             ready.unlink(missing_ok=True)
     print('Built ' + executable_name)

@@ -29,6 +29,15 @@ namespace DevProxyApp
         [STAThread]
         static void Main(string[] args)
         {
+            // A DNS helper never enters shim, console, tray or GUI startup.
+            // The caller reads the protected job report, so no dialogs here.
+            if (args != null && args.Length > 0 && args[0] == "--system-dns-helper") {
+                try {
+                    if (args.Length != 3) throw new ArgumentException("Invalid DNS helper request.");
+                    Environment.ExitCode = SystemDnsManager.RunElevatedHelper(args[1], args[2]);
+                } catch { Environment.ExitCode = 1; }
+                return;
+            }
             AppDomain.CurrentDomain.UnhandledException += (s, e) => {
                 Logger.Log("[CRITICAL DOMAIN EXCEPTION] " + (e.ExceptionObject != null ? e.ExceptionObject.ToString() : "null"));
             };
@@ -45,10 +54,6 @@ namespace DevProxyApp
                 cliInvocation=NativeCliApps.IsShimLocation();
                 activity=NativeUpdates.AcquireActivity(false);
                 if(NativeCliApps.TryRunShim(args ?? new string[0]))return;
-                if (args != null && args.Length == 3 && args[0] == "--system-dns-helper") {
-                    Environment.Exit(SystemDnsManager.RunElevatedHelper(args[1], args[2]));
-                    return;
-                }
                 Logger.Log("[MAIN START] argument_count=" + (args==null?0:args.Length));
                 if (args != null && args.Length >= 2 && args[0].Equals("--shortcut-launch", StringComparison.OrdinalIgnoreCase))
                 {

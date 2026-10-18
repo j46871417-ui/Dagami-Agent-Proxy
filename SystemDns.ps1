@@ -182,13 +182,90 @@ function Restore-Rule($Rule) {
 function Rule-Fingerprint($Rule) {
     (@($Rule.Namespace)-join ',')+'|'+(@($Rule.NameServers | ForEach-Object {[string]$_})-join ',')+'|'+$Rule.DisplayName+'|'+$Rule.Comment+'|'+$Rule.NameEncoding
 }
-function New-Plan($Request) {
+function Get-ConnectivityTargets {
+    @([pscustomobject]@{HostName='example.com';Uri='https://example.com/'},
+      [pscustomobject]@{HostName='www.microsoft.com';Uri='https://www.microsoft.com/'},
+      [pscustomobject]@{HostName='www.cloudflare.com';Uri='https://www.cloudflare.com/'})
+}
+function Test-DnsProbe([string]$HostName,[string]$Server='') {
+    try {
+        $parameters=@{Name=$HostName;Type='A';DnsOnly=$true;NoHostsFile=$true;QuickTimeout=$true;ErrorAction='Stop'}
+        if($Server){$parameters.Server=$Server}
+        $answers=@(Resolve-DnsName @parameters | Where-Object {$_.IPAddress})
+        return $answers.Count -gt 0
+    }catch{return $false}
+}
+function Test-HttpsProbe([string]$Uri) {
+    $response=$null;$request=$null
+    $oldDnsRefresh=[Net.ServicePointManager]::DnsRefreshTimeout
+    try {
+        [Net.ServicePointManager]::DnsRefreshTimeout=0
+        $request=[Net.HttpWebRequest]::Create($Uri)
+        $request.Method='HEAD';$request.Proxy=$null;$request.AllowAutoRedirect=$false
+        $request.KeepAlive=$false;$request.ConnectionGroupName='DevProxyDnsProbe-'+[guid]::NewGuid().ToString('N')
+        $request.Timeout=4000;$request.ReadWriteTimeout=4000
+        $response=$request.GetResponse()
+        return [int]$response.StatusCode -ge 200 -and [int]$response.StatusCode -lt 500
+    }catch [Net.WebException]{
+        $response=$_.Exception.Response
+        return $null -ne $response -and [int]$response.StatusCode -ge 200 -and [int]$response.StatusCode -lt 500
+    }catch{return $false}
+    finally{if($response){$response.Close()};if($request){$request.Abort()};[Net.ServicePointManager]::DnsRefreshTimeout=$oldDnsRefresh}
+}
+function Read-NetworkBaseline {
+    $working=@(Get-ConnectivityTargets | Where-Object {(Test-DnsProbe $_.HostName) -and (Test-HttpsProbe $_.Uri)})
+    if($working.Count -lt 2){throw 'Connectivity preflight failed: cannot verify working DNS and HTTPS on two independent sites. DNS settings were not changed.'}
+    $working
+}
+function Test-ServerHttpsProbe($Target,[string]$Server) {
+    # Pin a TCP/TLS connection to the proposed resolver's answers without
+    # changing Windows DNS. SslStream checks both the chain and the host name;
+    # no permissive certificate callback is installed. Try IPv4 and IPv6.
+    $answers=@()
+    foreach($type in @('A','AAAA')){
+        try{$answers+=@(Resolve-DnsName -Name $Target.HostName -Type $type -Server $Server -DnsOnly -NoHostsFile -QuickTimeout -ErrorAction Stop | Where-Object {$_.IPAddress} | Select-Object -First 2)}catch{}
+    }
+    foreach($answer in $answers){
+        $ip=$null;$tcp=$null;$tls=$null;$reader=$null
+        if(-not [Net.IPAddress]::TryParse([string]$answer.IPAddress,[ref]$ip)){continue}
+        try {
+            $tcp=[Net.Sockets.TcpClient]::new($ip.AddressFamily)
+            if(-not $tcp.ConnectAsync($ip,443).Wait(3000)){continue}
+            $tls=[Net.Security.SslStream]::new($tcp.GetStream(),$false)
+            if(-not $tls.AuthenticateAsClientAsync($Target.HostName,$null,[Security.Authentication.SslProtocols]::Tls12,$false).Wait(4000)){continue}
+            $tls.ReadTimeout=4000;$tls.WriteTimeout=4000
+            $bytes=[Text.Encoding]::ASCII.GetBytes("HEAD / HTTP/1.1`r`nHost: "+$Target.HostName+"`r`nConnection: close`r`n`r`n")
+            $tls.Write($bytes,0,$bytes.Length)
+            $reader=[IO.StreamReader]::new($tls,[Text.Encoding]::ASCII)
+            if($reader.ReadLine() -match '^HTTP/1\.[01] [234][0-9][0-9]( |$)'){return $true}
+        }catch{}
+        finally{if($reader){$reader.Dispose()};if($tls){$tls.Dispose()};if($tcp){$tcp.Close()}}
+    }
+    return $false
+}
+function Assert-TargetDns([string]$Server,$Targets) {
+    foreach($target in @($Targets)){
+        if(-not (Test-DnsProbe $target.HostName $Server)){throw ('DNS server preflight failed: '+$Server+' did not resolve '+$target.HostName+'. DNS settings were not changed.')}
+        if(-not (Test-ServerHttpsProbe $target $Server)){throw ('DNS server preflight failed: HTTPS through answers from '+$Server+' is unavailable for '+$target.HostName+'. DNS settings were not changed.')}
+    }
+}
+function Assert-NetworkConnectivity($Targets) {
+    foreach($target in @($Targets)){
+        if(-not (Test-DnsProbe $target.HostName)){throw ('Connectivity verification failed: system DNS cannot resolve '+$target.HostName)}
+        if(-not (Test-HttpsProbe $target.Uri)){throw ('Connectivity verification failed: HTTPS is unavailable for '+$target.HostName)}
+    }
+}
+function Read-SelectedAdapters($Request) {
     $adapters=@()
     if($Request.ChangeAdapters){foreach($selected in @($Request.Adapters)){
         $adapter=Find-Adapter ([string]$selected.Guid)
         if([int]$adapter.InterfaceIndex -ne [int]$selected.Index -or [string]$adapter.Status -ne 'Up'){throw 'Adapter state changed; refresh the adapter list.'}
         $adapters+=Read-Adapter $adapter
     }}
+    $adapters
+}
+function New-Plan($Request) {
+    $adapters=@(Read-SelectedAdapters $Request)
     $replace=@();$add=@();$reused=0
     if($Request.UseNrpt){
         $domains=@(Get-ProviderDomains ([string]$Request.Preset));$existing=@(Get-DnsClientNrptRule)
@@ -203,7 +280,8 @@ function New-Plan($Request) {
             $add+=$domain
         }
     }
-    [pscustomobject]@{Version=1;Status='Prepared';Id=[string]$Request.JobId;Server=[string]$Request.Server;Preset=[string]$Request.Preset;
+    $family=if(([Net.IPAddress]::Parse($Request.Server)).AddressFamily -eq [Net.Sockets.AddressFamily]::InterNetwork){'IPv4'}else{'IPv6'}
+    [pscustomobject]@{Version=1;Status='Prepared';Id=[string]$Request.JobId;Server=[string]$Request.Server;ServerFamily=$family;Preset=[string]$Request.Preset;
         ChangeAdapters=[bool]$Request.ChangeAdapters;UseNrpt=[bool]$Request.UseNrpt;ReplaceExisting=[bool]$Request.ReplaceExisting;
         OriginalAdapters=$adapters;AppliedAdapters=@();PendingAdapter=$null;OriginalRules=$replace;
         RemovedRuleNames=@();PendingRemove=$null;NewNamespaces=$add;CreatedRules=@();ReusedRules=$reused;Tag=('DEVPROXY_SMARTDNS_V1:'+([string]$Request.JobId));Errors=@()}
@@ -211,23 +289,42 @@ function New-Plan($Request) {
 function Restore-Adapter($Snapshot) {
     $adapter=Find-Adapter ([string]$Snapshot.Guid)
     foreach($family in @($Snapshot.Families)){
-        $input=Get-DnsClientServerAddress -InterfaceIndex $adapter.InterfaceIndex -AddressFamily $family.Family -ErrorAction Stop
-        if($family.Source -eq 'Dhcp'){Set-DnsClientServerAddress -InputObject $input -ResetServerAddresses -ErrorAction Stop}
-        else{Set-DnsClientServerAddress -InputObject $input -ServerAddresses @($family.Servers) -ErrorAction Stop}
+        $dnsInput=Get-DnsClientServerAddress -InterfaceIndex $adapter.InterfaceIndex -AddressFamily $family.Family -ErrorAction Stop
+        if($family.Source -eq 'Dhcp'){Set-DnsClientServerAddress -InputObject $dnsInput -ResetServerAddresses -ErrorAction Stop}
+        else{Set-DnsClientServerAddress -InputObject $dnsInput -ServerAddresses @($family.Servers) -ErrorAction Stop}
     }
     $actual=Read-Adapter $adapter
+    $actual.Families=@($actual.Families | Where-Object {$_.Family -in @($Snapshot.Families.Family)})
     if((Adapter-Fingerprint $actual) -ne (Adapter-Fingerprint $Snapshot)){throw ('DNS restore verification failed for '+$Snapshot.Alias)}
 }
-function Undo-State($State,[bool]$FailureRollback=$false) {
+function Undo-State($State,[bool]$FailureRollback=$false,[bool]$KeepExternalChanges=$false) {
     $errors=New-Object 'Collections.Generic.List[string]'
+    $warnings=New-Object 'Collections.Generic.List[string]'
     foreach($original in @($State.OriginalAdapters)){
         $applied=@($State.AppliedAdapters | Where-Object {$_.Guid -eq $original.Guid})
         if(-not $applied.Count -and $State.PendingAdapter -ne $original.Guid){continue}
         try {
+            # A missing device is only released when the user explicitly asks to
+            # keep external changes. Keep its snapshot for later manual recovery.
+            $devices=@(Get-NetAdapter -IncludeHidden | Where-Object {([guid]$_.InterfaceGuid).ToString() -eq ([guid]$original.Guid).ToString()})
+            if(-not $devices.Count -and $KeepExternalChanges){$warnings.Add('Adapter is missing; backup retained: '+$original.Alias);continue}
             $current=Read-Adapter (Find-Adapter $original.Guid)
             if((Adapter-Fingerprint $current) -eq (Adapter-Fingerprint $original)){continue}
-            if(-not $FailureRollback -and $applied.Count -and (Adapter-Fingerprint $current) -ne (Adapter-Fingerprint $applied[0])){throw ('DNS changed outside DevProxy: '+$original.Alias)}
-            Restore-Adapter $original
+            foreach($family in @($original.Families)){
+                $now=@($current.Families | Where-Object Family -eq $family.Family)[0]
+                $before=[pscustomobject]@{Families=@($family)}
+                if((Adapter-Fingerprint ([pscustomobject]@{Families=@($now)})) -eq (Adapter-Fingerprint $before)){continue}
+                $expected=@(if($applied.Count){$applied[0].Families | Where-Object Family -eq $family.Family})
+                if(-not $FailureRollback -and $expected.Count -and
+                    (Adapter-Fingerprint ([pscustomobject]@{Families=@($now)})) -ne (Adapter-Fingerprint ([pscustomobject]@{Families=@($expected[0])}))){
+                    $message='DNS changed outside DevProxy: '+$original.Alias+' ('+$family.Family+')'
+                    if($KeepExternalChanges){$warnings.Add($message);continue}
+                    $errors.Add($message);continue
+                }
+                # Restore only this address family; an external IPv6 edit must
+                # not stop restoration of IPv4 still owned by this operation.
+                Restore-Adapter ([pscustomobject]@{Guid=$original.Guid;Alias=$original.Alias;Families=@($family)})
+            }
         }catch{$errors.Add($_.Exception.Message)}
     }
     $rules=@()
@@ -253,18 +350,49 @@ function Undo-State($State,[bool]$FailureRollback=$false) {
                 if((Rule-Fingerprint (Snapshot-Rule $present[0])) -ne (Rule-Fingerprint $original)){throw 'A previous NRPT rule was edited outside DevProxy.'}
                 continue
             }
-            if(@($current | Where-Object { $names=$_.Namespace; @($original.Namespace | Where-Object {$_ -in $names}).Count }).Count){throw 'A foreign NRPT rule appeared during rollback.'}
+            # Several baseline rules may cover the same namespace. Rules we
+            # already restored (including before a retry) are not foreign.
+            $overlaps=@($current | Where-Object { $names=$_.Namespace; @($original.Namespace | Where-Object {$_ -in $names}).Count })
+            $foreign=@($overlaps | Where-Object {
+                $candidate=$_
+                -not @($State.OriginalRules | Where-Object {
+                    ($_.OriginalName -eq $candidate.Name -or ($_.RestoredName -and $_.RestoredName -eq $candidate.Name)) -and
+                    (Rule-Fingerprint (Snapshot-Rule $candidate)) -eq (Rule-Fingerprint $_)
+                }).Count
+            })
+            if($foreign.Count){
+                $message='A foreign NRPT rule appeared during rollback: '+(@($original.Namespace)-join ', ')
+                if($KeepExternalChanges){$warnings.Add($message);continue}
+                throw $message
+            }
             $restored=Restore-Rule $original;$original.RestoredName=[string]$restored.Name;Save-State $State
         }catch{$errors.Add($_.Exception.Message)}
     }
     Clear-DnsClientCache -ErrorAction Stop
-    $State.Errors=@($errors.ToArray());$State.Status=if($errors.Count){'RollbackFailed'}else{'Restored'};Save-State $State
+    $State | Add-Member -NotePropertyName Warnings -NotePropertyValue @($warnings.ToArray()) -Force
+    $State.Errors=@($errors.ToArray());$State.Status=if($errors.Count){'RollbackFailed'}elseif($warnings.Count){'Released'}else{'Restored'};Save-State $State
     if($errors.Count){throw ($errors.ToArray()-join '; ')}
 }
 function Invoke-Apply($Request) {
     $existing=Read-State
-    if($existing -and $existing.Status -ne 'Restored'){throw 'A DNS backup is already active. Restore it before applying a new setup.'}
+    $previousWarnings=@()
+    if($existing -and $existing.Status -notin @('Restored','Released') -and -not $Request.ReplaceActiveSetup){throw 'A DNS backup is already active. Restore it before applying a new setup.'}
+    $null=Read-SelectedAdapters $Request
+    # Network probes run before any DNS/NRPT change, even before undoing an
+    # existing setup. A server that cannot answer ordinary queries is refused.
+    $baseline=@(Read-NetworkBaseline)
+    Assert-TargetDns $Request.Server $baseline
+    if($existing -and $existing.Status -notin @('Restored','Released')){
+        if(-not $Request.ReplaceActiveSetup){throw 'A DNS backup is already active. Restore it before applying a new setup.'}
+        # Reject a stale adapter selection before touching the active setup.
+        $null=Read-SelectedAdapters $Request
+        Undo-State $existing $false ([bool]$Request.KeepExternalChanges)
+    }
+    if($existing){$previousWarnings=@($existing.Warnings | Where-Object {$_})}
     $state=New-Plan $Request
+    $state | Add-Member -NotePropertyName PreviousWarnings -NotePropertyValue $previousWarnings
+    $state | Add-Member -NotePropertyName ConnectivityTargets -NotePropertyValue $baseline
+    $state | Add-Member -NotePropertyName ConnectivityVerified -NotePropertyValue $false
     if($existing){Write-Json (Join-Path (Get-StoreRoot) ('history-'+$existing.Id+'.json')) $existing}
     Save-State $state
     try {
@@ -282,21 +410,32 @@ function Invoke-Apply($Request) {
         }
         foreach($adapter in @($state.OriginalAdapters)){
             $current=Find-Adapter $adapter.Guid
+            $dnsInput=@(Get-DnsClientServerAddress -InterfaceIndex $current.InterfaceIndex -AddressFamily $state.ServerFamily -ErrorAction Stop)
+            if($dnsInput.Count -ne 1){throw ('DNS address family is unavailable for '+$adapter.Alias+': '+$state.ServerFamily)}
             $state.PendingAdapter=$adapter.Guid;Save-State $state
-            Set-DnsClientServerAddress -InterfaceIndex $current.InterfaceIndex -ServerAddresses @($state.Server) -ErrorAction Stop
+            Set-DnsClientServerAddress -InputObject $dnsInput[0] -ServerAddresses @($state.Server) -ErrorAction Stop
             $state.AppliedAdapters+=@(Read-Adapter $current);$state.PendingAdapter=$null;Save-State $state
-            $servers=@(Get-DnsClientServerAddress -InterfaceIndex $current.InterfaceIndex | ForEach-Object {$_.ServerAddresses} | Where-Object {$_} | Select-Object -Unique)
-            if($servers.Count -ne 1 -or $state.Server -notin $servers){throw ('DNS verification failed for '+$adapter.Alias)}
+            $servers=@(Get-DnsClientServerAddress -InterfaceIndex $current.InterfaceIndex -AddressFamily $state.ServerFamily -ErrorAction Stop | ForEach-Object {$_.ServerAddresses} | Where-Object {$_} | Select-Object -Unique)
+            if($servers.Count -ne 1 -or $state.Server -notin $servers){throw ('DNS verification failed for '+$adapter.Alias+' ('+$state.ServerFamily+'). Actual servers: '+($servers -join ', '))}
         }
         foreach($domain in @($state.NewNamespaces)){
             if(-not @(Get-DnsClientNrptRule | Where-Object {$_.Comment -eq $state.Tag -and $_.Namespace -contains $domain}).Count){throw 'NRPT verification failed.'}
         }
         Clear-DnsClientCache -ErrorAction Stop
+        Assert-NetworkConnectivity $baseline
+        $state.ConnectivityVerified=$true
         $state.Status='Applied';Save-State $state
-        return ('DNS applied. Adapters: '+@($state.AppliedAdapters).Count+'; new NRPT rules: '+@($state.NewNamespaces).Count+'; reused rules: '+$state.ReusedRules+'. Backup saved.')
+        $message='DNS applied. Family: '+$state.ServerFamily+'. DNS and HTTPS checks passed. Adapters: '+@($state.AppliedAdapters).Count+'; new NRPT rules: '+@($state.NewNamespaces).Count+'; reused rules: '+$state.ReusedRules+'. Backup saved.'
+        if($previousWarnings.Count){$message+=' Previous setup closed with preserved external settings: '+($previousWarnings -join '; ')}
+        return $message
     }catch{
         $problem=$_.Exception.Message
         try{Undo-State $state $true}catch{throw ('Apply failed: '+$problem+'. Rollback incomplete: '+$_.Exception.Message)}
+        try{Assert-NetworkConnectivity $baseline}catch{
+            $state | Add-Member -NotePropertyName RecoveryConnectivityVerified -NotePropertyValue $false -Force;Save-State $state
+            throw ('Apply failed: '+$problem+'. Previous settings restored, but connectivity could not be verified: '+$_.Exception.Message)
+        }
+        $state | Add-Member -NotePropertyName RecoveryConnectivityVerified -NotePropertyValue $true -Force;Save-State $state
         throw ('Apply failed: '+$problem+'. Previous settings restored.')
     }
 }
@@ -311,7 +450,9 @@ function Invoke-SystemDns($Request) {
         $state=Read-State
         if(-not $state){throw 'There is no DevProxy DNS backup.'}
         if($state.Status -eq 'Restored'){return 'Previous DNS settings are already restored.'}
-        Undo-State $state
+        if($state.Status -eq 'Released'){return ('DNS rollback completed with preserved external settings. Backup retained. Details: '+(@($state.Warnings)-join '; '))}
+        Undo-State $state $false ([bool]$Request.KeepExternalChanges)
+        if($state.Status -eq 'Released'){return ('DNS rollback completed with preserved external settings. Backup retained. Details: '+(@($state.Warnings)-join '; '))}
         'Previous DNS settings restored, including DHCP/static mode. DNS cache cleared.'
     }finally{if($owns){$mutex.ReleaseMutex()};$mutex.Dispose()}
 }
