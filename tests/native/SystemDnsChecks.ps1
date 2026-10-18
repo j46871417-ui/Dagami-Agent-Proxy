@@ -13,13 +13,28 @@ foreach($domain in @('accounts.google.com','oauth2.googleapis.com','lh3.googleus
 }
 $script:BaseRoot=Join-Path $env:TEMP ('DevProxy-systemdns-tests-'+[guid]::NewGuid().ToString('N'))
 [IO.Directory]::CreateDirectory($script:BaseRoot) | Out-Null
+if(-not ('DnsJsonTestLock' -as [type])){Add-Type -TypeDefinition @'
+using System;
+using System.IO;
+using System.Threading;
+public sealed class DnsJsonTestLock : IDisposable {
+    readonly object gate = new object();
+    FileStream stream;
+    Timer timer;
+    public DnsJsonTestLock(string path, int releaseAfterMs) {
+        stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read);
+        if (releaseAfterMs >= 0) timer = new Timer(state => Dispose(), null, releaseAfterMs, Timeout.Infinite);
+    }
+    public void Dispose() { lock(gate) { if(timer != null) { timer.Dispose(); timer = null; } if(stream != null) { stream.Dispose(); stream = null; } } }
+}
+'@}
 
 # Every network mutator and registry/adapter reader below is a fixture.
 # The real Windows DNS cmdlets are never invoked in these tests.
 function Assert-Administrator {}
 function Protect-Path {param($Path,$Directory)}
 function Get-StoreRoot {$script:TestRoot}
-function Read-State { $path=Join-Path (Get-StoreRoot) 'state.json';if(Test-Path -LiteralPath $path){Get-Content -LiteralPath $path -Raw | ConvertFrom-Json} }
+function Read-State { $path=Join-Path (Get-StoreRoot) 'state.json';if(Test-Path -LiteralPath $path){Read-SharedText $path | ConvertFrom-Json} }
 function Get-ProviderDomains {param($Preset) if($script:RecoveryDomains){return $script:RecoveryDomains};@('aistudio.google.com','cloudcode-pa.googleapis.com','daily-cloudcode-pa.googleapis.com')}
 function Get-NetAdapter {param([switch]$IncludeHidden) $script:Adapters}
 function Test-FixtureManagedDns {
@@ -45,8 +60,10 @@ function Get-ItemProperty {param($LiteralPath,$Name,$ErrorAction)
     [pscustomobject]@{NameServer=($script:Families[$id][$family].Static -join ',')}
 }
 function Get-DnsClientServerAddress { [CmdletBinding()]param([int]$InterfaceIndex,[string]$AddressFamily)
-    $adapter=@($script:Adapters | Where-Object InterfaceIndex -eq $InterfaceIndex)[0]
-    foreach($family in @('IPv4','IPv6')){if(-not $AddressFamily -or $AddressFamily -eq $family){[pscustomobject]@{InterfaceIndex=$InterfaceIndex;Family=$family;ServerAddresses=@($script:Families[$adapter.InterfaceGuid][$family].Servers)}}}
+    if($InterfaceIndex -eq 37){throw 'No MSFT_DNSClientServerAddress objects with InterfaceIndex 37'}
+    foreach($adapter in @($script:Adapters | Where-Object {(-not $InterfaceIndex -or $_.InterfaceIndex -eq $InterfaceIndex) -and $_.InterfaceIndex -ne 37})){
+        foreach($family in @('IPv4','IPv6')){if(-not $AddressFamily -or $AddressFamily -eq $family){[pscustomobject]@{InterfaceIndex=$adapter.InterfaceIndex;Family=$family;ServerAddresses=@($script:Families[$adapter.InterfaceGuid][$family].Servers)}}}
+    }
 }
 function Set-DnsClientServerAddress { [CmdletBinding()]param([int]$InterfaceIndex,$InputObject,[string[]]$ServerAddresses,[switch]$ResetServerAddresses)
     $script:Mutations++
@@ -102,6 +119,56 @@ function Request([string]$Operation='Apply'){
         Adapters=@($script:Adapters | ForEach-Object {[pscustomobject]@{Index=$_.InterfaceIndex;Guid=$_.InterfaceGuid}})}
 }
 try {
+    # Real NTFS sharing semantics, not a simulated Replace exception.
+    $jsonPath=Join-Path $script:BaseRoot 'atomic-state.json'
+    Write-Json $jsonPath ([pscustomobject]@{Status='Old'})
+    $share=[IO.FileShare]::ReadWrite -bor [IO.FileShare]::Delete
+    $reader=New-Object IO.FileStream($jsonPath,[IO.FileMode]::Open,[IO.FileAccess]::Read,$share)
+    try{
+        Write-Json $jsonPath ([pscustomobject]@{Status='New'})
+        Assert ((Read-SharedText $jsonPath | ConvertFrom-Json).Status -eq 'New') 'Shared status reader blocked atomic replacement'
+        $text=New-Object IO.StreamReader($reader)
+        try{Assert (($text.ReadToEnd() | ConvertFrom-Json).Status -eq 'Old') 'Atomic replacement overwrote the open old snapshot'}finally{$text.Dispose()}
+    }finally{$reader.Dispose()}
+    $writer=New-Object IO.FileStream($jsonPath,[IO.FileMode]::Open,[IO.FileAccess]::ReadWrite,$share)
+    try{Assert ((Read-SharedText $jsonPath | ConvertFrom-Json).Status -eq 'New') 'State reader denies a concurrent write handle'}finally{$writer.Dispose()}
+
+    $held=New-Object DnsJsonTestLock($jsonPath,350)
+    try{Write-Json $jsonPath ([pscustomobject]@{Status='Retried'})}finally{$held.Dispose()}
+    Assert ((Read-SharedText $jsonPath | ConvertFrom-Json).Status -eq 'Retried') 'Transient sharing violation cancelled a valid state update'
+    $prior=Read-SharedText $jsonPath;$held=New-Object DnsJsonTestLock($jsonPath,-1)
+    try{
+        $errorText='';try{Write-Json $jsonPath ([pscustomobject]@{Status='MustNotAppear'})}catch{$errorText=$_.Exception.Message}
+        Assert ($errorText -like '*DNS backup file is busy: atomic-state.json*') 'Persistent lock lacks the file name and actionable error'
+        Assert ((Read-SharedText $jsonPath) -eq $prior) 'Persistent lock damaged the original backup'
+    }finally{$held.Dispose()}
+    Assert (@(Get-ChildItem -LiteralPath $script:BaseRoot -Filter '*.tmp').Count -eq 0) 'Failed state write left temporary files'
+    Assert (-not (Test-FileSharingViolation (New-Object UnauthorizedAccessException('fixture denied')))) 'Access errors are retried as sharing violations'
+
+    Reset-Fixture
+    $saveStateBody=(Get-Item Function:\Save-State).ScriptBlock
+    $script:InjectedStateLock=$false
+    function Save-State($State){
+        $lock=$null
+        try{
+            if($State.Status -eq 'Applying' -and -not $script:InjectedStateLock){$script:InjectedStateLock=$true;$lock=New-Object DnsJsonTestLock((Join-Path (Get-StoreRoot) 'state.json'),350)}
+            Write-Json (Join-Path (Get-StoreRoot) 'state.json') $State
+        }finally{if($lock){$lock.Dispose()}}
+    }
+    try{
+        $null=Invoke-SystemDns (Request)
+        Assert ($script:InjectedStateLock -and (Read-State).Status -eq 'Applied') 'Apply still rolls back after a brief state.json reader lock'
+    }finally{Set-Item Function:\Save-State $saveStateBody}
+
+    Reset-Fixture
+    $script:Adapters+=@([pscustomobject]@{InterfaceGuid='37373737-3737-3737-3737-373737373737';InterfaceIndex=37;Name='Hidden virtual adapter';Status='Disconnected'})
+    $request=Request ResetAll;$request | Add-Member ConfirmResetAll $true
+    $result=Invoke-SystemDns $request;$state=Read-State
+    Assert ($state.Status -eq 'Cleared') 'Phantom InterfaceIndex 37 blocked reset'
+    Assert (@($state.OriginalAdapters).Count -eq 2 -and @($state.Warnings).Count -eq 1) ('Adapter without DNS bindings was not explicitly skipped: '+($state | ConvertTo-Json -Depth 3 -Compress))
+    Assert ($result.Contains('Hidden virtual adapter [37]')) 'Missing DNS binding not shown in reset report'
+    Assert (@($script:Rules).Count -eq 0) 'Missing DNS binding prevented NRPT cleanup'
+
     Reset-Fixture
     $request=Request ResetAll
     Reject {Invoke-SystemDns $request} 'Unconfirmed full reset accepted'

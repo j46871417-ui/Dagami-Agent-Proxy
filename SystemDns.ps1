@@ -26,15 +26,42 @@ function Initialize-Store {
     [IO.Directory]::CreateDirectory((Join-Path $root 'jobs')) | Out-Null
     Protect-Path (Join-Path $root 'jobs') $true
 }
+function Read-SharedText([string]$Path) {
+    $stream=$null;$reader=$null
+    try{
+        $share=[IO.FileShare]::ReadWrite -bor [IO.FileShare]::Delete
+        $stream=New-Object IO.FileStream($Path,[IO.FileMode]::Open,[IO.FileAccess]::Read,$share)
+        $reader=New-Object IO.StreamReader($stream,[Text.Encoding]::UTF8,$true)
+        $reader.ReadToEnd()
+    }finally{if($reader){$reader.Dispose()}elseif($stream){$stream.Dispose()}}
+}
+function Test-FileSharingViolation($Exception) {
+    while($Exception){
+        if($Exception -is [IO.IOException] -and ($Exception.HResult -band 0xffff) -in @(32,33)){return $true}
+        $Exception=$Exception.InnerException
+    }
+    return $false
+}
+function Publish-JsonFile([string]$Temporary,[string]$Path) {
+    $clock=[Diagnostics.Stopwatch]::StartNew()
+    while($true){try{
+        if([IO.File]::Exists($Path)){[IO.File]::Replace($Temporary,$Path,[NullString]::Value)}else{[IO.File]::Move($Temporary,$Path)}
+        return
+    }catch{
+        if(-not (Test-FileSharingViolation $_.Exception)){throw}
+        if($clock.ElapsedMilliseconds -ge 3000){throw ('DNS backup file is busy: '+[IO.Path]::GetFileName($Path)+'. Close other DNS windows or wait for the file lock to clear, then retry. The previous backup was not overwritten.')}
+        Start-Sleep -Milliseconds 100
+    }}
+}
 function Write-Json([string]$Path,$Value) {
     $temp=$Path+'.'+[guid]::NewGuid().ToString('N')+'.tmp'
     try {
         $json=$Value | ConvertTo-Json -Depth 16
         [IO.File]::WriteAllText($temp,$json,(New-Object Text.UTF8Encoding($false)))
         Protect-Path $temp
-        if([IO.File]::ReadAllText($temp) -ne $json){throw 'DNS backup integrity check failed.'}
-        if([IO.File]::Exists($Path)){[IO.File]::Replace($temp,$Path,[NullString]::Value)}else{[IO.File]::Move($temp,$Path)}
-    }finally{if([IO.File]::Exists($temp)){[IO.File]::Delete($temp)}}
+        if((Read-SharedText $temp) -ne $json){throw 'DNS backup integrity check failed.'}
+        Publish-JsonFile $temp $Path
+    }finally{if([IO.File]::Exists($temp)){try{[IO.File]::Delete($temp)}catch{if(-not (Test-FileSharingViolation $_.Exception)){throw}}}}
 }
 function Read-State {
     $path=Join-Path (Get-StoreRoot) 'state.json'
@@ -42,7 +69,7 @@ function Read-State {
     if(([IO.File]::GetAttributes($path) -band [IO.FileAttributes]::ReparsePoint) -ne 0){throw 'Invalid backup file.'}
     $owner=(Get-Acl -LiteralPath $path).GetOwner([Security.Principal.SecurityIdentifier]).Value
     if($owner -notin @('S-1-5-32-544','S-1-5-18')){throw 'The DNS backup is not administrator-owned. It will not be used.'}
-    Get-Content -LiteralPath $path -Raw -Encoding UTF8 | ConvertFrom-Json
+    Read-SharedText $path | ConvertFrom-Json
 }
 function Save-State($State){Write-Json (Join-Path (Get-StoreRoot) 'state.json') $State}
 function Get-ProviderDomains([string]$Preset) {
@@ -418,26 +445,39 @@ function Invoke-ResetAll($Request) {
     $existing=Read-State
     $directory=Join-Path (Get-StoreRoot) ('reset-'+$Request.JobId)
     [IO.Directory]::CreateDirectory($directory)|Out-Null;Protect-Path $directory $true
+    $warnings=New-Object 'Collections.Generic.List[string]'
+    # Enumerate once: filtering CIM by a phantom InterfaceIndex throws instead
+    # of returning an empty result (e.g. disconnected virtual adapter 37).
+    $dnsRows=@(Get-DnsClientServerAddress -ErrorAction Stop)
     $adapters=@(foreach($adapter in @(Get-NetAdapter -IncludeHidden -ErrorAction Stop)){
-        $families=@(Get-DnsClientServerAddress -InterfaceIndex $adapter.InterfaceIndex -ErrorAction Stop | ForEach-Object {
+        $families=@($dnsRows | Where-Object {$_.InterfaceIndex -eq $adapter.InterfaceIndex} | ForEach-Object {
             # AddressFamily is 2/23 on the native CIM object; the fixture has Family.
             if($_.AddressFamily -eq 2 -or $_.Family -eq 'IPv4'){'IPv4'}elseif($_.AddressFamily -eq 23 -or $_.Family -eq 'IPv6'){'IPv6'}
         } | Select-Object -Unique)
         if($families.Count){$snapshot=Read-Adapter $adapter;$snapshot.Families=@($snapshot.Families | Where-Object {$_.Family -in $families});$snapshot}
+        else{$warnings.Add('Skipped adapter without DNS bindings: '+$adapter.Name+' ['+$adapter.InterfaceIndex+']')}
     })
     $rules=@(Get-DnsClientNrptRule -ErrorAction Stop)
     # Raw registry exports retain DNSSEC/DirectAccess and all unknown rule fields.
     $stores=@(Backup-ResetNrptStores $directory)
     $state=[pscustomobject]@{Version=1;Kind='ResetAll';Status='Clearing';Id=$Request.JobId;Server='';Preset='';ResetDirectory=$directory;
-        OriginalAdapters=$adapters;OriginalRules=@($rules | Select-Object *);RegistryStores=$stores;NrptRestored=$false;Warnings=@();Errors=@()}
+        OriginalAdapters=$adapters;OriginalRules=@($rules | Select-Object *);RegistryStores=$stores;NrptRestored=$false;Warnings=@($warnings.ToArray());Errors=@()}
     Write-Json (Join-Path $directory 'snapshot.json') $state
     if($existing){Write-Json (Join-Path (Get-StoreRoot) ('history-'+$existing.Id+'.json')) $existing}
     Save-State $state
     $errors=New-Object 'Collections.Generic.List[string]'
     foreach($original in $adapters){foreach($family in $original.Families){try{
-        $adapter=Find-Adapter $original.Guid
-        $dnsInput=Get-DnsClientServerAddress -InterfaceIndex $adapter.InterfaceIndex -AddressFamily $family.Family -ErrorAction Stop
-        Set-DnsClientServerAddress -InputObject $dnsInput -ResetServerAddresses -ErrorAction Stop
+        $matches=@(Get-NetAdapter -IncludeHidden -ErrorAction Stop | Where-Object {([guid]$_.InterfaceGuid).ToString() -eq $original.Guid})
+        if(-not $matches.Count){$warnings.Add('Adapter disappeared during reset: '+$original.Alias);continue}
+        $adapter=$matches[0]
+        $resetFamilyName=[string]$family.Family
+        $currentDnsRows=@(Get-DnsClientServerAddress -ErrorAction Stop)
+        $dnsInput=@($currentDnsRows | Where-Object {
+            $rowFamily=if($_.AddressFamily -eq 2 -or $_.Family -eq 'IPv4'){'IPv4'}elseif($_.AddressFamily -eq 23 -or $_.Family -eq 'IPv6'){'IPv6'}else{''}
+            $_.InterfaceIndex -eq $adapter.InterfaceIndex -and $rowFamily -eq $resetFamilyName
+        })
+        if(-not $dnsInput.Count){$warnings.Add('DNS binding disappeared during reset: '+$original.Alias+' ('+$family.Family+')');continue}
+        Set-DnsClientServerAddress -InputObject $dnsInput[0] -ResetServerAddresses -ErrorAction Stop
         if((Read-Family $adapter $family.Family).Source -ne 'Dhcp'){throw ('DNS reset verification failed: '+$original.Alias+' ('+$family.Family+')')}
     }catch{$errors.Add($_.Exception.Message)}}}
     foreach($rule in $rules){try{Remove-DnsClientNrptRule -Name $rule.Name -Force -ErrorAction Stop}catch{$errors.Add($_.Exception.Message)}}
@@ -446,9 +486,9 @@ function Invoke-ResetAll($Request) {
     try{
         if(@(Get-DnsClientNrptRule -ErrorAction Stop).Count -or -not (Test-ResetNrptStoresEmpty) -or @(Get-DnsClientNrptPolicy -Effective -ErrorAction Stop).Count){throw 'NRPT rules remain or were reapplied by policy.'}
     }catch{$errors.Add($_.Exception.Message)}
-    $state.Errors=@($errors.ToArray());$state.Status=if($errors.Count){'ClearFailed'}else{'Cleared'};Save-State $state
+    $state.Errors=@($errors.ToArray());$state.Warnings=@($warnings.ToArray());$state.Status=if($errors.Count){'ClearFailed'}else{'Cleared'};Save-State $state
     if($errors.Count){throw ('Full DNS reset incomplete: '+($errors.ToArray()-join '; ')+'. Backup: '+$directory)}
-    return ('Full DNS reset completed. Adapters: '+$adapters.Count+'; removed NRPT rules: '+$rules.Count+'. Backup: '+$directory)
+    return ('Full DNS reset completed. Adapters: '+$adapters.Count+'; removed NRPT rules: '+$rules.Count+'. Backup: '+$directory+'. Details: '+($warnings.ToArray()-join '; '))
 }
 function Undo-ResetAll($State,[bool]$KeepExternalChanges) {
     $expected=Join-Path (Get-StoreRoot) ('reset-'+$State.Id)

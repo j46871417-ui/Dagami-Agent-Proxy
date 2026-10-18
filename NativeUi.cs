@@ -37,6 +37,9 @@ namespace DevProxyApp
         private Panel[] _pageControls;
         private string[] _pageNames, _pageDescriptions;
         private bool _updatingShortcutToggle, _proxyCheckFailed;
+        private CheckBox _startWithWindows;
+        private Label _startupStatus;
+        private bool _updatingStartup;
         private string _shortcutIssue, _proxyCheckMessage;
         private int _shortcutRecords;
         private int _shortcutRefreshTicks;
@@ -209,7 +212,7 @@ namespace DevProxyApp
 
         private void AddNativeButton(Control parent, string text, Action action)
         {
-            var button = new FluentButton { Text = text, AutoSize = true, Height = 34 };
+            var button = new FluentButton { Text = text, AutoSize = true, Height = 34, Primary = true };
             button.Click += (s, e) => {
                 ExecuteNativeAction(action);
             };

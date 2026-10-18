@@ -13,15 +13,16 @@ ROOT = Path(__file__).resolve().parent
 
 def main() -> None:
     parser = argparse.ArgumentParser()
-    mode = parser.add_mutually_exclusive_group()
-    mode.add_argument('--cli', action='store_true', help='Build the native console companion')
-    mode.add_argument('--dns-window', action='store_true', help='Build the direct DNS window without the main app broker')
-    parser.add_argument('--output-dir', type=Path, default=ROOT,
-                        help='Destination for the executable (defaults to the source directory)')
+    parser.add_argument('--output-dir', type=Path, default=ROOT / 'dist-portable' / 'windows',
+                        help='Destination for the single executable (default: dist-portable/windows)')
     args = parser.parse_args()
-    executable_name = 'DagamiDns.exe' if args.dns_window else ('dagami-proxy.exe' if args.cli else 'DagamiAgentProxy.exe')
+    executable_name = 'DagamiAgentProxy.exe'
     destination = args.output_dir.resolve()
     destination.mkdir(parents=True, exist_ok=True)
+    unexpected = [path.name for path in destination.glob('*.exe')
+                  if path.name.lower() != executable_name.lower()]
+    if unexpected:
+        raise RuntimeError('Output contains old or unrelated executables; archive them first: ' + ', '.join(sorted(unexpected)))
     windows = Path(os.environ.get("WINDIR", r"C:\Windows"))
     candidates = [
         windows / "Microsoft.NET/Framework64/v4.0.30319/csc.exe",
@@ -33,19 +34,18 @@ def main() -> None:
     references = [
         "System.dll", "System.Core.dll", "System.Drawing.dll",
         "System.Windows.Forms.dll", "System.Security.dll", "System.Web.Extensions.dll",
-        "System.IO.Compression.dll",
+        "System.IO.Compression.dll", "System.Xml.dll",
     ]
-    command = [str(compiler), "/nologo", '/target:exe' if args.cli else '/target:winexe', "/platform:anycpu", "/optimize+"]
+    command = [str(compiler), "/nologo", '/target:winexe', "/platform:anycpu", "/optimize+"]
     command.extend(f"/reference:{name}" for name in references)
     sources = [
         "DevProxyApp.cs", "NativeUi.cs", "FluentUi.cs", "AntigravityIntegration.cs",
         "AntigravityUi.cs", "AntigravityLogin.cs", "NativeShortcuts.cs",
         "NativeLaunchBroker.cs", "NativeSessions.cs", "SystemDnsManager.cs", "NativeCli.cs", "Brand.cs",
-        "LicenseManager.cs", "AppProxyPolicy.cs", "NativeCliApps.cs", "NativeUpdates.cs", "UpdateInstaller.cs", "UpdateUi.cs"
+        "LicenseManager.cs", "AppProxyPolicy.cs", "NativeCliApps.cs", "NativeUpdates.cs", "UpdateInstaller.cs", "UpdateUi.cs", "NativeStartup.cs"
     ]
     command.extend(sources)
-    if args.dns_window:
-        command.extend(['SystemDnsWindow.cs', '/main:DevProxyApp.SystemDnsWindow'])
+    command.append("/win32manifest:app.manifest")
     command.append(r"/win32icon:devproxy_pkg\assets\dagami-agent-proxy.ico")
     command.append(r"/resource:devproxy_pkg\assets\dagami-agent-proxy.ico,Dagami.AgentProxy.ico")
     command.append(r"/resource:devproxy_pkg\assets\icon-64.png,Dagami.AgentProxy.png")

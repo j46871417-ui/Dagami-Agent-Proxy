@@ -124,9 +124,8 @@ namespace DevProxyApp
         }
         public static ProcessStartInfo HelperStart(SystemDnsRequest request, string assemblyPath, bool elevated) {
             string payload = EncodeRequest(request);
-            // Always elevate the GUI subsystem executable. Elevating the CLI
-            // executable can create a console before Main gets control.
-            string helper = Path.Combine(Path.GetDirectoryName(assemblyPath), "DagamiAgentProxy.exe");
+            // Reuse this GUI executable, including when the user renamed it.
+            string helper = Path.GetFullPath(assemblyPath);
             var psi = new ProcessStartInfo(helper, "--system-dns-helper " + request.Operation + " " + payload);
             psi.WorkingDirectory = Path.GetDirectoryName(helper);
             psi.WindowStyle = ProcessWindowStyle.Hidden;
@@ -156,11 +155,15 @@ namespace DevProxyApp
                 throw new IOException("Invalid DNS job folder.");
             Directory.CreateDirectory(jobs, security); Directory.SetAccessControl(jobs, security);
         }
+        public static string ReadStoredText(string path) {
+            using (var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete))
+            using (var reader = new StreamReader(stream, Encoding.UTF8, true)) return reader.ReadToEnd();
+        }
         public static string LastStatus() {
             string path = Path.Combine(StoreRoot, "state.json");
             if (!File.Exists(path)) return "DevProxy ещё не применял системный DNS. Текущие настройки показаны в списке адаптеров.";
             try {
-                var state = new JavaScriptSerializer().Deserialize<Dictionary<string, object>>(File.ReadAllText(path));
+                var state = new JavaScriptSerializer().Deserialize<Dictionary<string, object>>(ReadStoredText(path));
                 string value = Convert.ToString(state["Status"]);
                 if (state.ContainsKey("Kind") && Convert.ToString(state["Kind"]) == "ResetAll") {
                     var resetLabels = new Dictionary<string,string> { {"Cleared","завершён"}, {"ClearFailed","выполнен частично — проверьте отчёт"}, {"Clearing","прерван — проверьте отчёт"}, {"Restored","прежние настройки возвращены"}, {"Released","возврат с пропусками"}, {"RollbackFailed","возврат не завершён — проверьте отчёт"} };
@@ -174,7 +177,7 @@ namespace DevProxyApp
             string path=Path.Combine(StoreRoot,"state.json");
             if(!File.Exists(path))return "не записывался приложением";
             try {
-                var state=new JavaScriptSerializer().Deserialize<Dictionary<string,object>>(File.ReadAllText(path));
+                var state=new JavaScriptSerializer().Deserialize<Dictionary<string,object>>(ReadStoredText(path));
                 string status=Convert.ToString(state["Status"]);
                 if(state.ContainsKey("Kind") && Convert.ToString(state["Kind"])=="ResetAll")return status=="Cleared"?"общий DNS сброшен; NRPT удалены":status=="Restored"?"прежние настройки до сброса возвращены":"полный сброс: нужна проверка";
                 if(status=="Restored")return "прежние настройки восстановлены";
@@ -207,18 +210,19 @@ namespace DevProxyApp
         public static string Execute(SystemDnsRequest request) {
             bool elevated = new WindowsPrincipal(WindowsIdentity.GetCurrent()).IsInRole(WindowsBuiltInRole.Administrator);
             var psi = HelperStart(request, typeof(SystemDnsManager).Assembly.Location, elevated);
-            if (!File.Exists(psi.FileName)) throw new FileNotFoundException("Рядом с CLI нужен DagamiAgentProxy.exe из того же архива.");
+            if (!File.Exists(psi.FileName)) throw new FileNotFoundException("Не найден файл программы для запуска помощника DNS.");
             using (var process = Process.Start(psi)) {
                 process.WaitForExit();
                 string resultPath = Path.Combine(StoreRoot, "jobs", request.JobId + ".json");
                 if (!File.Exists(resultPath)) throw new InvalidOperationException("Помощник DNS завершился без отчёта (код " + process.ExitCode + "). Настройка не подтверждена.");
-                var result = new JavaScriptSerializer().Deserialize<Dictionary<string, object>>(File.ReadAllText(resultPath));
+                var result = new JavaScriptSerializer().Deserialize<Dictionary<string, object>>(ReadStoredText(resultPath));
                 string message = Convert.ToString(result["Message"]);
                 if (process.ExitCode != 0 || !Convert.ToBoolean(result["Success"])) throw new InvalidOperationException(Friendly(message));
                 return Friendly(message);
             }
         }
         public static string Friendly(string text) {
+            if(text.Contains("DNS backup file is busy:"))return "Файл копии DNS занят другим процессом. Повтор записи не помог. Закройте другие окна DNS или дождитесь снятия блокировки и повторите действие. Подробности и итог отката:\r\n"+text;
             if(text.StartsWith("Pre-reset DNS settings restored."))return "Прежние настройки DNS и NRPT до полного сброса возвращены. Копия сохранена. Все пропуски указаны ниже.\r\n"+text;
             if(text.StartsWith("Full DNS reset completed."))return "Полный сброс выполнен: DNS IPv4/IPv6 всех найденных адаптеров переведён в авто, правила NRPT удалены, кеш DNS очищен.\r\n"+text;
             if(text.StartsWith("Full DNS reset incomplete:"))return "Сброс выполнен частично. Проверьте детали ниже; исходная копия сохранена. Политики вашей организации могут вернуть правила NRPT.\r\n"+text;
@@ -252,14 +256,15 @@ namespace DevProxyApp
         readonly CheckBox _nrpt = new CheckBox { Text = "Smart DNS: правила NRPT для выбранных доменов", AutoSize = true, Checked = true };
         readonly CheckBox _replace = new CheckBox { Text = "Заменить конфликтующие NRPT-правила с резервной копией", AutoSize = true };
         readonly TextBox _report = new TextBox { Multiline = true, ReadOnly = true, Dock = DockStyle.Fill, ScrollBars = ScrollBars.Vertical, Font = new Font("Consolas", 9) };
-        readonly Button _apply = new Button { Text = "Записать DNS в систему", AutoSize = true, Height = 34 };
-        readonly Button _restore = new Button { Text = "Восстановить прежний DNS", AutoSize = true, Height = 34 };
+        readonly Button _apply = new FluentButton { Text = "Записать DNS в систему", AutoSize = true, Height = 34, Primary = true };
+        readonly Button _restore = new FluentButton { Text = "Восстановить прежний DNS", AutoSize = true, Height = 34, Primary = true };
         readonly Button _refresh = new Button { Text = "Обновить", AutoSize = true, Height = 34 };
         readonly Button _resetAll = new Button { Text = "Очистить все DNS и NRPT…", AutoSize = true, Height = 34, BackColor = Color.FromArgb(185, 28, 28), ForeColor = Color.White, FlatStyle = FlatStyle.Flat, UseVisualStyleBackColor = false };
         bool _busy;
         bool _loading;
         public SystemDnsForm(string server = null) {
             if(!string.IsNullOrWhiteSpace(server))_server.Text=server.Trim();
+            Icon = Brand.LoadIcon();
             Text = Brand.Name + " — запись DNS в Windows"; StartPosition = FormStartPosition.CenterParent; ClientSize = new Size(820, 720); MinimumSize = new Size(720, 700);
             Font = new Font("Segoe UI", 10); BackColor = FluentTheme.Background;
             var body = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 10, Padding = new Padding(18) };

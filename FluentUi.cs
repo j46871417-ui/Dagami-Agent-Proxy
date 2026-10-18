@@ -282,6 +282,7 @@ namespace DevProxyApp
             BuildAppActionsMenu();
             AddNativeButton(launch, "Ещё…", () => _appActions.Show(_moreAppActions, new Point(0, _moreAppActions.Height)));
             _moreAppActions = (FluentButton)_nativeButtons[_nativeButtons.Count - 1];
+            _moreAppActions.Primary = false;
             actionRows.Controls.Add(launch, 0, 1);
             _shortcutToggle = new CheckBox { Text = "Запускать через прокси из обычного ярлыка", AutoSize = true,
                 AccessibleName = "Запускать выбранное приложение через прокси из обычного ярлыка", Margin = new Padding(0, 2, 0, 0) };
@@ -296,13 +297,13 @@ namespace DevProxyApp
 
             var settingsPage = new FluentLayout { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 3, BackColor = BackColor };
             settingsPage.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
-            settingsPage.RowStyles.Add(new RowStyle(SizeType.Absolute, 280));
-            settingsPage.RowStyles.Add(new RowStyle(SizeType.Absolute, 155));
+            settingsPage.RowStyles.Add(new RowStyle(SizeType.Absolute, 270));
+            settingsPage.RowStyles.Add(new RowStyle(SizeType.Absolute, 175));
             settingsPage.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
             var settingsCard = new FluentCard { Dock = DockStyle.Fill };
             var settings = new FluentLayout { Dock = DockStyle.Fill, ColumnCount = 2, RowCount = 6, BackColor = FluentTheme.Surface };
             settings.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100)); settings.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 170));
-            foreach (int height in new int[] { 35, 25, 42, 32, 42, 40 }) settings.RowStyles.Add(new RowStyle(SizeType.Absolute, height));
+            foreach (int height in new int[] { 35, 25, 38, 32, 38, 40 }) settings.RowStyles.Add(new RowStyle(SizeType.Absolute, height));
             settings.Controls.Add(FluentLabel("Прокси и DNS", 15, true), 0, 0);
             settings.Controls.Add(FluentLabel("Адрес HTTP / HTTPS прокси", 9, false), 0, 1);
             _proxyBox = new TextBox { Text = ConfigManager.Instance.LastProxy, UseSystemPasswordChar = true, BorderStyle = BorderStyle.FixedSingle, Dock = DockStyle.Fill, AccessibleName = "Адрес HTTP или HTTPS прокси" };
@@ -323,10 +324,26 @@ namespace DevProxyApp
             var behaviorCard = new FluentCard { Dock = DockStyle.Fill };
             var behavior = new FlowLayoutPanel { Dock = DockStyle.Fill, FlowDirection = FlowDirection.TopDown, WrapContents = false };
             behavior.Controls.Add(FluentLabel("Постоянные настройки", 13, true));
-            _systemEnvironment = new CheckBox { Text = "Записывать переменные прокси пользователя Windows", AutoSize = true, Checked = ConfigManager.Instance.SetSystemEnv };
-            behavior.Controls.Add(_systemEnvironment); behavior.Controls.Add(FluentLabel("Применяются через «Ещё → Дополнительно → Записать настройки».", 9, false));
+            _systemEnvironment = new CheckBox { Text = "Переменные прокси Windows — запись через «Ещё → Дополнительно»", AutoSize = true, Checked = ConfigManager.Instance.SetSystemEnv };
+            behavior.Controls.Add(_systemEnvironment);
+            _startWithWindows = new CheckBox { Text = "Запускать при входе в Windows — в трей, с правами администратора", AutoSize = true, AccessibleName = "Автозапуск Dagami с правами администратора" };
+            _startupStatus = FluentLabel("", 9, false);
+            behavior.Controls.Add(_startWithWindows); behavior.Controls.Add(_startupStatus);
+            Action readStartup = () => {
+                _updatingStartup = true;
+                try { _startWithWindows.Checked = !_preview && NativeStartup.Current.IsEnabled(); _startupStatus.Text = _startWithWindows.Checked ? "Автозапуск включён для этой копии программы." : "Автозапуск выключен для этой копии программы."; }
+                catch(Exception ex) { _startWithWindows.Checked = false; _startupStatus.Text = "Не удалось проверить автозапуск: " + ex.Message; }
+                finally { _updatingStartup = false; }
+            };
+            readStartup();
+            _startWithWindows.CheckedChanged += (s,e) => {
+                if(_updatingStartup || _preview) return;
+                try { NativeStartup.Current.SetEnabled(_startWithWindows.Checked); }
+                catch(Exception ex) { MessageBox.Show(this, ex.Message, "Автозапуск", MessageBoxButtons.OK, MessageBoxIcon.Warning); }
+                readStartup();
+            };
             behaviorCard.Controls.Add(behavior); settingsPage.Controls.Add(behaviorCard, 0, 1);
-            var note = new Label { Dock = DockStyle.Fill, ForeColor = FluentTheme.Muted, Text = "Smart DNS: вход Google, OAuth, аватар, Gemini и API Antigravity. Остальные адреса — через прокси; TLS проверяется.\nСистемный DNS: «Записать DNS в систему…» → подтвердить запись и UAC. Есть резервная копия и откат.", Padding = new Padding(2, 4, 2, 0) };
+            var note = new Label { Dock = DockStyle.Fill, ForeColor = FluentTheme.Muted, Text = "Smart DNS — для нужных доменов. Системный DNS — отдельная кнопка с копией и откатом.", Padding = new Padding(2, 4, 2, 0) };
             settingsPage.Controls.Add(note, 0, 2);
 
             var logCard = new FluentCard { Dock = DockStyle.Fill };

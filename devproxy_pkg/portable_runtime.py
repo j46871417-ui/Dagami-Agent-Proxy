@@ -25,6 +25,7 @@ from .core.profile import ProxyProfile
 from .core.recovery import get_devproxy_state_path, StateManager
 from .core.secrets import SecretStore
 from .core.tunnel import LocalTunnel
+from .core.process_env import external_environment, independent_environment
 
 def redact(text):
     text = re.sub(r'https://accounts\.google\.com/[^\s]+', '[OAuth URL hidden]', str(text))
@@ -59,12 +60,12 @@ def load_profile(name):
 def entry_command():
     if getattr(sys, 'frozen', False):
         return [sys.executable]
-    source=Path(__file__).resolve().parent.parent / 'devproxy.py'
+    source=Path(__file__).resolve().parent.parent / 'devproxy_gui.py'
     return [sys.executable,str(source)] if source.is_file() else [sys.executable,'-m','devproxy_pkg']
 
 def require_stopped(exe):
     if os.name=='nt':return  # Native Windows GUI/CLI has its own process preflight.
-    result=subprocess.run(['ps','-axo','pid=,comm='],capture_output=True,text=True,timeout=10,check=True)
+    result=subprocess.run(['ps','-axo','pid=,comm='],capture_output=True,text=True,timeout=10,check=True,env=external_environment())
     target=os.path.realpath(exe)
     for line in result.stdout.splitlines():
         fields=line.strip().split(None,1)
@@ -95,15 +96,15 @@ def launch_desktop_app(app,profile):
     if app not in ('codex','opencode'):return start_session(app,profile)
     command=entry_command()+['run',app,'--profile',profile]
     if os.name=='nt':
-        subprocess.Popen(command,creationflags=subprocess.CREATE_NEW_CONSOLE);return 'Открыта отдельная консоль приложения.'
+        subprocess.Popen(command,creationflags=subprocess.CREATE_NEW_CONSOLE,env=independent_environment());return 'Открыта отдельная консоль приложения.'
     if sys.platform=='darwin':
         import shlex
         path=runtime_dir()/(app+'-terminal.command')
         path.write_text('#!/bin/sh\nexec '+shlex.join(command)+'\n',encoding='utf-8');path.chmod(0o700)
-        subprocess.run(['/usr/bin/open','-a','Terminal',str(path)],check=True);return 'Открыт Terminal.'
+        subprocess.run(['/usr/bin/open','-a','Terminal',str(path)],check=True,env=independent_environment());return 'Открыт Terminal.'
     import shutil
     for terminal,flag in [('x-terminal-emulator','-e'),('gnome-terminal','--'),('konsole','-e'),('xterm','-e')]:
-        if shutil.which(terminal):subprocess.Popen([terminal,flag]+command,start_new_session=True);return 'Открыт терминал приложения.'
+        if shutil.which(terminal):subprocess.Popen([terminal,flag]+command,start_new_session=True,env=independent_environment());return 'Открыт терминал приложения.'
     raise RuntimeError('Терминал не найден. Выполните в своей консоли: devproxy run '+app+' --profile '+profile)
 
 def descriptor(app):
@@ -123,7 +124,7 @@ def request(app, command='status', **data):
     if len(body) > 32768:
         raise ValueError('Запрос слишком большой.')
     import http.client
-    client = http.client.HTTPConnection('127.0.0.1', record['port'], timeout=15)
+    client = http.client.HTTPConnection('127.0.0.1', record['port'], timeout=60 if command in ('open','login') else 15)
     try:
         client.request('POST', '/', body, {'Authorization': 'Bearer ' + record['token'], 'Content-Type': 'application/json'})
         reply = client.getresponse()
@@ -131,7 +132,9 @@ def request(app, command='status', **data):
         if reply.status != 200:
             raise RuntimeError(result.get('error', 'Сессия отклонила запрос.'))
         return result
-    except (ConnectionRefusedError, ConnectionResetError, socket.timeout):
+    except (ConnectionRefusedError, ConnectionResetError, socket.timeout) as exc:
+        if command != 'status':
+            raise RuntimeError('Сессия не подтвердила команду. Проверьте её статус и журнал перед повтором.') from exc
         return None
     finally:
         client.close()
@@ -172,6 +175,7 @@ def start_session(app, profile='default', extra_args=None):
             log.chmod(0o600)
         helper = subprocess.Popen(entry_command() + ['session', app, '--profile', profile],
             stdin=subprocess.DEVNULL, stdout=stream, stderr=stream, close_fds=True,
+            env=independent_environment(),
             start_new_session=os.name != 'nt', creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0) if os.name == 'nt' else 0)
     for _ in range(100):
         data = request(app)
@@ -318,13 +322,6 @@ def main(argv=None):
     args=parser.parse_args(raw)
     try:
         if args.command=='gui':
-            if getattr(sys, 'frozen', False):
-                folder=Path(sys.executable).resolve().parent.parent
-                candidates=[folder/'Dagami Agent Proxy'/'Dagami Agent Proxy.exe',folder/'Dagami Agent Proxy'/'Dagami Agent Proxy',folder/'Dagami Agent Proxy.app'/'Contents'/'MacOS'/'Dagami Agent Proxy']
-                gui=next((p for p in candidates if p.is_file()),None)
-                if gui is None:raise RuntimeError('GUI companion not found. Extract the complete archive.')
-                subprocess.Popen([str(gui)],start_new_session=sys.platform!='win32')
-                return 0
             from .desktop import main as desktop_main
             return desktop_main()
         if args.command=='sessions':

@@ -11,6 +11,13 @@ class SystemDnsUiChecks {
  static void Reject(Action a){bool caught=false;try{a();}catch(ArgumentException){caught=true;}Assert(caught,"Invalid DNS request accepted");}
  [STAThread]static int Main(){
   try {
+   string sharedPath=Path.Combine(Environment.CurrentDirectory,"dns-status-sharing-"+Guid.NewGuid().ToString("N")+".json");
+   try {
+    File.WriteAllText(sharedPath,"{\"Status\":\"Applied\"}",new UTF8Encoding(false));
+    using(var writer=new FileStream(sharedPath,FileMode.Open,FileAccess.ReadWrite,FileShare.ReadWrite|FileShare.Delete))
+     Assert(SystemDnsManager.ReadStoredText(sharedPath).Contains("Applied"),"Status reader blocks a writer holding the file");
+   }finally{if(File.Exists(sharedPath))File.Delete(sharedPath);}
+   Assert(SystemDnsManager.Friendly("Apply failed: DNS backup file is busy: state.json. Previous settings restored.").Contains("Файл копии DNS занят"),"Persistent file lock has no clear guidance");
    int prompts=0;
    Assert(!SystemDnsForm.ConfirmFullReset((text,title)=>{prompts++;return DialogResult.No;}) && prompts==1,"First reset cancellation did not stop immediately");
    prompts=0;
@@ -49,8 +56,10 @@ class SystemDnsUiChecks {
    Assert(SystemDnsManager.Friendly("Apply failed: HTTPS outage. Previous settings restored, but connectivity could not be verified: offline").Contains("Доступ к сети после отката не подтверждён"),"Unverified recovery falsely described as healthy");
    Assert(SystemDnsManager.Friendly("DNS applied. Family: IPv4. DNS and HTTPS checks passed.").Contains("Проверки DNS и HTTPS пройдены"),"Success does not distinguish network verification from DNS write");
    string guiPath=Path.Combine(Path.GetTempPath(),"DagamiAgentProxy.exe");
-   var helper=SystemDnsManager.HelperStart(request,Path.Combine(Path.GetTempPath(),"dagami-proxy.exe"),false);
-   Assert(helper.FileName==guiPath,"CLI DNS helper would launch a console executable");
+   var helper=SystemDnsManager.HelperStart(request,guiPath,false);
+   Assert(helper.FileName==guiPath,"DNS helper does not reuse the only executable");
+   string renamed=Path.Combine(Path.GetTempPath(),"My renamed Dagami.exe");
+   Assert(SystemDnsManager.HelperStart(request,renamed,false).FileName==renamed,"Renamed program requires another EXE for DNS");
    Assert(helper.UseShellExecute && helper.Verb=="runas" && helper.WindowStyle==ProcessWindowStyle.Hidden,"Helper elevation must stay hidden");
    helper=SystemDnsManager.HelperStart(request,guiPath,true);
    Assert(!helper.UseShellExecute && helper.CreateNoWindow && string.IsNullOrEmpty(helper.Verb),"Already elevated helper requests UAC again");
@@ -68,13 +77,31 @@ class SystemDnsUiChecks {
     }
    } finally {if(File.Exists(inert))File.Delete(inert);}
    string realGui=typeof(SystemDnsManager).Assembly.Location;
+   bool elevated=new System.Security.Principal.WindowsPrincipal(System.Security.Principal.WindowsIdentity.GetCurrent()).IsInRole(System.Security.Principal.WindowsBuiltInRole.Administrator);
+   if(elevated) {
+   using(var child=Process.Start(new ProcessStartInfo(realGui,"--brand-info"){UseShellExecute=false,CreateNoWindow=true,RedirectStandardOutput=true,RedirectStandardError=true,StandardOutputEncoding=Encoding.UTF8,StandardErrorEncoding=Encoding.UTF8})) {
+    Assert(child.WaitForExit(10000),"Single EXE CLI did not exit");
+    Assert(child.ExitCode==0 && child.StandardOutput.ReadToEnd().Contains("Dagami Agent Proxy"),"Single EXE CLI failed with redirected output");
+    Assert(child.StandardError.ReadToEnd().Length==0,"Single EXE CLI emitted an error");
+   }
    Assert(!NativeCliApps.IsCli(new AppTarget{ExePath=realGui}),"DNS elevation target has a console subsystem");
    using(var child=Process.Start(new ProcessStartInfo(realGui,"--system-dns-helper Restore invalid-base64"){UseShellExecute=false,CreateNoWindow=true,WindowStyle=ProcessWindowStyle.Hidden})) {
     Assert(child.WaitForExit(5000),"Invalid helper request opened a blocking window");
     Assert(child.ExitCode==1 || child.ExitCode==5,"Invalid helper request did not fail safely before DNS access");
    }
+   } else {
+    bool needsElevation=false;
+    try{using(var child=Process.Start(new ProcessStartInfo(realGui,"--brand-info"){UseShellExecute=false,CreateNoWindow=true})) { child.WaitForExit(5000); }}
+    catch(System.ComponentModel.Win32Exception ex){needsElevation=ex.NativeErrorCode==740;}
+    Assert(needsElevation,"Windows allows the app to start without the requested admin rights");
+   }
    Application.EnableVisualStyles();
    using(var form=new SystemDnsForm()) {
+    using(var stream=typeof(SystemDnsManager).Assembly.GetManifestResourceStream("Dagami.AgentProxy.ico"))using(var icon=new Icon(stream))using(var actual=form.Icon.ToBitmap())using(var expected=icon.ToBitmap()){
+     Assert(form.Icon!=null && actual.Size==expected.Size,"DNS window does not use the application icon");
+     int differences=0;for(int y=0;y<actual.Height;y++)for(int x=0;x<actual.Width;x++)if(actual.GetPixel(x,y)!=expected.GetPixel(x,y))differences++;
+     Assert(differences==0,"DNS icon differs from the executable icon");
+    }
     var fields=System.Reflection.BindingFlags.Instance|System.Reflection.BindingFlags.NonPublic;
     Assert(((CheckBox)typeof(SystemDnsForm).GetField("_nrpt",fields).GetValue(form)).Checked,"Default Smart DNS must use domain rules");
     Assert(!((CheckBox)typeof(SystemDnsForm).GetField("_changeAdapters",fields).GetValue(form)).Checked,"Default Smart DNS changes the whole network DNS");
@@ -90,6 +117,7 @@ class SystemDnsUiChecks {
     Assert(encoded.Contains("\"ReplaceActiveSetup\":true") && encoded.Contains("\"KeepExternalChanges\":true"),"GUI recovery flags lost before UAC");
     Assert(((Button)typeof(SystemDnsForm).GetField("_apply",fields).GetValue(form)).Text.Contains("Записать DNS"),"Explicit system DNS write action missing");
     var resetButton=(Button)typeof(SystemDnsForm).GetField("_resetAll",fields).GetValue(form);
+    foreach(string name in new[]{"_apply","_restore"}){var button=(Button)typeof(SystemDnsForm).GetField(name,fields).GetValue(form);Assert((bool)button.GetType().GetProperty("Primary").GetValue(button,null),"DNS action is not blue");}
     Assert(resetButton.Text.Contains("DNS и NRPT") && resetButton.BackColor==Color.FromArgb(185,28,28) && resetButton.ForeColor==Color.White && !resetButton.UseVisualStyleBackColor,"Full reset button is not visibly red");
     form.StartPosition=FormStartPosition.Manual;form.Location=new Point(-20000,-20000);form.Show();Application.DoEvents();
     var loading=typeof(SystemDnsForm).GetField("_loading",fields);

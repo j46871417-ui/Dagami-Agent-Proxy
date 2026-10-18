@@ -25,6 +25,23 @@ namespace DevProxyApp
 
         [DllImport("kernel32.dll", SetLastError = true)]
         static extern bool AllocConsole();
+        [DllImport("kernel32.dll")] static extern IntPtr GetStdHandle(int number);
+        [DllImport("kernel32.dll")] static extern uint GetFileType(IntPtr handle);
+        [DllImport("kernel32.dll")] static extern uint GetConsoleOutputCP();
+        static void EnsureConsole() {
+            // Keep inherited pipes intact for CLI calls to the GUI executable.
+            if (GetFileType(GetStdHandle(-11)) != 0) return;
+            if (!AttachConsole(-1)) AllocConsole();
+        }
+        internal static void ConfigureConsoleEncoding() {
+            var utf8 = new UTF8Encoding(false);
+            if (GetConsoleOutputCP() != 0) { Console.OutputEncoding = utf8; return; }
+            // A GUI-subsystem EXE can inherit valid pipes without a console.
+            // Console.OutputEncoding calls SetConsoleOutputCP and fails there.
+            Console.SetOut(new StreamWriter(Console.OpenStandardOutput(), utf8) { AutoFlush = true });
+            Console.SetError(new StreamWriter(Console.OpenStandardError(), utf8) { AutoFlush = true });
+            Console.SetIn(new StreamReader(Console.OpenStandardInput(), utf8));
+        }
 
         [STAThread]
         static void Main(string[] args)
@@ -36,6 +53,12 @@ namespace DevProxyApp
                     if (args.Length != 3) throw new ArgumentException("Invalid DNS helper request.");
                     Environment.ExitCode = SystemDnsManager.RunElevatedHelper(args[1], args[2]);
                 } catch { Environment.ExitCode = 1; }
+                return;
+            }
+            if (args != null && args.Length == 1 && args[0] == "--dns-window") {
+                Application.EnableVisualStyles();
+                Application.SetCompatibleTextRenderingDefault(false);
+                using (var form = new SystemDnsForm()) Application.Run(form);
                 return;
             }
             AppDomain.CurrentDomain.UnhandledException += (s, e) => {
@@ -52,8 +75,15 @@ namespace DevProxyApp
             {
                 if(args!=null&&args.Length==2&&args[0]=="--update-helper"){Environment.ExitCode=UpdateInstaller.RunHelper(args[1]);return;}
                 cliInvocation=NativeCliApps.IsShimLocation();
+                if (cliInvocation) EnsureConsole();
                 activity=NativeUpdates.AcquireActivity(false);
                 if(NativeCliApps.TryRunShim(args ?? new string[0]))return;
+                if(args!=null && args.Length==1 && args[0]=="--autostart") {
+                    Application.EnableVisualStyles();
+                    Application.SetCompatibleTextRenderingDefault(false);
+                    NativeLaunchBroker.Run(null,true);
+                    return;
+                }
                 Logger.Log("[MAIN START] argument_count=" + (args==null?0:args.Length));
                 if (args != null && args.Length >= 2 && args[0].Equals("--shortcut-launch", StringComparison.OrdinalIgnoreCase))
                 {
@@ -65,10 +95,7 @@ namespace DevProxyApp
                 }
                 if (args != null && args.Length > 0)
                 {
-                    if (!AttachConsole(-1))
-                    {
-                        AllocConsole();
-                    }
+                    EnsureConsole();
                     RunCli(args);
                     return;
                 }
@@ -91,7 +118,7 @@ namespace DevProxyApp
         static void RunCli(string[] args)
         {
             if (NativeCli.Handle(args)) return;
-            Console.OutputEncoding = Encoding.UTF8;
+            ConfigureConsoleEncoding();
             string cmd = args[0].Trim();
             Logger.Log("[CLI] Команда: " + string.Join(" ", args));
             if (cmd == "--proxy-shortcuts" || cmd == "--restore-shortcuts") {
@@ -1935,10 +1962,12 @@ namespace DevProxyApp
         private readonly bool _shortcutSession;
         private readonly string _shortcutTargetId;
         private bool _exitRequested;
+        private readonly bool _startInTray;
 
-        public MainForm(string shortcutTargetId = null, bool shortcutSession = false, bool preview = false)
+        public MainForm(string shortcutTargetId = null, bool shortcutSession = false, bool preview = false, bool startInTray = false)
         {
             _preview = preview;
+            _startInTray = startInTray;
             _shortcutTargetId = shortcutTargetId;
             _shortcutSession = shortcutSession;
             this.ShowInTaskbar = false;
@@ -1947,6 +1976,7 @@ namespace DevProxyApp
             if (!preview) { InitLogging(); StartRescueBridge(); }
             _cachedTargets = ProxyEngine.ScanAllTargets();
             BuildFluentUi();
+            if(_startInTray) { Opacity=0; ShowInTaskbar=false; }
             if (!preview) InitTray();
         }
 
@@ -1961,6 +1991,10 @@ namespace DevProxyApp
                 this.Hide();
                 BeginInvoke(new Action(StartShortcutSession));
             }
+        }
+        protected override void OnShown(EventArgs e) {
+            base.OnShown(e);
+            if(_startInTray) Hide();
         }
 
         protected override void OnFormClosing(FormClosingEventArgs e)

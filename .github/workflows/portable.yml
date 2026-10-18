@@ -1,4 +1,4 @@
-name: Dagami Agent Proxy GUI and CLI (manual artifacts only)
+name: Dagami Agent Proxy (manual builds only)
 on:
   workflow_dispatch:
 permissions:
@@ -17,9 +17,9 @@ jobs:
           python-version: '3.12'
       - name: Linux desktop dependencies
         if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y python3-tk xvfb libsecret-tools desktop-file-utils
+        run: sudo apt-get update && sudo apt-get install -y python3-tk xvfb libsecret-tools desktop-file-utils libayatana-appindicator3-1 gir1.2-ayatanaappindicator3-0.1
       - name: Build dependencies
-        run: python -m pip install 'pyinstaller>=6.16,<7'
+        run: python -m pip install '.[build,desktop]'
       - name: Unit and real loopback/process tests
         run: python -m unittest discover -s tests -p 'test_*.py' -v
       - name: Build Linux artifacts with GUI smoke test

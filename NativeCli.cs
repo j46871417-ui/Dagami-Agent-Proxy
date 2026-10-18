@@ -6,7 +6,7 @@ using System.Web.Script.Serialization;
 namespace DevProxyApp {
     public static class NativeCli {
         public static bool Handle(string[] args) {
-            Console.OutputEncoding=new System.Text.UTF8Encoding(false);
+            Program.ConfigureConsoleEncoding();
             string command=args[0].ToLowerInvariant();
             if(command=="--render-preview") {
                 if(args.Length!=2)throw new ArgumentException("--render-preview IMAGE.png");
@@ -52,7 +52,7 @@ namespace DevProxyApp {
             }
             if(!LicenseManager.IsActivated()&&command!="--brand-info"&&command!="--render-preview"&&command!="logs") {
                 Console.WriteLine("Dagami Agent Proxy: приложение не активировано.");
-                Console.WriteLine("Для активации выполните: dagami-proxy activate DAGAMI-XXXX-XXXX-XXXX");
+                Console.WriteLine("Для активации выполните: DagamiAgentProxy.exe activate DAGAMI-XXXX-XXXX-XXXX");
                 Console.WriteLine("Бесплатный ключ в Telegram-боте: "+LicenseManager.BotUrl);
                 return true;
             }

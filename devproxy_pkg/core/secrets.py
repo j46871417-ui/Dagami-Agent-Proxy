@@ -10,6 +10,7 @@ import sys
 import os
 import ctypes
 from typing import Optional
+from .process_env import external_environment
 
 
 SERVICE_NAME = "devproxy-auth"
@@ -145,7 +146,7 @@ class MacOSKeychainStore:
             "-U", "-s", target, "-a", username or "proxy-user",
             "-w", password
         ]
-        res = subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        res = subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=external_environment())
         return res.returncode == 0
 
     @classmethod
@@ -155,7 +156,7 @@ class MacOSKeychainStore:
         import subprocess
         target = f"{SERVICE_NAME}:{profile_name}"
         cmd = ["/usr/bin/security", "find-generic-password", "-s", target, "-w"]
-        res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
+        res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True, env=external_environment())
         if res.returncode == 0:
             return res.stdout.strip()
         return None
@@ -167,7 +168,7 @@ class MacOSKeychainStore:
         import subprocess
         target = f"{SERVICE_NAME}:{profile_name}"
         cmd = ["/usr/bin/security", "delete-generic-password", "-s", target]
-        res = subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        res = subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=external_environment())
         return res.returncode == 0
 
 
@@ -191,7 +192,7 @@ class LinuxSecretStore:
             "service", SERVICE_NAME,
             "profile", profile_name
         ]
-        p = subprocess.run(cmd, input=password.encode(), stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        p = subprocess.run(cmd, input=password.encode(), stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=external_environment())
         return p.returncode == 0
 
     @classmethod
@@ -204,7 +205,7 @@ class LinuxSecretStore:
             "service", SERVICE_NAME,
             "profile", profile_name
         ]
-        res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
+        res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True, env=external_environment())
         if res.returncode == 0:
             val = res.stdout.strip()
             return val if val else None
@@ -220,7 +221,7 @@ class LinuxSecretStore:
             "service", SERVICE_NAME,
             "profile", profile_name
         ]
-        res = subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        res = subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=external_environment())
         return res.returncode == 0
 
 

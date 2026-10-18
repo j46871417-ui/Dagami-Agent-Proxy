@@ -402,6 +402,9 @@ def interactive_wizard():
 
 
 def main():
+    if len(sys.argv)>1 and sys.argv[1] in ('dns','autostart','--system-dns-helper','--autostart','--smoke-gui'):
+        from .entry import main as unified_main
+        return unified_main(sys.argv[1:])
     portable = {"run", "patch", "unpatch", "session", "sessions", "stop", "shortcuts", "login", "logs", "gui", "register"}
     if len(sys.argv) > 1 and sys.argv[1] in portable:
         from .portable_runtime import main as portable_main
@@ -440,7 +443,7 @@ def main():
     p_run.add_argument("--proxy", help="Ad-hoc proxy string")
     p_run.add_argument("--dry-run", action="store_true", help="Show command without launching")
     p_run.add_argument("extra_args", nargs="*", help="Extra arguments passed to application")
-    for name, help_text in [("patch", "Prepare normal launchers"), ("unpatch", "Restore launchers"), ("sessions", "Active background sessions"), ("stop", "Stop an app session"), ("shortcuts", "Launcher status"), ("login", "Google login through session proxy"), ("logs", "Session log"), ("gui", "Open desktop GUI"), ("register", "Set application executable path")]:
+    for name, help_text in [("patch", "Prepare normal launchers"), ("unpatch", "Restore launchers"), ("sessions", "Active background sessions"), ("stop", "Stop an app session"), ("shortcuts", "Launcher status"), ("login", "Google login through session proxy"), ("logs", "Session log"), ("gui", "Open desktop GUI"), ("register", "Set application executable path"), ("dns", "Linux/macOS DNS: dns --help"), ("autostart", "Linux/macOS login startup: autostart --help")]:
         subparsers.add_parser(name, help=help_text)
 
     # apply

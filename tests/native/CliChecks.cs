@@ -50,7 +50,6 @@ class CliChecks {
    Assert(NativeCliApps.IsCli(new AppTarget{ExePath=original}),"Console PE not recognized");
    Assert(!NativeCliApps.IsCli(new AppTarget{ExePath=typeof(MainForm).Assembly.Location}),"GUI mistaken for CLI");
    string manager=Path.Combine(root,"DagamiAgentProxy.exe");File.Copy(typeof(MainForm).Assembly.Location,manager);
-   File.Copy(Path.Combine(Path.GetDirectoryName(typeof(MainForm).Assembly.Location),"dagami-proxy.exe"),Path.Combine(root,"dagami-proxy.exe"));
    var paths=new Paths{MachinePath=""};var store=new NativeCliApps(Path.Combine(root,"managed"),paths);
    var target=new AppTarget{Id="test-agy",DisplayName="agy",ExePath=original};
    string shim=store.Enable(target,manager),issue;
@@ -71,7 +70,7 @@ class CliChecks {
    shim=store.Enable(target,manager);File.AppendAllText(shim,"foreign-edit");Reject(()=>store.Restore(target.Id));
    Assert(File.Exists(shim),"Foreign shim deleted");
    // Restore fixture bytes to test ordinary removal; never touch real installations.
-   File.Copy(Path.Combine(root,"dagami-proxy.exe"),shim,true);store.Restore(target.Id);
+   File.Copy(manager,shim,true);store.Restore(target.Id);
    paths.MachinePath=originalDir;Reject(()=>store.Enable(target,manager));paths.MachinePath="";
    string cmd=Path.Combine(originalDir,"gemini.cmd");File.WriteAllText(cmd,"@echo off\r\n\"%dp0%\\node_modules\\fake\\cli.js\" %*\r\n");
    string nodeDir=Path.Combine(originalDir,"node_modules","fake");Directory.CreateDirectory(nodeDir);File.WriteAllText(Path.Combine(nodeDir,"cli.js"),"fixture");File.Copy(Self,Path.Combine(originalDir,"node.exe"));

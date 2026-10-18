@@ -1,18 +1,40 @@
 """Build Dagami packages for the host OS. No publishing or remote operations."""
 import argparse
 import hashlib
+import importlib.util
 import json
 from pathlib import Path
 import platform
+import re
 import shutil
 import subprocess
 import sys
+import uuid
 import zipfile
 
 ROOT=Path(__file__).resolve().parent
 ASSETS=ROOT/'devproxy_pkg'/'assets'
 GUI='Dagami Agent Proxy'
-CLI='dagami-portable-cli' if sys.platform=='win32' else 'dagami-proxy'
+
+def source_member(path):
+    relative=path.relative_to(ROOT)
+    if path.is_symlink() or not path.resolve().is_relative_to(ROOT.resolve()):
+        raise RuntimeError('Source archive refuses links: '+relative.as_posix())
+    if '__pycache__' in relative.parts or any(part.startswith('.') for part in relative.parts if part!='.github'):return False
+    if relative.parts[0]=='devproxy_pkg':
+        return path.suffix=='.py' or (relative.parent.as_posix()=='devproxy_pkg/assets' and
+            (path.suffix in ('.png','.jpg','.svg','.ico','.icns') or path.name=='dns-domains.json'))
+    if relative.parts[0]=='tests':return path.suffix in ('.py','.cs','.ps1')
+    if relative.parts[0]=='tools':return path.name in ('check_source_hygiene.py','source-policy.json','test_source_hygiene.py')
+    return relative.parts[:2]==('.github','workflows') and path.suffix in ('.yml','.yaml')
+
+def add_source(archive,path):
+    from tools.check_source_hygiene import PATTERNS
+    data=path.read_bytes()
+    for label,pattern in PATTERNS.items():
+        if re.search(pattern,data):raise RuntimeError(f'Source archive: possible {label} in {path.relative_to(ROOT)}; value redacted')
+    info=zipfile.ZipInfo.from_file(path,path.relative_to(ROOT))
+    archive.writestr(info,data,compress_type=zipfile.ZIP_DEFLATED)
 
 def tcl_data(output):
     """Tk 9 embeds scripts in zipfs; materialize them for PyInstaller's hook."""
@@ -32,39 +54,74 @@ def tcl_data(output):
     finally:root.destroy()
 
 def main():
-    parser=argparse.ArgumentParser();parser.add_argument('--source-only',action='store_true');args=parser.parse_args()
-    output=ROOT/'dist-portable';output.mkdir(exist_ok=True)
+    parser=argparse.ArgumentParser();parser.add_argument('--source-only',action='store_true');parser.add_argument('--output-dir',type=Path,default=ROOT/'dist-portable');args=parser.parse_args()
+    output=args.output_dir.resolve();output.mkdir(parents=True,exist_ok=True)
     source=output/'dagami-agent-proxy-source.zip'
-    names=['devproxy.py','devproxy_gui.py','pyproject.toml','PORTABLE.md','README.md','MATRIX.md','WINDOWS_SHORTCUTS_AND_DNS.md','ANTIGRAVITY_INTEGRATION.md','LICENSE','build_portable.py','build_native_app.py','install_portable.py','make_brand_assets.py','Brand.cs','SystemDns.ps1']
+    names=['.gitignore','.gitattributes','.gitleaks.toml','devproxy.py','devproxy_gui.py','pyproject.toml','PORTABLE.md','BUILD_LINUX_MACOS.md','README.md','MATRIX.md','WINDOWS_SHORTCUTS_AND_DNS.md','ANTIGRAVITY_INTEGRATION.md','SYSTEM_DNS.md','SOURCE_POLICY.md','STARTUP.md','LICENSE','build_portable.py','build_native_app.py','install_portable.py','install.sh','make_brand_assets.py','generate_license_key.py','Brand.cs','SystemDns.ps1','app.manifest']
     names += [p.name for p in ROOT.glob('*.cs') if p.name not in names]
-    with zipfile.ZipFile(source,'w',zipfile.ZIP_DEFLATED) as archive:
-        for name in names:
-            if (ROOT/name).exists():archive.write(ROOT/name,name)
-        for folder in ('devproxy_pkg','tests','.github/workflows'):
-            for path in sorted((ROOT/folder).rglob('*')):
-                if path.is_file() and '__pycache__' not in path.parts and path.suffix!='.pyc':archive.write(path,path.relative_to(ROOT))
-    if args.source_only:return
+    staged=output/('source-'+uuid.uuid4().hex+'.tmp')
+    try:
+        with zipfile.ZipFile(staged,'w',zipfile.ZIP_DEFLATED) as archive:
+            for name in names:
+                if (ROOT/name).is_symlink():raise RuntimeError('Source archive refuses links: '+name)
+                if (ROOT/name).exists():add_source(archive,ROOT/name)
+            for folder in ('devproxy_pkg','tests','tools','.github/workflows'):
+                for path in sorted((ROOT/folder).rglob('*')):
+                    if path.is_file() and source_member(path):add_source(archive,path)
+        staged.replace(source)
+    finally:
+        if staged.exists():staged.unlink()
+    if args.source_only:
+        (output/'SHA256-source.json').write_text(json.dumps({source.name:hashlib.sha256(source.read_bytes()).hexdigest()},indent=2)+'\n',encoding='utf-8')
+        print(source);return
     host={'win32':'windows','darwin':'macos'}.get(sys.platform,'linux')
     arch=platform.machine().lower();arch={'amd64':'x64','x86_64':'x64','aarch64':'arm64'}.get(arch,arch)
+    if host=='windows':
+        # Windows has one native executable for GUI, CLI and DNS maintenance.
+        native=output/'windows'
+        subprocess.run([sys.executable,str(ROOT/'build_native_app.py'),'--output-dir',str(native)],check=True)
+        exe=native/'DagamiAgentProxy.exe'
+        hashes={exe.name:hashlib.sha256(exe.read_bytes()).hexdigest()}
+        (native/'SHA256-native.json').write_text(json.dumps(hashes,indent=2)+'\n',encoding='utf-8')
+        archive=output/f'dagami-agent-proxy-{host}-{arch}.zip'
+        with zipfile.ZipFile(archive,'w',zipfile.ZIP_DEFLATED) as package:
+            for path in (exe,native/'SHA256-native.json',ROOT/'SYSTEM_DNS.md',ROOT/'SOURCE_POLICY.md',ROOT/'STARTUP.md',ROOT/'PORTABLE.md',ROOT/'LICENSE'):
+                package.write(path,path.name)
+        manifest={p.name:hashlib.sha256(p.read_bytes()).hexdigest() for p in (source,archive)}
+        (output/f'SHA256-{host}-{arch}.json').write_text(json.dumps(manifest,indent=2)+'\n',encoding='utf-8')
+        print(archive)
+        return
+    if any(importlib.util.find_spec(module) is None for module in ('pystray','PIL')):
+        raise SystemExit('Install desktop build dependencies: python3 -m pip install ".[build,desktop]"')
     build=output/('dagami-'+host+'-'+arch);build.mkdir(exist_ok=True)
-    tk_args=tcl_data(output)
-    for name,script in [(CLI,'devproxy.py'),(GUI,'devproxy_gui.py')]:
-        command=[sys.executable,'-m','PyInstaller','--noconfirm','--clean','--onedir','--name',name,'--distpath',str(build),'--workpath',str(output/'work'/name),'--specpath',str(output/'specs'),'--add-data',str(ASSETS)+':devproxy_pkg/assets']
-        if name==CLI:command+=['--exclude-module','tkinter']
-        else:
-            command+=tk_args
-            if sys.platform in ('win32','darwin'):command.append('--windowed')
-            if sys.platform=='darwin':command+=['--osx-bundle-identifier','ru.dagami.agentproxy','--icon',str(ASSETS/'dagami-agent-proxy.icns')]
-        if sys.platform=='win32':command+=['--icon',str(ASSETS/'dagami-agent-proxy.ico')]
-        command.append(str(ROOT/script));subprocess.run(command,cwd=ROOT,check=True)
-    suffix='.exe' if host=='windows' else ''
-    cli=build/CLI/(CLI+suffix)
-    gui=build/GUI/(GUI+suffix) if host!='macos' else build/(GUI+'.app')/'Contents'/'MacOS'/GUI
-    subprocess.run([str(cli),'--help'],check=True,timeout=30)
+    # GUI, CLI, session and elevation enter the same binary. A macOS .app
+    # keeps runtime libraries inside the bundle; no second CLI is shipped.
+    name=GUI if host=='macos' else 'dagami-agent-proxy'
+    command=[sys.executable,'-m','PyInstaller','--noconfirm','--clean',
+             '--onedir' if host=='macos' else '--onefile','--name',name,
+             '--distpath',str(build),'--workpath',str(output/'work'/name),
+             '--specpath',str(output/'specs'),'--add-data',str(ASSETS)+':devproxy_pkg/assets',
+             *tcl_data(output)]
+    if host=='macos':
+        command+=['--windowed','--osx-bundle-identifier','ru.dagami.agentproxy',
+                  '--icon',str(ASSETS/'dagami-agent-proxy.icns')]
+    command.append(str(ROOT/'devproxy_gui.py'));subprocess.run(command,cwd=ROOT,check=True)
+    gui=build/name if host=='linux' else build/(GUI+'.app')/'Contents'/'MacOS'/GUI
+    subprocess.run([str(gui),'--help'],check=True,timeout=30)
     subprocess.run([str(gui),'--smoke-gui'],check=True,timeout=30)
-    shutil.copyfile(ROOT/'PORTABLE.md',build/'PORTABLE.md')
-    shutil.copyfile(ROOT/'LICENSE',build/'LICENSE')
-    archive=Path(shutil.make_archive(str(output/f'dagami-agent-proxy-{host}-{arch}'),'zip',build))
+    archive=output/f'dagami-agent-proxy-{host}-{arch}.zip'
+    with zipfile.ZipFile(archive,'w',zipfile.ZIP_DEFLATED) as package:
+        artifact=build/name if host=='linux' else build/(GUI+'.app')
+        paths=[artifact] if artifact.is_file() else sorted(p for p in artifact.rglob('*') if p.is_file() or p.is_symlink())
+        for path in paths:
+            relative=path.relative_to(build).as_posix()
+            if path.is_symlink():
+                import os
+                info=zipfile.ZipInfo(relative);info.create_system=3
+                info.external_attr=(0o120777<<16)
+                package.writestr(info,os.readlink(path))
+            else:package.write(path,relative)
+        for name in ('PORTABLE.md','LICENSE'):package.write(ROOT/name,name)
     manifest={p.name:hashlib.sha256(p.read_bytes()).hexdigest() for p in (source,archive)}
     (output/f'SHA256-{host}-{arch}.json').write_text(json.dumps(manifest,indent=2)+'\n',encoding='utf-8')
     print(archive)

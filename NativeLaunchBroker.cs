@@ -81,11 +81,12 @@ namespace DevProxyApp
             return "Фоновый DevProxy не ответил. Откройте его через значок в трее и проверьте журнал.";
         }
         public void Dispose() { _running = false; try { if (_server != null) _server.Dispose(); } catch { } }
-        public static void Run(NativeLaunchRequest initial) {
+        public static void Run(NativeLaunchRequest initial, bool startInTray = false) {
             bool owner = false;
             using (var mutex = new Mutex(false, @"Local\" + UserName)) {
                 try { owner = mutex.WaitOne(0); } catch (AbandonedMutexException) { owner = true; }
                 if (!owner) {
+                    if(startInTray) return;
                     if (!LicenseManager.IsActivated()) {
                         using (var activation = new ActivationForm()) {
                             if (activation.ShowDialog() != DialogResult.OK) {
@@ -98,6 +99,7 @@ namespace DevProxyApp
                     return;
                 }
                 try {
+                    if(startInTray && !LicenseManager.IsActivated()) return;
                     if (!LicenseManager.IsActivated()) {
                         using (var activation = new ActivationForm()) {
                             if (activation.ShowDialog() != DialogResult.OK) {
@@ -105,7 +107,7 @@ namespace DevProxyApp
                             }
                         }
                     }
-                    using (var form = new MainForm(initial == null ? null : initial.TargetId, initial != null)) {
+                    using (var form = new MainForm(initial == null ? null : initial.TargetId, initial != null, false, startInTray)) {
                         form.InitialShortcutKey = initial == null ? null : initial.ShortcutKey;
                         IntPtr handle = form.Handle;
                         using (var broker = new NativeLaunchBroker(UserName, request => (string)form.Invoke(new Func<string>(() => form.HandleShortcutRequest(request))))) {

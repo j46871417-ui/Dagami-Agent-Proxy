@@ -15,6 +15,7 @@ import threading
 from typing import List, Dict, Optional, Tuple, Any
 from .tunnel import LocalTunnel
 from .profile import ProxyProfile
+from .process_env import external_environment
 
 if sys.platform == "win32":
     from .windows_job import WindowsJobManager
@@ -47,9 +48,7 @@ class Launcher:
         if extra_args:
             cmd.extend(extra_args)
 
-        env = os.environ.copy()
-        if env_vars:
-            env.update(env_vars)
+        env = external_environment(env_vars)
 
         creationflags = 0
         

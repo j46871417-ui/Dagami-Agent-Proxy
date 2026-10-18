@@ -76,9 +76,9 @@ namespace DevProxyApp {
    if(FindCommand(command,environment.MachinePath)!=null)throw new InvalidOperationException("Команда найдена в системном PATH, который имеет приоритет над пользовательским. Автоматическая настройка без изменения системного PATH невозможна; используйте запуск из Dagami.");
    // Validate script support before changing PATH or writing launchers.
    CreateStart(target.ExePath,new string[0],"http://127.0.0.1:1",Environment.CurrentDirectory);
-   string runner=Path.Combine(Path.GetDirectoryName(manager),"dagami-proxy.exe");
-   if(!File.Exists(runner))throw new FileNotFoundException("Рядом с GUI нужен dagami-proxy.exe из того же архива.");
-   if(!IsCli(new AppTarget{ExePath=runner})||FileVersionInfo.GetVersionInfo(runner).FileVersion!=FileVersionInfo.GetVersionInfo(typeof(NativeCliApps).Assembly.Location).FileVersion)throw new InvalidOperationException("Версия dagami-proxy.exe не совпадает с GUI. Распакуйте оба EXE из одного архива.");
+   string runner=Path.GetFullPath(manager);
+   if(!File.Exists(runner))throw new FileNotFoundException("Не найден файл Dagami для запуска CLI.");
+   if(FileVersionInfo.GetVersionInfo(runner).ProductName!=Brand.Name||FileVersionInfo.GetVersionInfo(runner).FileVersion!=FileVersionInfo.GetVersionInfo(typeof(NativeCliApps).Assembly.Location).FileVersion)throw new InvalidOperationException("Версия файла Dagami не совпадает с работающей программой.");
    var state=Load();var old=state.Apps.Find(x=>x.AppId==target.Id);
    if(state.Apps.Exists(x=>x.AppId!=target.Id&&x.Command.Equals(command,StringComparison.OrdinalIgnoreCase)))throw new InvalidOperationException("Команда уже назначена другому приложению.");
    if(old!=null&&!old.Command.Equals(command,StringComparison.OrdinalIgnoreCase))throw new InvalidOperationException("Имя команды изменилось. Сначала отмените прежнюю настройку.");
@@ -125,7 +125,7 @@ namespace DevProxyApp {
    var store=new NativeCliApps(Path.GetDirectoryName(folder),new WindowsCliPathEnvironment());
    var app=store.Load().Apps.Find(x=>Same(x.Shim,current));
    if(app==null)throw new InvalidOperationException("Для этого CLI-запускателя нет сохранённой настройки. Повторите «Пропатчить» в Dagami.");
-   Console.OutputEncoding=new UTF8Encoding(false);
+   Program.ConfigureConsoleEncoding();
    if(Hash(File.ReadAllBytes(current))!=app.Hash)throw new InvalidOperationException("CLI-запускатель не соответствует сохранённой настройке.");
    if(!LicenseManager.IsActivated())throw new InvalidOperationException("Dagami не активирован. Откройте GUI для активации.");
    var config=ConfigManager.Instance;

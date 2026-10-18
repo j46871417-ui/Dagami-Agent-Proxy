@@ -41,12 +41,12 @@ namespace DevProxyApp {
   public static void SaveCache(UpdateCache value){SaveProtected(Path.Combine(Root,"cache.dat"),value);}
   public static bool IsNewer(UpdateRelease release){return release!=null&&UpdateVersion.Parse(release.Tag).CompareTo(UpdateVersion.Parse(Brand.ReleaseTag))>0;}
   public static void ValidateAsset(UpdateAsset asset,string tag,string name){
-   if(asset==null||asset.Name!=name||asset.Size<512||asset.Size>MaxBinary||!Regex.IsMatch(asset.Sha256??"",@"\A[0-9a-fA-F]{64}\z"))throw new InvalidDataException("Релиз не содержит корректную пару EXE с SHA-256.");
+   if(asset==null||asset.Name!=name||asset.Size<512||asset.Size>MaxBinary||!Regex.IsMatch(asset.Sha256??"",@"\A[0-9a-fA-F]{64}\z"))throw new InvalidDataException("Релиз не содержит корректный EXE с SHA-256.");
    string expected="https://github.com/"+Repository+"/releases/download/"+Uri.EscapeDataString(tag)+"/"+name;
    if(asset.Url!=expected)throw new InvalidDataException("Файл обновления ссылается за пределы релиза проекта.");
   }
   static bool ArchiveName(string name,string tag){return name=="Dagami-Agent-Proxy-"+tag+"-windows.zip"||name=="Dagami-Agent-Proxy-windows-x64.zip"||name=="Dagami-Agent-Proxy-windows.zip";}
-  public static void ValidateRelease(UpdateRelease value){if(value==null)throw new InvalidDataException("Нет релиза.");UpdateVersion.Parse(value.Tag);if(value.Page!="https://github.com/"+Repository+"/releases/tag/"+Uri.EscapeDataString(value.Tag))throw new InvalidDataException("Неверная страница релиза.");if(value.Archive!=null){if(!ArchiveName(value.Archive.Name,value.Tag))throw new InvalidDataException("Неподдерживаемое имя Windows-архива.");ValidateAsset(value.Archive,value.Tag,value.Archive.Name);}if(value.Gui!=null||value.Archive==null)ValidateAsset(value.Gui,value.Tag,"DagamiAgentProxy.exe");if(value.Cli!=null||value.Archive==null)ValidateAsset(value.Cli,value.Tag,"dagami-proxy.exe");}
+  public static void ValidateRelease(UpdateRelease value){if(value==null)throw new InvalidDataException("Нет релиза.");UpdateVersion.Parse(value.Tag);if(value.Page!="https://github.com/"+Repository+"/releases/tag/"+Uri.EscapeDataString(value.Tag))throw new InvalidDataException("Неверная страница релиза.");if(value.Archive!=null){if(!ArchiveName(value.Archive.Name,value.Tag))throw new InvalidDataException("Неподдерживаемое имя Windows-архива.");ValidateAsset(value.Archive,value.Tag,value.Archive.Name);}if(value.Gui!=null||value.Archive==null)ValidateAsset(value.Gui,value.Tag,"DagamiAgentProxy.exe");}
   static UpdateAsset Asset(Dictionary<string,object> data){string digest=Convert.ToString(data.ContainsKey("digest")?data["digest"]:null);return new UpdateAsset{Name=Convert.ToString(data["name"]),Url=Convert.ToString(data["browser_download_url"]),Size=Convert.ToInt64(data["size"]),Sha256=digest.StartsWith("sha256:",StringComparison.Ordinal)?digest.Substring(7):""};}
   public static UpdateRelease SelectRelease(string json,bool includePrereleases){
    var serializer=new JavaScriptSerializer{MaxJsonLength=4*1024*1024};var entries=serializer.DeserializeObject(json) as object[];if(entries==null)throw new InvalidDataException("GitHub вернул не список релизов.");UpdateRelease best=null;
@@ -54,7 +54,7 @@ namespace DevProxyApp {
     var list=r["assets"] as object[];if(list==null)continue;UpdateAsset gui=null,cli=null,archive=null;
     foreach(object raw in list){var a=raw as Dictionary<string,object>;if(a==null||Convert.ToString(a["state"])!="uploaded")continue;string name=Convert.ToString(a["name"]);if(name=="DagamiAgentProxy.exe"){if(gui!=null)throw new InvalidDataException("Повторяющийся GUI в релизе.");gui=Asset(a);}if(name=="dagami-proxy.exe"){if(cli!=null)throw new InvalidDataException("Повторяющийся CLI в релизе.");cli=Asset(a);}}
     foreach(object raw in list){var a=raw as Dictionary<string,object>;if(a!=null&&Convert.ToString(a["state"])=="uploaded"&&ArchiveName(Convert.ToString(a["name"]),tag)){if(archive!=null)throw new InvalidDataException("Несколько Windows-архивов в релизе.");archive=Asset(a);}}
-    if((gui==null||cli==null)&&archive==null)continue;
+    if(gui==null&&archive==null)continue;
     string notes=Convert.ToString(r.ContainsKey("body")?r["body"]:"");if(notes.Length>12000)notes=notes.Substring(0,12000);
     var candidate=new UpdateRelease{Tag=tag,Page=Convert.ToString(r["html_url"]),Notes=notes,Prerelease=Convert.ToBoolean(r["prerelease"]),Gui=gui,Cli=cli,Archive=archive};ValidateRelease(candidate);
     if(best==null||UpdateVersion.Parse(tag).CompareTo(UpdateVersion.Parse(best.Tag))>0)best=candidate;
@@ -65,7 +65,7 @@ namespace DevProxyApp {
    ValidateRelease(release);string folder=Path.Combine(Root,"staged",Guid.NewGuid().ToString("N"));Directory.CreateDirectory(folder);
    using(var network=new UpdateNetwork()){
     if(release.Archive!=null){var a=release.Archive;if(progress!=null)progress("Загрузка Windows-архива…");byte[] data=network.Get(new Uri(a.Url),a.Size);if(data.LongLength!=a.Size||Hash(data)!=a.Sha256.ToLowerInvariant())throw new InvalidDataException("SHA-256 архива не совпал.");ExtractArchive(release,data,folder);}
-    else foreach(var asset in new[]{release.Gui,release.Cli}){if(progress!=null)progress("Загрузка "+asset.Name+"…");byte[] data=network.Get(new Uri(asset.Url),asset.Size);if(data.LongLength!=asset.Size||Hash(data)!=asset.Sha256.ToLowerInvariant())throw new InvalidDataException("SHA-256 не совпал: "+asset.Name+". Установка отменена.");Atomic(Path.Combine(folder,asset.Name),data);}
+    else {var asset=release.Gui;if(progress!=null)progress("Загрузка "+asset.Name+"…");byte[] data=network.Get(new Uri(asset.Url),asset.Size);if(data.LongLength!=asset.Size||Hash(data)!=asset.Sha256.ToLowerInvariant())throw new InvalidDataException("SHA-256 не совпал: "+asset.Name+". Установка отменена.");Atomic(Path.Combine(folder,asset.Name),data);}
    }
    ValidatePayload(release,folder);SaveProtected(Path.Combine(folder,"release.dat"),release);return folder;
   }
@@ -73,23 +73,23 @@ namespace DevProxyApp {
    ValidateRelease(release);if(release.Archive==null||data.LongLength!=release.Archive.Size||Hash(data)!=release.Archive.Sha256.ToLowerInvariant())throw new InvalidDataException("Не проверен SHA-256 архива.");
    var files=new Dictionary<string,byte[]>(StringComparer.OrdinalIgnoreCase);
    using(var archive=new ZipArchive(new MemoryStream(data),ZipArchiveMode.Read))foreach(var entry in archive.Entries){
-    if(entry.FullName!="DagamiAgentProxy.exe"&&entry.FullName!="dagami-proxy.exe"&&entry.FullName!="SHA256-native.json")continue;
+    if(entry.FullName!="DagamiAgentProxy.exe"&&entry.FullName!="SHA256-native.json")continue;
     long limit=entry.FullName.EndsWith(".json")?65536:MaxBinary;if(files.ContainsKey(entry.FullName)||entry.Length>limit)throw new InvalidDataException("Некорректные записи Windows-архива.");
     using(var input=entry.Open())using(var output=new MemoryStream()){var buffer=new byte[65536];int n;while((n=input.Read(buffer,0,buffer.Length))>0){if(output.Length+n>limit)throw new InvalidDataException("Превышен размер EXE в архиве.");output.Write(buffer,0,n);}files[entry.FullName]=output.ToArray();}
    }
-   if(files.Count!=3)throw new InvalidDataException("В архиве нет пары EXE и SHA256-native.json в корне.");
+   if(files.Count!=2)throw new InvalidDataException("В архиве нет DagamiAgentProxy.exe и SHA256-native.json в корне.");
    var hashes=new JavaScriptSerializer().Deserialize<Dictionary<string,string>>(Encoding.UTF8.GetString(files["SHA256-native.json"]).TrimStart('\ufeff'));
    var extracted=new List<UpdateAsset>();
-   foreach(string name in new[]{"DagamiAgentProxy.exe","dagami-proxy.exe"}){string hash;if(hashes==null||!hashes.TryGetValue(name,out hash)||!Regex.IsMatch(hash??"",@"\A[0-9a-fA-F]{64}\z")||Hash(files[name])!=hash.ToLowerInvariant())throw new InvalidDataException("SHA-256 EXE внутри архива не совпал: "+name);var previous=name=="DagamiAgentProxy.exe"?release.Gui:release.Cli;if(previous!=null&&(previous.Size!=files[name].LongLength||previous.Sha256.ToLowerInvariant()!=hash.ToLowerInvariant()))throw new InvalidDataException("Архив не совпадает с отдельными EXE релиза.");extracted.Add(new UpdateAsset{Name=name,Size=files[name].LongLength,Sha256=hash.ToLowerInvariant(),Url="https://github.com/"+Repository+"/releases/download/"+Uri.EscapeDataString(release.Tag)+"/"+name});}
-   Directory.CreateDirectory(folder);for(int i=0;i<2;i++)Atomic(Path.Combine(folder,extracted[i].Name),files[extracted[i].Name]);release.Gui=extracted[0];release.Cli=extracted[1];
+   foreach(string name in new[]{"DagamiAgentProxy.exe"}){string hash;if(hashes==null||!hashes.TryGetValue(name,out hash)||!Regex.IsMatch(hash??"",@"\A[0-9a-fA-F]{64}\z")||Hash(files[name])!=hash.ToLowerInvariant())throw new InvalidDataException("SHA-256 EXE внутри архива не совпал: "+name);var previous=release.Gui;if(previous!=null&&(previous.Size!=files[name].LongLength||previous.Sha256.ToLowerInvariant()!=hash.ToLowerInvariant()))throw new InvalidDataException("Архив не совпадает с отдельным EXE релиза.");extracted.Add(new UpdateAsset{Name=name,Size=files[name].LongLength,Sha256=hash.ToLowerInvariant(),Url="https://github.com/"+Repository+"/releases/download/"+Uri.EscapeDataString(release.Tag)+"/"+name});}
+   Directory.CreateDirectory(folder);Atomic(Path.Combine(folder,extracted[0].Name),files[extracted[0].Name]);release.Gui=extracted[0];release.Cli=null;
   }
   static bool MatchesVersion(FileVersionInfo file,string tag){var product=UpdateVersion.Parse(file.ProductVersion);var expected=UpdateVersion.Parse(tag);if(product.CompareTo(expected)==0)return true;var legacy=Regex.Match(expected.Pre,@"\Aalpha\.(\d+)\z");var number=new Version(file.FileVersion);return product.Pre=="alpha"&&legacy.Success&&product.Major==expected.Major&&product.Minor==expected.Minor&&product.Patch==expected.Patch&&number.Major==expected.Major&&number.Minor==expected.Minor&&number.Build==expected.Patch&&number.Revision==int.Parse(legacy.Groups[1].Value);}
   public static void ValidatePayload(UpdateRelease release,string folder){
-   ValidateRelease(release);if(release.Gui==null||release.Cli==null)throw new InvalidDataException("EXE ещё не извлечены из архива.");foreach(var asset in new[]{release.Gui,release.Cli}){string path=Path.Combine(folder,asset.Name);if(!File.Exists(path)||new FileInfo(path).Length!=asset.Size||FileHash(path)!=asset.Sha256.ToLowerInvariant())throw new InvalidDataException("Изменён скачанный файл "+asset.Name);}
-   var gui=FileVersionInfo.GetVersionInfo(Path.Combine(folder,"DagamiAgentProxy.exe"));var cli=FileVersionInfo.GetVersionInfo(Path.Combine(folder,"dagami-proxy.exe"));
-   if(gui.ProductName!=Brand.Name||cli.ProductName!=Brand.Name||gui.FileVersion!=cli.FileVersion||NativeCliApps.IsCli(new AppTarget{ExePath=Path.Combine(folder,"DagamiAgentProxy.exe")})||!NativeCliApps.IsCli(new AppTarget{ExePath=Path.Combine(folder,"dagami-proxy.exe")}))throw new InvalidDataException("GUI/CLI не принадлежат одной Windows-сборке Dagami.");
+   ValidateRelease(release);if(release.Gui==null)throw new InvalidDataException("EXE ещё не извлечён из архива.");var asset=release.Gui;string path=Path.Combine(folder,asset.Name);if(!File.Exists(path)||new FileInfo(path).Length!=asset.Size||FileHash(path)!=asset.Sha256.ToLowerInvariant())throw new InvalidDataException("Изменён скачанный файл "+asset.Name);
+   var gui=FileVersionInfo.GetVersionInfo(path);
+   if(gui.ProductName!=Brand.Name||NativeCliApps.IsCli(new AppTarget{ExePath=path}))throw new InvalidDataException("EXE не принадлежит Windows-сборке Dagami.");
    // New releases carry the exact SemVer in AssemblyInformationalVersion.
-   if(!MatchesVersion(gui,release.Tag)||!MatchesVersion(cli,release.Tag))throw new InvalidDataException("Версия EXE не соответствует тегу релиза.");
+   if(!MatchesVersion(gui,release.Tag))throw new InvalidDataException("Версия EXE не соответствует тегу релиза.");
   }
   public static IDisposable AcquireActivity(bool cli){var leases=new List<IDisposable>();try{leases.Add(ActivityLock("activity.lock",false));if(cli)leases.Add(ActivityLock("cli.lock",false));return new Leases(leases);}catch{foreach(var lease in leases)lease.Dispose();throw new IOException("Идёт обновление Dagami. Повторите запуск после его завершения.");}}
   public static FileStream ActivityLock(string name,bool exclusive){Directory.CreateDirectory(Root);string path=Path.Combine(Root,name);if(!File.Exists(path))try{using(var f=new FileStream(path,FileMode.CreateNew,FileAccess.Write,FileShare.Read)){}}catch(IOException){if(!File.Exists(path))throw;}return new FileStream(path,FileMode.Open,FileAccess.Read,exclusive?FileShare.None:FileShare.Read);}
