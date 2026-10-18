@@ -35,6 +35,7 @@ namespace DevProxyApp
         public bool ReplaceExisting { get; set; }
         public bool KeepExternalChanges { get; set; }
         public bool ReplaceActiveSetup { get; set; }
+        public bool ConfirmResetAll { get; set; }
         public SystemDnsRequest() { KeepExternalChanges = true; ReplaceActiveSetup = true; }
         public SystemDnsAdapter[] Adapters { get; set; }
     }
@@ -58,7 +59,8 @@ namespace DevProxyApp
         }
         public static void Validate(SystemDnsRequest request) {
             Guid id;
-            if (request == null || !Guid.TryParseExact(request.JobId, "N", out id) || (request.Operation != "Apply" && request.Operation != "Restore")) throw new ArgumentException("Некорректная операция DNS.");
+            if (request == null || !Guid.TryParseExact(request.JobId, "N", out id) || (request.Operation != "Apply" && request.Operation != "Restore" && request.Operation != "ResetAll")) throw new ArgumentException("Некорректная операция DNS.");
+            if (request.Operation == "ResetAll") { if (!request.ConfirmResetAll) throw new ArgumentException("Для полного сброса нужны два подтверждения."); return; }
             if (request.Operation == "Restore") return;
             IPAddress ip;
             if (!IPAddress.TryParse(request.Server, out ip)) throw new ArgumentException("Укажите IP-адрес DNS-сервера, например 185.149.145.6.");
@@ -80,7 +82,7 @@ namespace DevProxyApp
             }
         }
         public static string PowerShellCommand(string operation, string payload) {
-            if (operation != "Apply" && operation != "Restore" && operation != "Status") throw new ArgumentException("Invalid operation.");
+            if (operation != "Apply" && operation != "Restore" && operation != "ResetAll" && operation != "Status") throw new ArgumentException("Invalid operation.");
             byte[] bytes = Convert.FromBase64String(payload);
             if (bytes.Length > 12000) throw new ArgumentException("Invalid payload size.");
             string canonical = Convert.ToBase64String(bytes);
@@ -110,7 +112,7 @@ namespace DevProxyApp
             } finally { if (File.Exists(scriptPath)) File.Delete(scriptPath); }
         }
         public static ProcessStartInfo EngineStart(string operation, string payload, string scriptPath) {
-            if (operation != "Apply" && operation != "Restore") throw new ArgumentException("Invalid operation.");
+            if (operation != "Apply" && operation != "Restore" && operation != "ResetAll") throw new ArgumentException("Invalid operation.");
             string canonical = Convert.ToBase64String(Convert.FromBase64String(payload));
             var psi = new ProcessStartInfo(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.System), @"WindowsPowerShell\v1.0\powershell.exe"));
             psi.Arguments = "-NoLogo -NoProfile -NonInteractive -WindowStyle Hidden -ExecutionPolicy Bypass -File " + NativeShortcuts.Quote(scriptPath) + " -Operation " + operation + " -RequestBase64 " + canonical;
@@ -160,6 +162,10 @@ namespace DevProxyApp
             try {
                 var state = new JavaScriptSerializer().Deserialize<Dictionary<string, object>>(File.ReadAllText(path));
                 string value = Convert.ToString(state["Status"]);
+                if (state.ContainsKey("Kind") && Convert.ToString(state["Kind"]) == "ResetAll") {
+                    var resetLabels = new Dictionary<string,string> { {"Cleared","завершён"}, {"ClearFailed","выполнен частично — проверьте отчёт"}, {"Clearing","прерван — проверьте отчёт"}, {"Restored","прежние настройки возвращены"}, {"Released","возврат с пропусками"}, {"RollbackFailed","возврат не завершён — проверьте отчёт"} };
+                    return "Полный сброс DNS и NRPT: " + (resetLabels.ContainsKey(value)?resetLabels[value]:value) + ". Копия: " + Convert.ToString(state["ResetDirectory"]) + ".\r\nДля возврата нажмите «Восстановить прежний DNS».";
+                }
                 var labels = new Dictionary<string, string> { { "Applied", "Применён" }, { "Restored", "Восстановлен прежний DNS" }, { "Released", "Откат завершён с пропусками; внешние настройки сохранены" }, { "Prepared", "Подготовлен; требуется проверка или откат" }, { "Applying", "Применение прервано; выполните откат" }, { "RollbackFailed", "Откат не завершён — проверьте отчёт" } };
                 return "Последняя операция: " + (labels.ContainsKey(value) ? labels[value] : value) + ". DNS: " + Convert.ToString(state["Server"]) + ".\r\nЭто сохранённый результат операции; текущие DNS показаны в списке адаптеров.";
             } catch (Exception ex) { return "Не удалось прочитать резервную копию: " + ex.GetType().Name; }
@@ -170,6 +176,7 @@ namespace DevProxyApp
             try {
                 var state=new JavaScriptSerializer().Deserialize<Dictionary<string,object>>(File.ReadAllText(path));
                 string status=Convert.ToString(state["Status"]);
+                if(state.ContainsKey("Kind") && Convert.ToString(state["Kind"])=="ResetAll")return status=="Cleared"?"общий DNS сброшен; NRPT удалены":status=="Restored"?"прежние настройки до сброса возвращены":"полный сброс: нужна проверка";
                 if(status=="Restored")return "прежние настройки восстановлены";
                 if(status=="Released")return "откат с пропусками; внешние настройки сохранены";
                 if(status!="Applied")return "нужна проверка: "+status;
@@ -212,6 +219,9 @@ namespace DevProxyApp
             }
         }
         public static string Friendly(string text) {
+            if(text.StartsWith("Pre-reset DNS settings restored."))return "Прежние настройки DNS и NRPT до полного сброса возвращены. Копия сохранена. Все пропуски указаны ниже.\r\n"+text;
+            if(text.StartsWith("Full DNS reset completed."))return "Полный сброс выполнен: DNS IPv4/IPv6 всех найденных адаптеров переведён в авто, правила NRPT удалены, кеш DNS очищен.\r\n"+text;
+            if(text.StartsWith("Full DNS reset incomplete:"))return "Сброс выполнен частично. Проверьте детали ниже; исходная копия сохранена. Политики вашей организации могут вернуть правила NRPT.\r\n"+text;
             if(text.StartsWith("DNS server preflight failed:"))return "Новый DNS не прошёл проверку доступности. Настройки сети не менялись.\r\n"+text;
             if(text.StartsWith("Connectivity preflight failed:"))return "Не удалось проверить исходный доступ к DNS и HTTPS. Настройки сети не менялись.\r\n"+text;
             if(text.StartsWith("Apply failed:") && text.Contains("Previous settings restored, but connectivity could not be verified:"))return "Применение отменено, прежние настройки возвращены. Доступ к сети после отката не подтверждён.\r\n"+text;
@@ -245,15 +255,16 @@ namespace DevProxyApp
         readonly Button _apply = new Button { Text = "Записать DNS в систему", AutoSize = true, Height = 34 };
         readonly Button _restore = new Button { Text = "Восстановить прежний DNS", AutoSize = true, Height = 34 };
         readonly Button _refresh = new Button { Text = "Обновить", AutoSize = true, Height = 34 };
+        readonly Button _resetAll = new Button { Text = "Очистить все DNS и NRPT…", AutoSize = true, Height = 34, BackColor = Color.FromArgb(185, 28, 28), ForeColor = Color.White, FlatStyle = FlatStyle.Flat, UseVisualStyleBackColor = false };
         bool _busy;
         bool _loading;
         public SystemDnsForm(string server = null) {
             if(!string.IsNullOrWhiteSpace(server))_server.Text=server.Trim();
-            Text = Brand.Name + " — запись DNS в Windows"; StartPosition = FormStartPosition.CenterParent; ClientSize = new Size(820, 650); MinimumSize = new Size(720, 600);
+            Text = Brand.Name + " — запись DNS в Windows"; StartPosition = FormStartPosition.CenterParent; ClientSize = new Size(820, 720); MinimumSize = new Size(720, 700);
             Font = new Font("Segoe UI", 10); BackColor = FluentTheme.Background;
-            var body = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 9, Padding = new Padding(18) };
+            var body = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 10, Padding = new Padding(18) };
             body.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
-            foreach (int size in new[] { 78, 66, 32, 32, 32, 110, 38, 72 }) body.RowStyles.Add(new RowStyle(SizeType.Absolute, size));
+            foreach (int size in new[] { 78, 66, 32, 32, 32, 110, 38, 54, 72 }) body.RowStyles.Add(new RowStyle(SizeType.Absolute, size));
             body.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
             body.Controls.Add(new Label { Dock = DockStyle.Fill, Text = "Правила NRPT сохраняют DNS вашей сети и задают сервер для выбранных доменов.\r\nОбщий DNS адаптеров меняется лишь при выборе отдельного пункта ниже.\r\nПеред записью и после неё проверим сеть. При сбое — откат; для записи нужен UAC." }, 0, 0);
             var fields = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 2, RowCount = 2 };
@@ -264,17 +275,25 @@ namespace DevProxyApp
             body.Controls.Add(fields, 0, 1); body.Controls.Add(_changeAdapters, 0, 2); body.Controls.Add(_nrpt, 0, 3); body.Controls.Add(_replace, 0, 4); body.Controls.Add(_adapters, 0, 5);
             var actions = new FlowLayoutPanel { Dock = DockStyle.Fill, WrapContents = false, Margin = Padding.Empty };
             actions.Controls.AddRange(new Control[] { _apply, _restore, _refresh }); body.Controls.Add(actions, 0, 6);
-            body.Controls.Add(new Label { Dock = DockStyle.Fill, ForeColor = FluentTheme.Muted, Text = "По умолчанию общий DNS сети сохраняется. Для смены DNS всей сети выберите отдельный пункт и нужные адаптеры.\r\nНовая запись сохранит прежнюю копию. При откате внешние DNS остаются как есть, удалённые адаптеры пропускаются. Итог — в отчёте ниже." }, 0, 7);
-            body.Controls.Add(_report, 0, 8); Controls.Add(body);
+            var danger = new FlowLayoutPanel { Dock = DockStyle.Fill, WrapContents = false, Margin = Padding.Empty };
+            danger.Controls.Add(_resetAll); danger.Controls.Add(new Label { AutoSize = true, ForeColor = Color.Firebrick, Text = "Все адаптеры и чужие правила.\r\nНужны два подтверждения.", Margin = new Padding(12, 3, 0, 0) }); body.Controls.Add(danger, 0, 7);
+            body.Controls.Add(new Label { Dock = DockStyle.Fill, ForeColor = FluentTheme.Muted, Text = "По умолчанию общий DNS сети сохраняется. Для смены DNS всей сети выберите отдельный пункт и нужные адаптеры.\r\nНовая запись сохранит прежнюю копию. При откате внешние DNS остаются как есть, удалённые адаптеры пропускаются. Итог — в отчёте ниже." }, 0, 8);
+            body.Controls.Add(_report, 0, 9); Controls.Add(body);
             _apply.Click += (s, e) => Run("Apply"); _restore.Click += (s, e) => Run("Restore"); _refresh.Click += (s, e) => RefreshAdapters(null);
+            _resetAll.Click += (s, e) => { if (!_busy && !_loading && ConfirmFullReset((text, title) => MessageBox.Show(this, text, title, MessageBoxButtons.YesNo, MessageBoxIcon.Warning, MessageBoxDefaultButton.Button2))) Run("ResetAll"); };
             Shown += (s, e) => RefreshAdapters(null);
             FormClosing += (s, e) => { if (_busy) { e.Cancel = true; _report.AppendText("\r\nДождитесь завершения операции и отчёта."); } };
+        }
+        public static bool ConfirmFullReset(Func<string, string, DialogResult> show) {
+            const string question = "Вы точно уверены в том что вы делаете?";
+            if (show(question + "\r\n\r\nБудут сброшены DNS IPv4/IPv6 ВСЕХ найденных адаптеров, включая VPN и VMware. Все правила NRPT, в том числе чужие и локальные правила политики, будут удалены. Доступ к сети и рабочим ресурсам может пропасть.", "Полный сброс — шаг 1 из 2") != DialogResult.Yes) return false;
+            return show(question + "\r\n\r\nDNS вернётся в авто. Списки и галочки выше не ограничивают сброс. Сначала сохраним копию в ProgramData\\DevProxy-SystemDns. Правила из домена могут появиться вновь. Нажатие «Да» запустит сброс после UAC.", "Полный сброс — шаг 2 из 2") == DialogResult.Yes;
         }
         void RefreshAdapters(string operationMessage) {
             if (_busy || _loading) return;
             bool first = _adapters.Items.Count == 0;
             var selected = new HashSet<string>(); foreach (SystemDnsAdapter adapter in _adapters.CheckedItems) selected.Add(adapter.Guid);
-            _loading = true; _apply.Enabled = _restore.Enabled = _refresh.Enabled = false;
+            _loading = true; _apply.Enabled = _restore.Enabled = _refresh.Enabled = _resetAll.Enabled = false;
             string requestedServer=_server.Text.Trim();
             _report.Text = (operationMessage == null ? "" : operationMessage + "\r\n\r\n") + "Чтение сетевых адаптеров…";
             ThreadPool.QueueUserWorkItem(o => {
@@ -285,7 +304,7 @@ namespace DevProxyApp
                     else {ip=Array.Find(Dns.GetHostAddresses(requestedServer),a=>a.AddressFamily==System.Net.Sockets.AddressFamily.InterNetwork);if(ip==null)throw new InvalidOperationException("Не найден IPv4 DNS-сервера. Введите его IP вручную.");resolvedServer=ip.ToString();}
                 } catch (Exception ex) { error = ex.Message; }
                 try { BeginInvoke(new Action(() => {
-                    _loading = false; _apply.Enabled = _restore.Enabled = _refresh.Enabled = true;
+                    _loading = false; _apply.Enabled = _restore.Enabled = _refresh.Enabled = _resetAll.Enabled = true;
                     if(resolvedServer!=null && _server.Text.Trim()==requestedServer)_server.Text=resolvedServer;
                     _adapters.Items.Clear(); if (adapters != null) foreach (var adapter in adapters) _adapters.Items.Add(adapter, first ? adapter.HasDefaultGateway : selected.Contains(adapter.Guid));
                     _report.Text = SystemDnsManager.LastStatus() + (error == null ? "" : "\r\nОшибка чтения адаптеров: " + error) + (operationMessage == null ? "" : "\r\n\r\n" + operationMessage);
@@ -295,14 +314,14 @@ namespace DevProxyApp
         SystemDnsRequest CreateRequest(string operation) {
             var selected = new List<SystemDnsAdapter>(); foreach (SystemDnsAdapter adapter in _adapters.CheckedItems) selected.Add(adapter);
             return new SystemDnsRequest { JobId = Guid.NewGuid().ToString("N"), Operation = operation, Server = _server.Text.Trim(),
-                Preset = _preset.SelectedIndex == 0 ? "Full" : "Development", ChangeAdapters = _changeAdapters.Checked, UseNrpt = _nrpt.Checked, ReplaceExisting = _replace.Checked, KeepExternalChanges = true, ReplaceActiveSetup = true, Adapters = selected.ToArray() };
+                Preset = _preset.SelectedIndex == 0 ? "Full" : "Development", ChangeAdapters = _changeAdapters.Checked, UseNrpt = _nrpt.Checked, ReplaceExisting = _replace.Checked, KeepExternalChanges = true, ReplaceActiveSetup = true, ConfirmResetAll = operation == "ResetAll", Adapters = selected.ToArray() };
         }
         void Run(string operation) {
             if (_busy || _loading) return;
             var request = CreateRequest(operation);
             try { SystemDnsManager.Validate(request); } catch (Exception ex) { _report.Text = ex.Message; return; }
-            _busy = true; _apply.Enabled = _restore.Enabled = _refresh.Enabled = false;
-            _report.Text = "Ожидание UAC. Перед записью проверим DNS-сервер, после — DNS и HTTPS. При сбое вернём прежние настройки.\r\nСервер: " + request.Server + "; выбранных адаптеров: " + request.Adapters.Length;
+            _busy = true; _apply.Enabled = _restore.Enabled = _refresh.Enabled = _resetAll.Enabled = false;
+            _report.Text = operation == "ResetAll" ? "Ожидание UAC. Сохраним копию, затем сбросим DNS всех найденных адаптеров и удалим NRPT, включая чужие правила." : "Ожидание UAC. Перед записью проверим DNS-сервер, после — DNS и HTTPS. При сбое вернём прежние настройки.\r\nСервер: " + request.Server + "; выбранных адаптеров: " + request.Adapters.Length;
             ThreadPool.QueueUserWorkItem(o => {
                 string message;
                 try { message = SystemDnsManager.Execute(request); }

@@ -1,4 +1,4 @@
-param([ValidateSet('Apply','Restore','Status')][string]$Operation='Status', [string]$RequestJson='{}', [string]$RequestBase64='', [switch]$LibraryOnly)
+param([ValidateSet('Apply','Restore','ResetAll','Status')][string]$Operation='Status', [string]$RequestJson='{}', [string]$RequestBase64='', [switch]$LibraryOnly)
 $ErrorActionPreference='Stop'
 if($RequestBase64){$RequestJson=[Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($RequestBase64))}
 
@@ -127,7 +127,8 @@ function Get-ProviderDomains([string]$Preset) {
 function Validate-Request($Request) {
     $job=[guid]::Empty
     if(-not [guid]::TryParseExact([string]$Request.JobId,'N',[ref]$job)){throw 'Invalid DNS job ID.'}
-    if($Request.Operation -notin @('Apply','Restore')){throw 'Invalid DNS operation.'}
+    if($Request.Operation -notin @('Apply','Restore','ResetAll')){throw 'Invalid DNS operation.'}
+    if($Request.Operation -eq 'ResetAll'){if($Request.ConfirmResetAll -ne $true){throw 'Full DNS reset requires explicit confirmation.'};return}
     if($Request.Operation -eq 'Restore'){return}
     $ip=$null
     if(-not [Net.IPAddress]::TryParse([string]$Request.Server,[ref]$ip)){throw 'Use a literal DNS server IP address.'}
@@ -373,16 +374,114 @@ function Undo-State($State,[bool]$FailureRollback=$false,[bool]$KeepExternalChan
     $State.Errors=@($errors.ToArray());$State.Status=if($errors.Count){'RollbackFailed'}elseif($warnings.Count){'Released'}else{'Restored'};Save-State $State
     if($errors.Count){throw ($errors.ToArray()-join '; ')}
 }
+function Get-ResetNrptStores {
+    @('HKLM\SYSTEM\CurrentControlSet\Services\Dnscache\Parameters\DnsPolicyConfig',
+      'HKLM\SOFTWARE\Policies\Microsoft\Windows NT\DNSClient\DnsPolicyConfig')
+}
+function Backup-ResetNrptStores([string]$Directory) {
+    $number=0
+    foreach($key in @(Get-ResetNrptStores)){
+        $file=Join-Path $Directory ('nrpt-'+$number+'.reg');$number++
+        $exists=Test-Path -LiteralPath ('Registry::HKEY_LOCAL_MACHINE\'+$key.Substring(5))
+        if($exists){
+            $null=& "$env:SystemRoot\System32\reg.exe" export $key $file /y 2>&1
+            if($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $file) -or (Get-Item -LiteralPath $file).Length -lt 20){throw 'NRPT backup failed; no DNS settings changed.'}
+            Protect-Path $file
+        }
+        [pscustomobject]@{Key=$key;File=[IO.Path]::GetFileName($file);Exists=[bool]$exists}
+    }
+}
+function Clear-ResetNrptStores {
+    foreach($key in @(Get-ResetNrptStores)){
+        $path='Registry::HKEY_LOCAL_MACHINE\'+$key.Substring(5)
+        if(Test-Path -LiteralPath $path){Remove-Item -LiteralPath $path -Recurse -Force -ErrorAction Stop}
+    }
+}
+function Test-ResetNrptStoresEmpty {
+    foreach($key in @(Get-ResetNrptStores)){if(Test-Path -LiteralPath ('Registry::HKEY_LOCAL_MACHINE\'+$key.Substring(5))){return $false}}
+    return $true
+}
+function Restore-ResetNrptStores($State) {
+    $allowed=@(Get-ResetNrptStores)
+    foreach($store in @($State.RegistryStores)){
+        if($store.Key -notin $allowed -or $store.File -notmatch '^nrpt-[01]\.reg$'){throw 'Invalid NRPT reset backup.'}
+        if(-not $store.Exists){continue}
+        $file=Join-Path $State.ResetDirectory $store.File
+        if(-not (Test-Path -LiteralPath $file) -or ((Get-Item -LiteralPath $file).Attributes -band [IO.FileAttributes]::ReparsePoint)){throw 'Invalid NRPT reset backup file.'}
+        $null=& "$env:SystemRoot\System32\reg.exe" import $file 2>&1
+        if($LASTEXITCODE -ne 0){throw 'NRPT backup import failed.'}
+    }
+}
+function Invoke-ResetAll($Request) {
+    # No connectivity preflight: this is also the escape path for broken DNS.
+    # Read and persist ALL originals before the first network mutation.
+    $existing=Read-State
+    $directory=Join-Path (Get-StoreRoot) ('reset-'+$Request.JobId)
+    [IO.Directory]::CreateDirectory($directory)|Out-Null;Protect-Path $directory $true
+    $adapters=@(foreach($adapter in @(Get-NetAdapter -IncludeHidden -ErrorAction Stop)){
+        $families=@(Get-DnsClientServerAddress -InterfaceIndex $adapter.InterfaceIndex -ErrorAction Stop | ForEach-Object {
+            # AddressFamily is 2/23 on the native CIM object; the fixture has Family.
+            if($_.AddressFamily -eq 2 -or $_.Family -eq 'IPv4'){'IPv4'}elseif($_.AddressFamily -eq 23 -or $_.Family -eq 'IPv6'){'IPv6'}
+        } | Select-Object -Unique)
+        if($families.Count){$snapshot=Read-Adapter $adapter;$snapshot.Families=@($snapshot.Families | Where-Object {$_.Family -in $families});$snapshot}
+    })
+    $rules=@(Get-DnsClientNrptRule -ErrorAction Stop)
+    # Raw registry exports retain DNSSEC/DirectAccess and all unknown rule fields.
+    $stores=@(Backup-ResetNrptStores $directory)
+    $state=[pscustomobject]@{Version=1;Kind='ResetAll';Status='Clearing';Id=$Request.JobId;Server='';Preset='';ResetDirectory=$directory;
+        OriginalAdapters=$adapters;OriginalRules=@($rules | Select-Object *);RegistryStores=$stores;NrptRestored=$false;Warnings=@();Errors=@()}
+    Write-Json (Join-Path $directory 'snapshot.json') $state
+    if($existing){Write-Json (Join-Path (Get-StoreRoot) ('history-'+$existing.Id+'.json')) $existing}
+    Save-State $state
+    $errors=New-Object 'Collections.Generic.List[string]'
+    foreach($original in $adapters){foreach($family in $original.Families){try{
+        $adapter=Find-Adapter $original.Guid
+        $dnsInput=Get-DnsClientServerAddress -InterfaceIndex $adapter.InterfaceIndex -AddressFamily $family.Family -ErrorAction Stop
+        Set-DnsClientServerAddress -InputObject $dnsInput -ResetServerAddresses -ErrorAction Stop
+        if((Read-Family $adapter $family.Family).Source -ne 'Dhcp'){throw ('DNS reset verification failed: '+$original.Alias+' ('+$family.Family+')')}
+    }catch{$errors.Add($_.Exception.Message)}}}
+    foreach($rule in $rules){try{Remove-DnsClientNrptRule -Name $rule.Name -Force -ErrorAction Stop}catch{$errors.Add($_.Exception.Message)}}
+    try{Clear-ResetNrptStores}catch{$errors.Add($_.Exception.Message)}
+    try{Clear-DnsClientCache -ErrorAction Stop}catch{$errors.Add($_.Exception.Message)}
+    try{
+        if(@(Get-DnsClientNrptRule -ErrorAction Stop).Count -or -not (Test-ResetNrptStoresEmpty) -or @(Get-DnsClientNrptPolicy -Effective -ErrorAction Stop).Count){throw 'NRPT rules remain or were reapplied by policy.'}
+    }catch{$errors.Add($_.Exception.Message)}
+    $state.Errors=@($errors.ToArray());$state.Status=if($errors.Count){'ClearFailed'}else{'Cleared'};Save-State $state
+    if($errors.Count){throw ('Full DNS reset incomplete: '+($errors.ToArray()-join '; ')+'. Backup: '+$directory)}
+    return ('Full DNS reset completed. Adapters: '+$adapters.Count+'; removed NRPT rules: '+$rules.Count+'. Backup: '+$directory)
+}
+function Undo-ResetAll($State,[bool]$KeepExternalChanges) {
+    $expected=Join-Path (Get-StoreRoot) ('reset-'+$State.Id)
+    if($State.Id -notmatch '^[0-9a-f]{32}$' -or $State.ResetDirectory -ne $expected){throw 'Invalid DNS reset backup path.'}
+    $errors=New-Object 'Collections.Generic.List[string]';$warnings=New-Object 'Collections.Generic.List[string]'
+    foreach($original in @($State.OriginalAdapters)){try{
+        $adapter=Find-Adapter $original.Guid
+        foreach($family in @($original.Families)){
+            $now=Read-Family $adapter $family.Family
+            if((Adapter-Fingerprint ([pscustomobject]@{Families=@($now)})) -eq (Adapter-Fingerprint ([pscustomobject]@{Families=@($family)}))){continue}
+            if($now.Source -ne 'Dhcp' -and $KeepExternalChanges){$warnings.Add('External DNS retained: '+$original.Alias+' ('+$family.Family+')');continue}
+            Restore-Adapter ([pscustomobject]@{Guid=$original.Guid;Alias=$original.Alias;Families=@($family)})
+        }
+    }catch{if($KeepExternalChanges -and $_.Exception.Message -like 'Adapter is missing:*'){$warnings.Add($_.Exception.Message)}else{$errors.Add($_.Exception.Message)}}}
+    if(-not $State.NrptRestored){try{
+        if(@(Get-DnsClientNrptRule -ErrorAction Stop).Count -or -not (Test-ResetNrptStoresEmpty)){throw 'New NRPT rules exist after reset; backup retained. Restore them manually to avoid overwriting external settings.'}
+        Restore-ResetNrptStores $State;$State.NrptRestored=$true;Save-State $State
+    }catch{$errors.Add($_.Exception.Message)}}
+    try{Clear-DnsClientCache -ErrorAction Stop}catch{$errors.Add($_.Exception.Message)}
+    $State.Errors=@($errors.ToArray());$State.Warnings=@($warnings.ToArray());$State.Status=if($errors.Count){'RollbackFailed'}elseif($warnings.Count){'Released'}else{'Restored'};Save-State $State
+    if($errors.Count){throw ($errors.ToArray()-join '; ')}
+    return ('Pre-reset DNS settings restored. Backup retained. Details: '+($warnings.ToArray()-join '; '))
+}
 function Invoke-Apply($Request) {
     $existing=Read-State
     $previousWarnings=@()
-    if($existing -and $existing.Status -notin @('Restored','Released') -and -not $Request.ReplaceActiveSetup){throw 'A DNS backup is already active. Restore it before applying a new setup.'}
+    if($existing -and $existing.Kind -ne 'ResetAll' -and $existing.Status -notin @('Restored','Released') -and -not $Request.ReplaceActiveSetup){throw 'A DNS backup is already active. Restore it before applying a new setup.'}
     $null=Read-SelectedAdapters $Request
     # Network probes run before any DNS/NRPT change, even before undoing an
     # existing setup. A server that cannot answer ordinary queries is refused.
     $baseline=@(Read-NetworkBaseline)
     Assert-TargetDns $Request.Server $baseline
-    if($existing -and $existing.Status -notin @('Restored','Released')){
+    if($existing -and $existing.Kind -ne 'ResetAll' -and $existing.Status -notin @('Restored','Released')){
         if(-not $Request.ReplaceActiveSetup){throw 'A DNS backup is already active. Restore it before applying a new setup.'}
         # Reject a stale adapter selection before touching the active setup.
         $null=Read-SelectedAdapters $Request
@@ -447,10 +546,12 @@ function Invoke-SystemDns($Request) {
         try{$owns=$mutex.WaitOne(0)}catch [Threading.AbandonedMutexException]{$owns=$true}
         if(-not $owns){throw 'Another system DNS operation is still running.'}
         if($Request.Operation -eq 'Apply'){return Invoke-Apply $Request}
+        if($Request.Operation -eq 'ResetAll'){return Invoke-ResetAll $Request}
         $state=Read-State
         if(-not $state){throw 'There is no DevProxy DNS backup.'}
         if($state.Status -eq 'Restored'){return 'Previous DNS settings are already restored.'}
         if($state.Status -eq 'Released'){return ('DNS rollback completed with preserved external settings. Backup retained. Details: '+(@($state.Warnings)-join '; '))}
+        if($state.Kind -eq 'ResetAll'){return Undo-ResetAll $state ([bool]$Request.KeepExternalChanges)}
         Undo-State $state $false ([bool]$Request.KeepExternalChanges)
         if($state.Status -eq 'Released'){return ('DNS rollback completed with preserved external settings. Backup retained. Details: '+(@($state.Warnings)-join '; '))}
         'Previous DNS settings restored, including DHCP/static mode. DNS cache cleared.'

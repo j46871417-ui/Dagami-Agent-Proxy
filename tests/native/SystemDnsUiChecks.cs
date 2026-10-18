@@ -11,6 +11,16 @@ class SystemDnsUiChecks {
  static void Reject(Action a){bool caught=false;try{a();}catch(ArgumentException){caught=true;}Assert(caught,"Invalid DNS request accepted");}
  [STAThread]static int Main(){
   try {
+   int prompts=0;
+   Assert(!SystemDnsForm.ConfirmFullReset((text,title)=>{prompts++;return DialogResult.No;}) && prompts==1,"First reset cancellation did not stop immediately");
+   prompts=0;
+   Assert(!SystemDnsForm.ConfirmFullReset((text,title)=>{prompts++;return prompts==1?DialogResult.Yes:DialogResult.No;}) && prompts==2,"Second reset cancellation did not block reset");
+   prompts=0;
+   Assert(SystemDnsForm.ConfirmFullReset((text,title)=>{prompts++;Assert(text.StartsWith("Вы точно уверены в том что вы делаете?"),"Reset confirmation text changed");return DialogResult.Yes;}) && prompts==2,"Full reset requires exactly two explicit Yes replies");
+   var resetRequest=new SystemDnsRequest{JobId=Guid.NewGuid().ToString("N"),Operation="ResetAll"};
+   Reject(()=>SystemDnsManager.Validate(resetRequest));resetRequest.ConfirmResetAll=true;
+   Assert(SystemDnsManager.EncodeRequest(resetRequest).Length>0,"Confirmed reset depends on adapter or server selection");
+   Assert(SystemDnsManager.EngineStart("ResetAll",SystemDnsManager.EncodeRequest(resetRequest),"fixture.ps1").CreateNoWindow,"Full reset engine opens a console");
    var request=new SystemDnsRequest{JobId=Guid.NewGuid().ToString("N"),Operation="Apply",Server="185.149.145.6",Preset="Full",ChangeAdapters=true,UseNrpt=true,Adapters=new[]{new SystemDnsAdapter{Index=1,Guid=Guid.NewGuid().ToString()}}};
    string payload=SystemDnsManager.EncodeRequest(request);
    Assert(Encoding.UTF8.GetString(Convert.FromBase64String(payload)).Contains("185.149.145.6"),"Payload lost server");
@@ -79,7 +89,13 @@ class SystemDnsUiChecks {
     var encoded=Encoding.UTF8.GetString(Convert.FromBase64String(SystemDnsManager.EncodeRequest(apply)));
     Assert(encoded.Contains("\"ReplaceActiveSetup\":true") && encoded.Contains("\"KeepExternalChanges\":true"),"GUI recovery flags lost before UAC");
     Assert(((Button)typeof(SystemDnsForm).GetField("_apply",fields).GetValue(form)).Text.Contains("Записать DNS"),"Explicit system DNS write action missing");
+    var resetButton=(Button)typeof(SystemDnsForm).GetField("_resetAll",fields).GetValue(form);
+    Assert(resetButton.Text.Contains("DNS и NRPT") && resetButton.BackColor==Color.FromArgb(185,28,28) && resetButton.ForeColor==Color.White && !resetButton.UseVisualStyleBackColor,"Full reset button is not visibly red");
     form.StartPosition=FormStartPosition.Manual;form.Location=new Point(-20000,-20000);form.Show();Application.DoEvents();
+    var loading=typeof(SystemDnsForm).GetField("_loading",fields);
+    var deadline=DateTime.UtcNow.AddSeconds(10);
+    while((bool)loading.GetValue(form) && DateTime.UtcNow<deadline){Application.DoEvents();System.Threading.Thread.Sleep(20);}
+    Assert(!(bool)loading.GetValue(form) && resetButton.Enabled,"Full reset button remains disabled after adapter refresh");
     using(var image=new Bitmap(form.Width,form.Height)){form.DrawToBitmap(image,new Rectangle(0,0,image.Width,image.Height));image.Save("native-system-dns.png");}
     Assert(form.Visible,"DNS UI did not open");form.Close();
    }

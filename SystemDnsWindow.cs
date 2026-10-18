@@ -20,7 +20,7 @@ namespace DevProxyApp
             Application.EnableVisualStyles();
             Application.SetCompatibleTextRenderingDefault(false);
             using (var form = new SystemDnsForm()) {
-                form.Text += " — up6: проверка сети";
+                form.Text += " — up7: полный сброс DNS";
                 Application.Run(form);
             }
         }

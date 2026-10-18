@@ -76,6 +76,15 @@ function Remove-DnsClientNrptRule { [CmdletBinding()]param([string]$Name,[switch
     $script:Mutations++;$script:Rules=@($script:Rules | Where-Object Name -ne $Name)
 }
 function Clear-DnsClientCache { [CmdletBinding()]param() $script:Flushed++ }
+function Backup-ResetNrptStores {param($Directory)
+    if($script:FailResetBackup){throw 'injected reset backup failure'}
+    $script:SavedResetRules=@($script:Rules)
+    @([pscustomobject]@{Key='fixture';File='nrpt-0.reg';Exists=$true})
+}
+function Clear-ResetNrptStores { $script:Mutations++;if(-not $script:FailRemove){$script:Rules=@()};$script:PolicyPresent=$false }
+function Test-ResetNrptStoresEmpty { -not $script:PolicyPresent }
+function Restore-ResetNrptStores {param($State) $script:Mutations++;$script:Rules=@($script:SavedResetRules) }
+function Get-DnsClientNrptPolicy {param([switch]$Effective,$ErrorAction) if($script:ReapplyPolicy){[pscustomobject]@{Namespace='company.example'}} }
 function Reset-Fixture {
     $script:TestRoot=Join-Path $script:BaseRoot ([guid]::NewGuid().ToString('N'));[IO.Directory]::CreateDirectory($script:TestRoot)|Out-Null
     $script:Adapters=@([pscustomobject]@{InterfaceGuid='11111111-1111-1111-1111-111111111111';InterfaceIndex=1;Name='Wi Fi';Status='Up'},[pscustomobject]@{InterfaceGuid='22222222-2222-2222-2222-222222222222';InterfaceIndex=2;Name='Ethernet';Status='Up'})
@@ -83,6 +92,7 @@ function Reset-Fixture {
     foreach($adapter in $script:Adapters){$script:Families[$adapter.InterfaceGuid]=@{IPv4=@{Static=@();Servers=@('10.0.0.1')};IPv6=@{Static=@('2001:db8::53');Servers=@('2001:db8::53')}}}
     $script:Rules=@();$script:Mutations=0;$script:Flushed=0;$script:FailOnce=$false;$script:FailRemove=$false;$script:IgnoreDnsWrite=$false;$script:RecoveryDomains=$null
     $script:TargetDnsReachable=$true;$script:TargetHttpsReachable=$true;$script:NoNetworkBaseline=$false;$script:BreakDnsAfterApply=$false;$script:BreakHttpsAfterApply=$false;$script:PostApplyFailed=$false;$script:RecoveryNetworkBroken=$false
+    $script:FailResetBackup=$false;$script:PolicyPresent=$false;$script:ReapplyPolicy=$false;$script:SavedResetRules=@()
     Add-DnsClientNrptRule -Namespace 'aistudio.google.com' -NameServers '1.1.1.1' -DisplayName 'Previous provider' -Comment 'USER_PREVIOUS'
     Add-DnsClientNrptRule -Namespace 'intranet.example' -NameServers '10.0.0.2' -DisplayName 'Company' -Comment 'UNRELATED'
     $script:Mutations=0
@@ -92,6 +102,53 @@ function Request([string]$Operation='Apply'){
         Adapters=@($script:Adapters | ForEach-Object {[pscustomobject]@{Index=$_.InterfaceIndex;Guid=$_.InterfaceGuid}})}
 }
 try {
+    Reset-Fixture
+    $request=Request ResetAll
+    Reject {Invoke-SystemDns $request} 'Unconfirmed full reset accepted'
+    Assert ($script:Mutations -eq 0) 'Unconfirmed reset changed settings'
+
+    Reset-Fixture;$script:FailResetBackup=$true
+    $request=Request ResetAll;$request | Add-Member ConfirmResetAll $true
+    Reject {Invoke-SystemDns $request} 'Reset continued after backup failure'
+    Assert ($script:Mutations -eq 0) 'Reset wrote settings before full backup'
+
+    Reset-Fixture;$script:NoNetworkBaseline=$true;$script:PolicyPresent=$true
+    $script:Adapters[1].Status='Disconnected'
+    $script:Rules[0].DnsSecEnabled=$true
+    $request=Request ResetAll;$request | Add-Member ConfirmResetAll $true
+    $request.Server='invalid';$request.Adapters=@();$request.UseNrpt=$false;$request.ChangeAdapters=$false
+    $null=Invoke-SystemDns $request;$state=Read-State
+    Assert ($state.Status -eq 'Cleared' -and $state.Kind -eq 'ResetAll') 'Full reset did not finish offline'
+    Assert (@($state.OriginalAdapters).Count -eq 2) 'Full reset skipped disconnected or unselected adapter'
+    Assert (@($script:Rules).Count -eq 0 -and -not $script:PolicyPresent) 'Foreign/DNSSEC/policy NRPT survived reset'
+    foreach($adapter in $script:Adapters){foreach($family in @('IPv4','IPv6')){Assert ($script:Families[$adapter.InterfaceGuid][$family].Static.Count -eq 0) 'Full reset did not reset both DNS families'}}
+    Assert (Test-Path -LiteralPath (Join-Path $state.ResetDirectory 'snapshot.json')) 'Full reset lost separate original snapshot'
+    $script:NoNetworkBaseline=$false;$null=Invoke-SystemDns (Request Restore)
+    Assert ((Read-State).Status -eq 'Restored') 'Pre-reset restore failed'
+    Assert (@($script:Rules | Where-Object Comment -eq 'UNRELATED').Count -eq 1 -and $script:Rules[0].DnsSecEnabled) 'Pre-reset restore lost foreign/DNSSEC rule fields'
+    Assert ($script:Families[$script:Adapters[1].InterfaceGuid].IPv6.Static[0] -eq '2001:db8::53') 'Pre-reset restore lost IPv6 static DNS'
+
+    Reset-Fixture;$script:ReapplyPolicy=$true
+    $request=Request ResetAll;$request | Add-Member ConfirmResetAll $true
+    Reject {Invoke-SystemDns $request} 'Full reset falsely succeeded when domain policy returned'
+    Assert ((Read-State).Status -eq 'ClearFailed') 'Partial reset not recorded'
+
+    Reset-Fixture;$script:IgnoreDnsWrite=$true
+    $request=Request ResetAll;$request | Add-Member ConfirmResetAll $true
+    Reject {Invoke-SystemDns $request} 'Full reset did not verify adapter DNS'
+    Assert ((Read-State).Status -eq 'ClearFailed') 'Silent adapter reset failure reported success'
+
+    Reset-Fixture;$null=Invoke-SystemDns (Request);$old=Read-State
+    $request=Request ResetAll;$request | Add-Member ConfirmResetAll $true;$null=Invoke-SystemDns $request
+    Assert (Test-Path -LiteralPath (Join-Path $script:TestRoot ('history-'+$old.Id+'.json'))) 'Full reset discarded active application backup'
+    $request=Request;$request.UseNrpt=$false;$null=Invoke-SystemDns $request
+    Assert (@($script:Rules).Count -eq 0) 'Apply after full reset resurrected old foreign NRPT'
+
+    Reset-Fixture;$request=Request ResetAll;$request | Add-Member ConfirmResetAll $true;$null=Invoke-SystemDns $request
+    Add-DnsClientNrptRule -Namespace 'new.example' -NameServers '9.9.9.9' -Comment 'NEW_EXTERNAL'
+    Reject {Invoke-SystemDns (Request Restore)} 'Reset restore overwrote new external NRPT'
+    Assert (@($script:Rules).Count -eq 1 -and $script:Rules[0].Comment -eq 'NEW_EXTERNAL') 'New external NRPT lost during restore'
+
     Reset-Fixture;$script:TargetDnsReachable=$false
     Reject {Invoke-SystemDns (Request)} 'Unreachable DNS server was applied'
     Assert ($script:Mutations -eq 0) 'Server preflight failure changed DNS or NRPT'
