@@ -1,3 +1,4 @@
 {
-  "allowed_duplicate_groups": []
+  "allowed_duplicate_groups": [],
+  "forbidden_paths": ["generate_license_key.py", "license-issuer/**"]
 }

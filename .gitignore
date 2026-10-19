@@ -1,48 +1,27 @@
-# Binaries & Temporary files
-
-# Build and review artifacts
-
-# Python
-
-# OS
-
-# Secrets, local state and private notes
-
-# Generated packages belong in Releases, not the source tree
-
-
-# Binaries & Temporary files
+# Local build and review artifacts
 .devproxy-build-*/
 .devproxy-ready-*.exe
-devproxy-cli.exe
-devproxy.fluent.exe
-devproxy.updated.exe
-
-# Build and review artifacts
-artifacts/
 dist-portable/
 *-preview.png
 *-verified.png
 index.html
 ui/
-
-# Python
-*.pyc
 *.egg-info/
-
-# OS
-
-# Secrets, local state and private notes
-/AGENTS.md
-/DNS_FIX_*.md
-
-# Generated packages belong in Releases, not the source tree
 /SHA256SUMS.txt
 /native-*.png
 env/
 
+# Private issuance tools and notes
+/generate_license_key.py
+/license-issuer/
+/AGENTS.md
+/DNS_FIX_*.md
+/*_2026-??-??.md
+/SHA256-native.json
+/finalize_local.py
+/docs/dagami-infra/
 
-# Source hygiene: local data, credentials, build output and accidental copies
+# Credentials and local state
 .env
 .env.*
 *.env
@@ -133,8 +112,3 @@ desktop.ini
 /* (1).*
 /*_backup.*
 /*_copy.*
-
-/*_2026-??-??.md
-/SHA256-native.json
-/finalize_local.py
-/docs/dagami-infra/

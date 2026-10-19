@@ -44,7 +44,7 @@ def main():
     base.mkdir(parents=True,exist_ok=True);backup=None
     with tempfile.TemporaryDirectory(prefix='.dagami-install-',dir=base) as temp:
         stage=Path(temp)/'app';stage.mkdir()
-        for name in ('devproxy.py','devproxy_gui.py'):shutil.copyfile(source/name,stage/name)
+        shutil.copyfile(source/'devproxy_gui.py',stage/'devproxy_gui.py')
         shutil.copytree(source/'devproxy_pkg',stage/'devproxy_pkg',ignore=shutil.ignore_patterns('__pycache__','*.pyc'))
         (stage/'source-install.json').write_text(json.dumps({str(path):hashlib.sha256(data).hexdigest() for path,data in files.items()},indent=2),encoding='utf-8')
         if target.exists():

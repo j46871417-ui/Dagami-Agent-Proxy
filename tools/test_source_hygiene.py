@@ -1,6 +1,7 @@
 """Behavior checks for the source guard; all repositories are disposable fixtures."""
 from pathlib import Path
 import shutil
+import sys
 import subprocess
 import tempfile
 import unittest
@@ -13,7 +14,7 @@ class SourceGuardChecks(unittest.TestCase):
         self.root=Path(self.temp.name)
         (self.root/'tools').mkdir()
         shutil.copy2(CHECKER,self.root/'tools/check_source_hygiene.py')
-        (self.root/'tools/source-policy.json').write_text('{"allowed_duplicate_groups": []}')
+        shutil.copy2(CHECKER.with_name('source-policy.json'),self.root/'tools/source-policy.json')
         (self.root/'.gitignore').write_text('.env\n')
         self.git('init','--quiet')
         self.git('add','tools','.gitignore')
@@ -24,7 +25,14 @@ class SourceGuardChecks(unittest.TestCase):
         return subprocess.run(['git','-c',f'safe.directory={self.root.as_posix()}','-C',str(self.root),*args],check=True,capture_output=True)
 
     def check(self):
-        return subprocess.run(['python',str(self.root/'tools/check_source_hygiene.py')],capture_output=True,text=True)
+        return subprocess.run([sys.executable,str(self.root/'tools/check_source_hygiene.py')],capture_output=True,text=True)
+
+    def test_private_issuer_is_rejected_even_without_ignore_rules(self):
+        for name in ('generate_license_key.py','license-issuer/issue.py'):
+            path=self.root/name;path.parent.mkdir(exist_ok=True)
+            path.write_text('private tooling fixture: '+name)
+            self.git('add','--force',name)
+            self.assertIn('Private tooling is not public source: '+name,self.check().stderr)
 
     def test_staged_secret_cannot_be_hidden_by_editing_worktree(self):
         (self.root/'settings.txt').write_text('credential='+'ghp_'+'aB7cD9eF2gH4jK6mN8pQ1rS3tU5vW0xY9zA7bC6d')

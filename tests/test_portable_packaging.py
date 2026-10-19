@@ -54,7 +54,8 @@ class BuildTests(unittest.TestCase):
             root=Path(temp).resolve();output=root/'out'
             files=['devproxy_pkg/entry.py','devproxy_pkg/.env','devproxy_pkg/state.json',
                    'devproxy_pkg/secrets.key','devproxy_pkg/__pycache__/entry.pyc',
-                   'devproxy_pkg/assets/dns-domains.json','tests/check.py','tests/session.log']
+                   'devproxy_pkg/assets/dns-domains.json','devproxy_pkg/assets/unused.png',
+                   'tests/check.py','tests/session.log','generate_license_key.py','RetiredEntry.cs']
             for name in files:
                 path=root/name;path.parent.mkdir(parents=True,exist_ok=True);path.write_text('fixture')
             with patch.object(build_portable,'ROOT',root),patch.object(sys,'argv',['build_portable.py','--source-only','--output-dir',str(output)]):

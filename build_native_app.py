@@ -9,6 +9,13 @@ import argparse
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
+SOURCES = [
+    "DevProxyApp.cs", "NativeUi.cs", "FluentUi.cs", "AntigravityIntegration.cs",
+    "AntigravityUi.cs", "AntigravityLogin.cs", "NativeShortcuts.cs",
+    "NativeLaunchBroker.cs", "NativeSessions.cs", "SystemDnsManager.cs", "NativeCli.cs", "Brand.cs",
+    "LicenseManager.cs", "AppProxyPolicy.cs", "NativeCliApps.cs", "NativeUpdates.cs",
+    "UpdateInstaller.cs", "UpdateUi.cs", "NativeStartup.cs",
+]
 
 
 def main() -> None:
@@ -38,13 +45,7 @@ def main() -> None:
     ]
     command = [str(compiler), "/nologo", '/target:winexe', "/platform:anycpu", "/optimize+"]
     command.extend(f"/reference:{name}" for name in references)
-    sources = [
-        "DevProxyApp.cs", "NativeUi.cs", "FluentUi.cs", "AntigravityIntegration.cs",
-        "AntigravityUi.cs", "AntigravityLogin.cs", "NativeShortcuts.cs",
-        "NativeLaunchBroker.cs", "NativeSessions.cs", "SystemDnsManager.cs", "NativeCli.cs", "Brand.cs",
-        "LicenseManager.cs", "AppProxyPolicy.cs", "NativeCliApps.cs", "NativeUpdates.cs", "UpdateInstaller.cs", "UpdateUi.cs", "NativeStartup.cs"
-    ]
-    command.extend(sources)
+    command.extend(SOURCES)
     command.append("/win32manifest:app.manifest")
     command.append(r"/win32icon:devproxy_pkg\assets\dagami-agent-proxy.ico")
     command.append(r"/resource:devproxy_pkg\assets\dagami-agent-proxy.ico,Dagami.AgentProxy.ico")

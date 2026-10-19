@@ -106,7 +106,7 @@ class RuntimeTests(Isolated):
         self.assertTrue(runtime.register_executable('vscode',bundle).endswith('editor'))
     def test_cli_help_and_unknown_target_exit_codes(self):
         for args,code in [(['run','--help'],0),(['run','unknown'],1),(['patch','--help'],0)]:
-            result=subprocess.run([sys.executable,str(ROOT/'devproxy.py')]+args,capture_output=True,text=True,encoding='utf-8')
+            result=subprocess.run([sys.executable,str(ROOT/'devproxy_gui.py')]+args,capture_output=True,text=True,encoding='utf-8')
             self.assertEqual(code,result.returncode,result.stdout+result.stderr)
     def test_live_worker_bridge_reuse_auth_stop_and_secret_free_logs(self):
         output=self.root/'child.json'

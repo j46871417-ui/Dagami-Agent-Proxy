@@ -1,5 +1,6 @@
 """Check staged sources without printing credentials or using third-party packages."""
 from collections import defaultdict
+from fnmatch import fnmatchcase
 import hashlib
 import json
 from pathlib import Path
@@ -30,6 +31,11 @@ def main():
         if stage!=b'0': issues.append('Unresolved merge: '+name.decode()); continue
         if mode==b'160000': continue
         entries.append((oid.decode(),name.decode('utf-8')))
+    policy_data=subprocess.check_output(GIT+['show',':tools/source-policy.json'])
+    policy=json.loads(policy_data)
+    for _,name in entries:
+        if any(fnmatchcase(name,pattern) for pattern in policy.get('forbidden_paths',[])):
+            issues.append('Private tooling is not public source: '+name)
     queries=''.join(oid+'\n' for oid,_ in entries).encode()
     proc=subprocess.run(GIT+['cat-file','--batch'],input=queries,stdout=subprocess.PIPE,check=True)
     offset=0; groups=defaultdict(list)
@@ -44,8 +50,7 @@ def main():
                 line=data[:match.start()].count(b'\n')+1
                 issues.append(f'{name}:{line}: possible {label}; value withheld')
     # Intentional install-layout resources are explicit; a new copy is rejected.
-    policy_data=subprocess.check_output(GIT+['show',':tools/source-policy.json'])
-    allowed=[set(group) for group in json.loads(policy_data)['allowed_duplicate_groups']]
+    allowed=[set(group) for group in policy['allowed_duplicate_groups']]
     for paths in groups.values():
         if len(paths)>1 and not any(set(paths)<=group for group in allowed):
             issues.append('Unexpected exact duplicate: '+', '.join(paths))

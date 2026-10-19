@@ -11,10 +11,15 @@ import subprocess
 import sys
 import uuid
 import zipfile
+from build_native_app import SOURCES as NATIVE_SOURCES
 
 ROOT=Path(__file__).resolve().parent
 ASSETS=ROOT/'devproxy_pkg'/'assets'
 GUI='Dagami Agent Proxy'
+SOURCE_ASSETS = {
+    'dagami-agent-proxy.ico', 'dagami-agent-proxy.icns', 'dagami-agent-proxy.svg',
+    'dagami-logo.jpg', 'icon-64.png', 'icon-256.png', 'dns-domains.json',
+}
 
 def source_member(path):
     relative=path.relative_to(ROOT)
@@ -23,7 +28,7 @@ def source_member(path):
     if '__pycache__' in relative.parts or any(part.startswith('.') for part in relative.parts if part!='.github'):return False
     if relative.parts[0]=='devproxy_pkg':
         return path.suffix=='.py' or (relative.parent.as_posix()=='devproxy_pkg/assets' and
-            (path.suffix in ('.png','.jpg','.svg','.ico','.icns') or path.name=='dns-domains.json'))
+            path.name in SOURCE_ASSETS)
     if relative.parts[0]=='tests':return path.suffix in ('.py','.cs','.ps1')
     if relative.parts[0]=='tools':return path.name in ('check_source_hygiene.py','source-policy.json','test_source_hygiene.py')
     return relative.parts[:2]==('.github','workflows') and path.suffix in ('.yml','.yaml')
@@ -57,8 +62,11 @@ def main():
     parser=argparse.ArgumentParser();parser.add_argument('--source-only',action='store_true');parser.add_argument('--output-dir',type=Path,default=ROOT/'dist-portable');args=parser.parse_args()
     output=args.output_dir.resolve();output.mkdir(parents=True,exist_ok=True)
     source=output/'dagami-agent-proxy-source.zip'
-    names=['.gitignore','.gitattributes','.gitleaks.toml','devproxy.py','devproxy_gui.py','pyproject.toml','PORTABLE.md','BUILD_LINUX_MACOS.md','README.md','MATRIX.md','WINDOWS_SHORTCUTS_AND_DNS.md','ANTIGRAVITY_INTEGRATION.md','SYSTEM_DNS.md','SOURCE_POLICY.md','STARTUP.md','LICENSE','build_portable.py','build_native_app.py','install_portable.py','install.sh','make_brand_assets.py','generate_license_key.py','Brand.cs','SystemDns.ps1','app.manifest']
-    names += [p.name for p in ROOT.glob('*.cs') if p.name not in names]
+    names=['.gitignore','.gitattributes','.gitleaks.toml','.githooks/pre-commit',
+           'devproxy_gui.py','pyproject.toml','PORTABLE.md','BUILD_LINUX_MACOS.md',
+           'README.md','SYSTEM_DNS.md','SOURCE_POLICY.md','STARTUP.md','LICENSE',
+           'build_portable.py','build_native_app.py','install_portable.py','install.sh',
+           'SystemDns.ps1','app.manifest',*NATIVE_SOURCES]
     staged=output/('source-'+uuid.uuid4().hex+'.tmp')
     try:
         with zipfile.ZipFile(staged,'w',zipfile.ZIP_DEFLATED) as archive:

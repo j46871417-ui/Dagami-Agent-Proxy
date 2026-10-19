@@ -26,20 +26,7 @@ class LicenseChecks {
             Assert(!LicenseManager.ValidateKey("OTHER-TEST-9999-XVSF"), "Wrong prefix accepted");
             Assert(!LicenseManager.ValidateKey("DAGAMI-01OI-9999-XVSF"), "Disallowed chars accepted");
 
-            // 4. Activation lifecycle
-            string err;
-            Assert(!LicenseManager.Activate("DAGAMI-BAD1-KEY2-FAIL", out err), "Bad key activated");
-            Assert(!string.IsNullOrEmpty(err), "Bad key produced no error message");
-
-            Assert(LicenseManager.Activate("DAGAMI-TEST-9999-XVSF", out err), "Valid key failed to activate");
-            Assert(LicenseManager.IsActivated(), "IsActivated returned false after activation");
-            string masked = LicenseManager.GetMaskedKey();
-            Assert(masked == "DAGAMI-****-****-XVSF", "Masked key format incorrect: " + masked);
-
-            LicenseManager.Deactivate();
-            Assert(!LicenseManager.IsActivated(), "IsActivated returned true after deactivation");
-
-            // 5. ActivationForm UI layout checks
+            // Construct the form without showing it or submitting a key.
             Application.EnableVisualStyles();
             using (var form = new ActivationForm()) {
                 Assert(form.ClientSize.Width >= 500 && form.ClientSize.Height >= 360, "ActivationForm size too small");
@@ -47,7 +34,7 @@ class LicenseChecks {
                 Assert(form.Text.Contains("Активация"), "Form title missing activation label");
             }
 
-            Console.WriteLine("PASS " + checks + " license checksum, validation, activation lifecycle, masked key and ActivationForm UI checks");
+            Console.WriteLine("PASS " + checks + " license validation and ActivationForm UI checks; no license store writes");
             return 0;
         } catch (Exception ex) {
             Console.Error.WriteLine(ex);
