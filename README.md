@@ -1,7 +1,14 @@
 <p align="center">
   <img src="devproxy_pkg/assets/dagami-logo.jpg" alt="Dagami Agent Proxy" width="380" />
 </p>
-**[Группа Dagami](https://t.me/dagamvi) | [Канал Dagami](https://t.me/dagamivibe) | [Обсуждение и техподдержка](https://t.me/dagamvi/2140) | [Сообщить об ошибке](https://dns.dagami.ru/support/agent-proxy/)
+
+<p align="center">
+  <a href="https://t.me/dagamvi">Группа Dagami</a> |
+  <a href="https://t.me/dagamivibe">Канал Dagami</a> |
+  <a href="https://t.me/dagamvi/2140">Обсуждение и техподдержка</a> |
+  <a href="https://dns.dagami.ru/support/agent-proxy/">Сообщить об ошибке</a>
+</p>
+
 # Dagami Agent Proxy
 
 Менеджер запуска IDE и CLI через свой прокси. Профили, запуск приложений,
@@ -145,4 +152,11 @@ OpenCode Desktop/CLI, Gemini CLI, Claude Code, Git и JetBrains. PowerShell/cmd
 [CHANGELOG.md](CHANGELOG.md). `.agents/` содержит проектные инструкции и пустые
 шаблоны hooks/MCP; автоматические внешние подключения не включены.
 
-[Группа Dagami](https://t.me/dagamvi) | [Блог Dagami](https://t.me/dagamivibe) | [Обсудить](https://t.me/dagamvi/49) | [Выпуски](https://github.com/j46871417-ui/Dagami-Agent-Proxy/releases)
+---
+
+<p align="center">
+  <a href="https://t.me/dagamvi">Группа Dagami</a> |
+  <a href="https://t.me/dagamivibe">Канал Dagami</a> |
+  <a href="https://t.me/dagamvi/2140">Обсуждение и техподдержка</a> |
+  <a href="https://dns.dagami.ru/support/agent-proxy/">Сообщить об ошибке</a>
+</p>
