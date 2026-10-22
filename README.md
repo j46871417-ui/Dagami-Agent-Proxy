@@ -19,6 +19,12 @@
 
 Предварительная версия 0.2.0: исправления ярлыков и CLI-консоли, подготовка
 приложений и баг-репорты с журналом/картинкой. [Изменения и ограничения](RELEASE_NOTES.md).
+<p align="center">
+  <a href="https://t.me/dagamvi">Группа Dagami</a> |
+  <a href="https://t.me/dagamivibe">Канал Dagami</a> |
+  <a href="https://t.me/dagamvi/2140">Обсуждение и техподдержка</a> |
+  <a href="https://dns.dagami.ru/support/agent-proxy/">Сообщить об ошибке</a>
+</p>
 
 ## Что есть в выпуске
 
