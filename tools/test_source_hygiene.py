@@ -5,6 +5,7 @@ import sys
 import subprocess
 import tempfile
 import unittest
+import json
 
 CHECKER=Path(__file__).with_name('check_source_hygiene.py')
 
@@ -15,9 +16,13 @@ class SourceGuardChecks(unittest.TestCase):
         (self.root/'tools').mkdir()
         shutil.copy2(CHECKER,self.root/'tools/check_source_hygiene.py')
         shutil.copy2(CHECKER.with_name('source-policy.json'),self.root/'tools/source-policy.json')
+        policy=json.loads((self.root/'tools/source-policy.json').read_text())
+        for name in policy.get('required_paths',[]):
+            path=self.root/name;path.parent.mkdir(parents=True,exist_ok=True)
+            path.write_text('Required layout fixture: '+name)
         (self.root/'.gitignore').write_text('.env\n')
         self.git('init','--quiet')
-        self.git('add','tools','.gitignore')
+        self.git('add','.')
 
     def tearDown(self): self.temp.cleanup()
 
@@ -53,5 +58,15 @@ class SourceGuardChecks(unittest.TestCase):
         (self.root/'copy.txt').write_text('one canonical copy')
         self.git('add','one.txt','copy.txt')
         self.assertIn('Unexpected exact duplicate',self.check().stderr)
+
+    def test_required_layout_is_clean_and_missing_resource_is_rejected(self):
+        self.assertEqual(self.check().returncode,0)
+        self.git('rm','--cached','src/app.manifest')
+        self.assertIn('Missing required source path: src/app.manifest',self.check().stderr)
+
+    def test_root_native_source_is_rejected(self):
+        (self.root/'RetiredRoot.cs').write_text('Root native source fixture')
+        self.git('add','RetiredRoot.cs')
+        self.assertIn('Source file belongs in src/: RetiredRoot.cs',self.check().stderr)
 
 if __name__=='__main__': unittest.main()

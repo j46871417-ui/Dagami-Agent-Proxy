@@ -116,7 +116,11 @@ IDE в `resources/app/extensions/antigravity/bin` и непосредствен�
 автоматически, PNG/JPEG — по выбору. При сбое сети сохраняется зашифрованная очередь.
 API и закрытая панель размещены на dns.dagami.ru с разрешения владельца 22.10.2026.
 Проверена отправка из Windows EXE через HTTPS, в том числе лога и картинки.
-Подробности: [BUG_REPORTS.md](BUG_REPORTS.md). Фоновой отправки без нажатия кнопки нет.
+Кнопка «Баг-репорт» есть в основной навигации и доступна с любого экрана.
+В «Журнале» кнопка «Сохранить в файл…» предлагает выбрать папку и имя файла;
+экспортируется очищенный видимый журнал в UTF-8. Панель администратора сайта
+доступна только через SSH-туннель. Подробности: [BUG_REPORTS.md](BUG_REPORTS.md).
+Фоновой отправки без нажатия кнопки нет.
 
 Добавлена отдельная подготовка IDE семейства VS Code, Codex Desktop/CLI,
 OpenCode Desktop/CLI, Gemini CLI, Claude Code, Git и JetBrains. PowerShell/cmd
@@ -132,8 +136,13 @@ OpenCode Desktop/CLI, Gemini CLI, Claude Code, Git и JetBrains. PowerShell/cmd
 сохранение пароля в открытый файл не допускается. Логи ограничены
 по размеру; вывод приложений с токенами не пишется в журнал сессии.
 
-Сборки: `python build_native_app.py` на Windows;
-`python build_portable.py` на Linux/macOS после установки зависимостей.
+Сборки: `python tools/build_native_app.py` на Windows;
+`python tools/build_portable.py` на Linux/macOS после установки зависимостей.
 Скрипты сами не загружают и не публикуют файлы.
+
+Нативные исходники, manifest и DNS-ресурс находятся в `src/`, скрипты сборки и
+установки — в `tools/`. Правила работы: [AGENTS.md](AGENTS.md), история изменений:
+[CHANGELOG.md](CHANGELOG.md). `.agents/` содержит проектные инструкции и пустые
+шаблоны hooks/MCP; автоматические внешние подключения не включены.
 
 [Группа Dagami](https://t.me/dagamvi) | [Блог Dagami](https://t.me/dagamivibe) | [Обсудить](https://t.me/dagamvi/49) | [Выпуски](https://github.com/j46871417-ui/Dagami-Agent-Proxy/releases)

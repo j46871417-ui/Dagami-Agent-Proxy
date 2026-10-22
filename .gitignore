@@ -14,7 +14,6 @@ env/
 # Private issuance tools and notes
 /generate_license_key.py
 /license-issuer/
-/AGENTS.md
 /DNS_FIX_*.md
 /*_2026-??-??.md
 /SHA256-native.json
@@ -46,7 +45,6 @@ node_modules/
 .vscode/
 .vs/
 .codex/
-.agents/
 .gemini/
 .aws/
 .ssh/

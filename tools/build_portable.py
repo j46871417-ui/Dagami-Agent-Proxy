@@ -11,9 +11,9 @@ import subprocess
 import sys
 import uuid
 import zipfile
-from build_native_app import SOURCES as NATIVE_SOURCES
-
-ROOT=Path(__file__).resolve().parent
+ROOT=Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:sys.path.insert(0,str(ROOT))
+from tools.build_native_app import SOURCES as NATIVE_SOURCES
 ASSETS=ROOT/'devproxy_pkg'/'assets'
 GUI='Dagami Agent Proxy'
 SOURCE_ASSETS = {
@@ -24,7 +24,7 @@ BUG_REPORTS_FILES = {
     'README.md',
     'service/server.py', 'service/maintenance.py', 'service/test_server.py',
     'service/dev_server.py', 'service/hash_password.py', 'service/requirements.txt',
-    'service/nginx.conf', 'service/dagami-reports.service',
+    'service/nginx.conf', 'service/nginx-admin-ssh.conf', 'service/dagami-reports.service',
     'service/dagami-reports-maintenance.service', 'service/dagami-reports-maintenance.timer',
     'public/site-theme.js', 'public/dagami-site.css', 'public/site-preferences.css',
     'public/support/agent-proxy/index.html', 'public/support/agent-proxy/admin/index.html',
@@ -36,18 +36,21 @@ def source_member(path):
     relative=path.relative_to(ROOT)
     if path.is_symlink() or not path.resolve().is_relative_to(ROOT.resolve()):
         raise RuntimeError('Source archive refuses links: '+relative.as_posix())
-    if '__pycache__' in relative.parts or any(part.startswith('.') for part in relative.parts if part!='.github'):return False
+    if '__pycache__' in relative.parts or any(part.startswith('.') for part in relative.parts if part not in ('.github','.agents')):return False
     if relative.parts[0]=='devproxy_pkg':
         return path.suffix=='.py' or (relative.parent.as_posix()=='devproxy_pkg/assets' and
             path.name in SOURCE_ASSETS)
-    if relative.parts[0]=='tests':return path.suffix in ('.py','.cs','.ps1')
-    if relative.parts[0]=='tools':return path.name in ('check_source_hygiene.py','source-policy.json','test_source_hygiene.py')
+    if relative.parts[0]=='tests':return path.suffix in ('.py','.cs','.ps1','.md')
+    if relative.parts[0]=='tools':return path.name in ('check_source_hygiene.py','source-policy.json','test_source_hygiene.py','run_native_checks.py')
+    if relative.parts[0]=='.agents':return path.suffix in ('.md','.json','.sh','.py')
     if relative.parts[0]=='bug_reports':return Path(*relative.parts[1:]).as_posix() in BUG_REPORTS_FILES
     return relative.parts[:2]==('.github','workflows') and path.suffix in ('.yml','.yaml')
 
 def add_source(archive,path):
     from tools.check_source_hygiene import PATTERNS
     data=path.read_bytes()
+    if path.suffix=='.sh' or '.githooks' in path.relative_to(ROOT).parts:
+        data=data.replace(b'\r\n',b'\n')
     for label,pattern in PATTERNS.items():
         if re.search(pattern,data):raise RuntimeError(f'Source archive: possible {label} in {path.relative_to(ROOT)}; value redacted')
     info=zipfile.ZipInfo.from_file(path,path.relative_to(ROOT))
@@ -76,17 +79,17 @@ def main():
     source=output/'dagami-agent-proxy-source.zip'
     names=['.gitignore','.gitattributes','.gitleaks.toml','.githooks/pre-commit',
            'devproxy_gui.py','pyproject.toml','PORTABLE.md','BUILD_LINUX_MACOS.md',
-           'README.md','MATRIX.md','APPS_RESEARCH.md','BUG_REPORTS.md','RELEASE_NOTES.md',
+           'README.md','MATRIX.md','APPS_RESEARCH.md','BUG_REPORTS.md','RELEASE_NOTES.md','CHANGELOG.md','AGENTS.md',
            'RECHECK_20261022.md','SYSTEM_DNS.md','SOURCE_POLICY.md','STARTUP.md','LICENSE',
-           'build_portable.py','build_native_app.py','install_portable.py','install.sh',
-           'SystemDns.ps1','app.manifest',*NATIVE_SOURCES]
+           'tools/build_portable.py','tools/build_native_app.py','tools/install_portable.py','install.sh',
+           'src/SystemDns.ps1','src/app.manifest',*['src/'+name for name in NATIVE_SOURCES]]
     staged=output/('source-'+uuid.uuid4().hex+'.tmp')
     try:
         with zipfile.ZipFile(staged,'w',zipfile.ZIP_DEFLATED) as archive:
             for name in names:
                 if (ROOT/name).is_symlink():raise RuntimeError('Source archive refuses links: '+name)
                 if (ROOT/name).exists():add_source(archive,ROOT/name)
-            for folder in ('devproxy_pkg','tests','tools','.github/workflows','bug_reports'):
+            for folder in ('devproxy_pkg','tests','tools','.github/workflows','bug_reports','.agents'):
                 for path in sorted((ROOT/folder).rglob('*')):
                     if path.is_file() and source_member(path):add_source(archive,path)
         staged.replace(source)
@@ -100,7 +103,7 @@ def main():
     if host=='windows':
         # Windows has one native executable for GUI, CLI and DNS maintenance.
         native=output/'windows'
-        subprocess.run([sys.executable,str(ROOT/'build_native_app.py'),'--output-dir',str(native)],check=True)
+        subprocess.run([sys.executable,str(ROOT/'tools/build_native_app.py'),'--output-dir',str(native)],check=True)
         exe=native/'DagamiAgentProxy.exe'
         hashes={exe.name:hashlib.sha256(exe.read_bytes()).hexdigest()}
         (native/'SHA256-native.json').write_text(json.dumps(hashes,indent=2)+'\n',encoding='utf-8')

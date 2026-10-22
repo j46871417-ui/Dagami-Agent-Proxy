@@ -52,9 +52,11 @@ class Failure(Exception):
 
 
 class Reports:
-    def __init__(self, database, admin_hash, origin='https://dns.dagami.ru', secure=True, max_reports=5000):
+    def __init__(self, database, admin_hash, origin='https://dns.dagami.ru', secure=True, max_reports=5000, admin_channel_required=False):
         self.database, self.admin_hash, self.origin, self.secure = str(database), admin_hash, origin, secure
         self.max_reports = max_reports
+        self.admin_channel_required = admin_channel_required
+        self.admin_origins = ('http://localhost:3093', 'http://127.0.0.1:3093')
         self.sessions, self.rates = {}, OrderedDict()
         self.lock = threading.Lock()
         self.slots = threading.BoundedSemaphore(2)
@@ -214,7 +216,8 @@ def handler(app):
             return token, item[1]
 
         def cookie(self, token, age=28800):
-            return 'dagami_reports=' + token + '; Path=' + API + '; HttpOnly; SameSite=Strict; Max-Age=' + str(age) + ('; Secure' if app.secure else '')
+            secure = app.secure and not (app.admin_channel_required and self.private_admin)
+            return 'dagami_reports=' + token + '; Path=' + API + '; HttpOnly; SameSite=Strict; Max-Age=' + str(age) + ('; Secure' if secure else '')
 
         def do_GET(self):
             self.dispatch('GET')
@@ -242,8 +245,13 @@ def handler(app):
             path = split.path
             if not path.startswith(API + '/'):
                 raise Failure(404, 'Не найдено.')
+            self.private_admin = self.client_address[0] == '127.0.0.1' and self.headers.get('X-Dagami-Admin-Channel') == 'ssh-loopback'
+            admin = path.startswith(API + '/admin')
+            if admin and app.admin_channel_required and not self.private_admin:
+                raise Failure(404, 'Не найдено.')
             origin = self.headers.get('Origin')
-            if origin and origin != app.origin:
+            allowed = app.admin_origins if admin and app.admin_channel_required else (app.origin,)
+            if origin and origin not in allowed:
                 raise Failure(403, 'Недопустимый источник запроса.')
             if method == 'GET' and path == API + '/health':
                 return self.reply(200, {'ok': True})
@@ -347,7 +355,7 @@ def main():
     credential = os.environ.get('REPORTS_ADMIN_HASH', '')
     if not re.fullmatch(r'[0-9a-f]{32}\$[0-9a-f]{64}', credential):
         parser.error('Set REPORTS_ADMIN_HASH using --hash-password; never use a default password.')
-    app = Reports(os.environ.get('REPORTS_DB', '/var/lib/dagami-reports/reports.sqlite'), credential)
+    app = Reports(os.environ.get('REPORTS_DB', '/var/lib/dagami-reports/reports.sqlite'), credential, admin_channel_required=True)
     ThreadingHTTPServer(('127.0.0.1', args.port), handler(app)).serve_forever()
 
 

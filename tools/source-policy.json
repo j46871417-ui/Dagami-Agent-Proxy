@@ -1,4 +1,6 @@
 {
   "allowed_duplicate_groups": [],
-  "forbidden_paths": ["generate_license_key.py", "license-issuer/**"]
+  "forbidden_paths": ["generate_license_key.py", "license-issuer/**", "app.manifest", "SystemDns.ps1", "build_native_app.py", "build_portable.py", "install_portable.py"],
+  "forbidden_root_extensions": [".cs"],
+  "required_paths": ["src/DevProxyApp.cs", "src/app.manifest", "src/SystemDns.ps1", "tools/build_native_app.py", "tools/build_portable.py", "tools/install_portable.py", "AGENTS.md", "CHANGELOG.md"]
 }

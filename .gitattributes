@@ -1,2 +1,6 @@
 
 .githooks/* text eol=lf
+*.ps1 linguist-vendored=true
+*.sh text eol=lf linguist-vendored=true
+tests/** linguist-vendored=true
+.agents/** linguist-vendored=true

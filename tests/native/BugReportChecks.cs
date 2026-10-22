@@ -11,6 +11,10 @@ class BugReportChecks {
   try {
    string dirty="HTTP_PROXY=http://name:native-secret@upstream.invalid:1234\nAuthorization=[redacted] native-secret\nBearer native-secret\napi_key=\"native-secret\"\nC:\\Users\\PrivateUser\\app\nDAGAMI-AAAA-BBBB-CCCC\nprivate@example.invalid";
    string clean=BugReports.Clean(dirty);Assert(!clean.Contains("native-secret")&&!clean.Contains("PrivateUser")&&!clean.Contains("AAAA-BBBB")&&!clean.Contains("private@example"),"Secret survived redaction");
+   string exported=Path.Combine(root,"Журнал пользователя.log");File.WriteAllText(exported,"old journal");
+   Logger.SaveToFile(exported,"Русский журнал\n"+dirty);
+   string saved=File.ReadAllText(exported);Assert(saved.Contains("Русский журнал")&&!saved.Contains("native-secret")&&!saved.Contains("old journal"),"Export lost Unicode or retained secrets/old contents");
+   Assert(Directory.GetFiles(root,".dagami-log-*.tmp").Length==0,"Export left temporary files");
    Assert(!BugReports.Clean("{\"Cookie\":\"native-secret\"}").Contains("native-secret"),"JSON cookie survived redaction");
    string log=Path.Combine(root,"test.log");File.WriteAllText(log,new string('x',100000)+"\n"+dirty,Encoding.UTF8);
    string tail=BugReports.ReadLogs(log);Assert(tail.Length<=65536&&!tail.Contains("native-secret"),"Log tail not bounded/redacted");

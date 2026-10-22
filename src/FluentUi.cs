@@ -138,6 +138,28 @@ namespace DevProxyApp
             };
         }
 
+        private void OpenBugReport()
+        {
+            using (var dialog = new BugReportDialog()) dialog.ShowDialog(this);
+        }
+
+        private void SaveJournalToFile()
+        {
+            using (var picker = new SaveFileDialog {
+                Title = "Сохранить журнал", Filter = "Журнал (*.log)|*.log|Текстовый файл (*.txt)|*.txt|Все файлы (*.*)|*.*",
+                DefaultExt = "log", AddExtension = true, OverwritePrompt = true, RestoreDirectory = true,
+                FileName = "DagamiAgentProxy-" + DateTime.Now.ToString("yyyyMMdd-HHmmss") + ".log"
+            }) {
+                if (picker.ShowDialog(this) != DialogResult.OK) return;
+                try {
+                    Logger.SaveToFile(picker.FileName, _nativeLog.Text);
+                    MessageBox.Show(this, "Журнал сохранён.", "Журнал", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                } catch (Exception ex) {
+                    MessageBox.Show(this, "Не удалось сохранить журнал: " + ex.Message, "Журнал", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                }
+            }
+        }
+
         private void BuildFluentUi()
         {
             DoubleBuffered = true;
@@ -356,8 +378,10 @@ namespace DevProxyApp
             logCard.Controls.Add(_nativeLog);
             var reportActions = new FlowLayoutPanel { Dock = DockStyle.Bottom, Height = 48, Padding = new Padding(0, 6, 0, 0) };
             var reportButton = new FluentButton { Text = "Сообщить об ошибке", Width = 200, Height = 36 };
-            reportButton.Click += (sender, e) => { using (var dialog = new BugReportDialog()) dialog.ShowDialog(this); };
-            reportActions.Controls.Add(reportButton); logCard.Controls.Add(reportActions);
+            reportButton.Click += (sender, e) => OpenBugReport();
+            var saveLogButton = new FluentButton { Name = "SaveJournalButton", Text = "Сохранить в файл…", AccessibleName = "Сохранить журнал в выбранный файл", Width = 190, Height = 36 };
+            saveLogButton.Click += (sender, e) => SaveJournalToFile();
+            reportActions.Controls.Add(reportButton); reportActions.Controls.Add(saveLogButton); logCard.Controls.Add(reportActions);
             Panel antigravityPage = BuildAntigravityPage();
             Panel[] pages = new Panel[] { apps, settingsPage, antigravityPage, logCard };
             string[] names = new string[] { "Приложения", "Подключение", "Antigravity", "Журнал" };
@@ -373,6 +397,9 @@ namespace DevProxyApp
                 button.Click += (s, e) => ShowFluentPage(pageIndex);
                 nav.Controls.Add(button); _navigation.Add(button);
             }
+            var globalReport = new FluentButton { Name = "BugReportNavigationButton", Text = "Баг-репорт", AccessibleName = "Сообщить об ошибке — журнал и картинка", Width = 148, Height = 36, Margin = new Padding(0, 10, 0, 6) };
+            globalReport.Click += (sender, e) => OpenBugReport();
+            nav.Controls.Add(globalReport);
             _pageControls = pages; _pageNames = names; _pageDescriptions = descriptions;
             apps.BringToFront();
             _proxyBox.TextChanged += (sender, e) => { _proxyCheckFailed = false; _proxyCheckMessage = null; UpdateNativeStatus(); };

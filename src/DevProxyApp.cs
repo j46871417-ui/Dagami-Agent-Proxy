@@ -338,6 +338,19 @@ namespace DevProxyApp
             return Regex.Replace(value, @"(?i)\b(password|token|state|code|code_verifier|cookie|authorization)\s*[:=]\s*[^\s,;]+", "$1=[redacted]");
         }
 
+        public static void SaveToFile(string path, string text)
+        {
+            string destination = Path.GetFullPath(path);
+            string temporary = Path.Combine(Path.GetDirectoryName(destination), ".dagami-log-" + Guid.NewGuid().ToString("N") + ".tmp");
+            try {
+                File.WriteAllText(temporary, BugReports.Clean(text), new UTF8Encoding(true));
+                if (File.Exists(destination)) File.Replace(temporary, destination, null);
+                else File.Move(temporary, destination);
+            } finally {
+                if (File.Exists(temporary)) File.Delete(temporary);
+            }
+        }
+
         public static void Clear()
         {
             lock (_lock)

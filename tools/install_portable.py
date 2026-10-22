@@ -10,6 +10,8 @@ import shutil
 import sys
 import tempfile
 import uuid
+ROOT=Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:sys.path.insert(0,str(ROOT))
 from devproxy_pkg.system_dns import atomic
 from devproxy_pkg.portable_shortcuts import desktop_quote
 
@@ -17,7 +19,7 @@ from devproxy_pkg.portable_shortcuts import desktop_quote
 def main():
     parser=argparse.ArgumentParser();parser.add_argument('--upgrade',action='store_true');args=parser.parse_args()
     if sys.platform not in ('darwin','linux'):raise SystemExit('Windows: use DagamiAgentProxy.exe.')
-    source=Path(__file__).resolve().parent;home=Path.home()
+    source=ROOT;home=Path.home()
     base=home/'Library'/'Application Support' if sys.platform=='darwin' else Path(os.environ.get('XDG_DATA_HOME',str(home/'.local'/'share')))
     target=base/'DagamiAgentProxy'
     bundle=home/'Applications'/'Dagami Agent Proxy.app'

@@ -113,24 +113,24 @@ Linux/macOS заменяются вручную после остановки с
 ```sh
 python3 -m pip install '.[build,desktop]'
 python3 -m unittest discover -s tests -p 'test_*.py' -v
-python3 build_portable.py
+python3 tools/build_portable.py
 ```
 
 Для Linux нужен пакет Tk; без дисплея используйте `xvfb-run -a` для тестов/сборки.
 Pystray использует доступный backend; для AppIndicator нужен также PyGObject
 и системные GTK/introspection-пакеты. Без него возможен XEmbed в X11.
 Результат — ZIP и SHA-256 в `dist-portable`; на macOS архив хранит ссылки bundle.
-Нативный Windows-скрипт `python build_native_app.py` по умолчанию пишет
+Нативный Windows-скрипт `python tools/build_native_app.py` по умолчанию пишет
 в `dist-portable/windows`, а не в корень исходников. Если в целевой папке
 есть другие EXE, сборка остановится до записи, чтобы не выдавать набор дублей.
 Для публичной macOS-сборки нужны Developer ID и notarization на Mac.
 
-`python3 build_portable.py --source-only` создаёт лишь архив исходников.
+`python3 tools/build_portable.py --source-only` создаёт лишь архив исходников.
 Ручная матрица CI описана в `.github/workflows/portable.yml`. Её запуск загрузит
 артефакты на GitHub, поэтому для него нужен явный запрос владельца. Скрипт локальной
 сборки сам ничего не публикует и не загружает.
 
-Установка исходников: `python3 install_portable.py`, обновление — с `--upgrade`.
+Установка исходников: `python3 tools/install_portable.py`, обновление — с `--upgrade`.
 На Linux создаётся один launcher `~/.local/bin/dagami-agent-proxy`; на macOS — один
 главный launcher в `~/Applications/Dagami Agent Proxy.app/Contents/MacOS`.
 Tk и tray-пакеты нужны в выбранном Python. Старые исходники сохраняются в backup;

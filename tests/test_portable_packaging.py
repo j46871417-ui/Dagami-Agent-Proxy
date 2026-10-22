@@ -9,9 +9,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 import zipfile
-import build_portable
-import build_native_app
-import install_portable
+from tools import build_portable, build_native_app, install_portable
 from devproxy_pkg.core.process_env import external_environment, independent_environment
 
 
@@ -22,6 +20,7 @@ class BuildTests(unittest.TestCase):
             def command(args,**kwargs):
                 calls.append(args)
                 self.assertEqual('build_native_app.py',Path(args[1]).name)
+                self.assertEqual('tools',Path(args[1]).parent.name)
                 target=Path(args[args.index('--output-dir')+1]);target.mkdir(parents=True)
                 (target/'DagamiAgentProxy.exe').write_bytes(b'fixture')
             with patch.object(sys,'platform','win32'),patch.object(sys,'argv',['build_portable.py','--output-dir',str(output)]),patch.object(build_portable.platform,'machine',return_value='AMD64'),patch.object(build_portable.subprocess,'run',side_effect=command),contextlib.redirect_stdout(io.StringIO()):
@@ -39,6 +38,9 @@ class BuildTests(unittest.TestCase):
             def compile(args,**kwargs):
                 calls.append(args)
                 target=next(arg[5:] for arg in args if arg.startswith('/out:'))
+                self.assertIn('/win32manifest:src/app.manifest',args)
+                self.assertTrue(all(Path(arg).parent.name=='src' for arg in args if arg.endswith('.cs')))
+                self.assertIn('/resource:src\\SystemDns.ps1,DevProxy.SystemDns.ps1',args)
                 Path(target).write_bytes(b'fixture')
             with patch.object(build_native_app,'ROOT',root),patch.dict(os.environ,{'WINDIR':str(root)}),patch.object(sys,'argv',['build_native_app.py']),patch.object(build_native_app.subprocess,'run',side_effect=compile),contextlib.redirect_stdout(io.StringIO()):
                 build_native_app.main()
@@ -79,6 +81,17 @@ class BuildTests(unittest.TestCase):
                 build_portable.main()
             with zipfile.ZipFile(output/'dagami-agent-proxy-source.zip') as archive:
                 self.assertEqual(public,set(archive.namelist()))
+
+    def test_source_archive_preserves_native_tools_and_agent_layout(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root=Path(temp).resolve();output=root/'out'
+            names={'src/Brand.cs','src/app.manifest','src/SystemDns.ps1','tools/build_native_app.py','tools/build_portable.py','tools/install_portable.py','AGENTS.md','CHANGELOG.md','.agents/hooks.json','.agents/mcp_config.json','.agents/agents/README.md','.agents/hooks/README.md','.agents/skills/README.md','install.sh'}
+            for name in names|{'.agents/private.env','.agents/session.log','RetiredRoot.cs'}:
+                path=root/name;path.parent.mkdir(parents=True,exist_ok=True);path.write_bytes((name+'\r\nfixture\r\n').encode())
+            with patch.object(build_portable,'ROOT',root),patch.object(sys,'argv',['build_portable.py','--source-only','--output-dir',str(output)]),contextlib.redirect_stdout(io.StringIO()):build_portable.main()
+            with zipfile.ZipFile(output/'dagami-agent-proxy-source.zip') as archive:
+                self.assertEqual(names,set(archive.namelist()))
+                self.assertNotIn(b'\r\n',archive.read('install.sh'))
 
     def test_linux_and_mac_build_one_entry_no_companion(self):
         for platform in ('linux','darwin'):

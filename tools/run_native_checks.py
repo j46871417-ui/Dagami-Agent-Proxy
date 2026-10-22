@@ -1,0 +1,43 @@
+"""Selected Windows fixture checks; never runs activation or live DNS mutation tests."""
+import argparse
+import os
+from pathlib import Path
+import shutil
+import subprocess
+
+ROOT=Path(__file__).resolve().parents[1]
+SUITES=['BugReportChecks','ConsoleLaunchChecks','CliChecks','ApplicationSupportChecks',
+        'ReviewRegressionChecks','PatchChecks','ShortcutChecks','ShortcutRecoveryChecks',
+        'NativeLoginChecks','GoogleGeminiChecks','AntigravityPatchChecks','LocalUiChecks']
+
+def main():
+    parser=argparse.ArgumentParser()
+    parser.add_argument('--assembly',type=Path,required=True)
+    parser.add_argument('--output-dir',type=Path,required=True)
+    parser.add_argument('--suite',nargs='+',choices=SUITES)
+    args=parser.parse_args()
+    assembly=args.assembly.resolve();output=args.output_dir.resolve()
+    if not assembly.is_file():parser.error('Build the application first.')
+    if output in (ROOT,ROOT/'src',ROOT/'tools',ROOT/'tests',Path.home().resolve()):parser.error('Choose a dedicated output directory.')
+    output.mkdir(parents=True,exist_ok=True)
+    allowed={'DagamiAgentProxy.exe','ConsoleFixture.exe',*[name+'.exe' for name in SUITES]}
+    if any(path.name not in allowed for path in output.glob('*.exe')):parser.error('Output contains unrelated executables.')
+    target=output/'DagamiAgentProxy.exe'
+    if target!=assembly:shutil.copyfile(assembly,target)
+    compiler=Path(os.environ.get('WINDIR',r'C:\Windows'))/'Microsoft.NET/Framework64/v4.0.30319/csc.exe'
+    if not compiler.is_file():parser.error('Windows .NET Framework compiler not found.')
+    env=dict(os.environ,TEMP=str(output),TMP=str(output))
+    subprocess.run([str(compiler),'/nologo','/target:winexe','/out:'+str(output/'ConsoleFixture.exe'),str(ROOT/'tests/native/ConsoleFixture.cs')],check=True)
+    for name in args.suite or SUITES:
+        executable=output/(name+'.exe')
+        command=[str(compiler),'/nologo','/target:exe','/out:'+str(executable),'/r:'+str(target)]
+        command+=['/r:'+reference for reference in ('System.Web.Extensions.dll','System.Drawing.dll','System.Windows.Forms.dll','System.Security.dll','System.Xml.dll')]
+        subprocess.run([*command,str(ROOT/'tests/native'/(name+'.cs'))],check=True)
+        result=subprocess.run([str(executable)],cwd=output,env=env,capture_output=True,text=True,timeout=90)
+        (output/(name+'.log')).write_text(result.stdout+result.stderr,encoding='utf-8')
+        print(name+': '+result.stdout.strip(),flush=True)
+        if result.returncode:
+            print(result.stderr,flush=True)
+            raise SystemExit(result.returncode)
+
+if __name__=='__main__':main()

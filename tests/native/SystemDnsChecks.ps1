@@ -1,7 +1,7 @@
 param([string]$EnginePath='')
 $ErrorActionPreference='Stop'
 $engine=if($EnginePath){$EnginePath}else{Join-Path $PSScriptRoot 'SystemDns.ps1'}
-if(-not (Test-Path -LiteralPath $engine)){$engine=Join-Path $PSScriptRoot '..\..\SystemDns.ps1'}
+if(-not (Test-Path -LiteralPath $engine)){$engine=Join-Path $PSScriptRoot '..\..\src\SystemDns.ps1'}
 . $engine -LibraryOnly
 $script:Checks=0
 function Assert($Value,[string]$Message){$script:Checks++;if(-not $Value){throw $Message}}

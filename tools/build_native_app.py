@@ -8,7 +8,7 @@ import uuid
 import argparse
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parent
+ROOT = Path(__file__).resolve().parents[1]
 SOURCES = [
     "DevProxyApp.cs", "NativeUi.cs", "FluentUi.cs", "AntigravityIntegration.cs",
     "AntigravityUi.cs", "AntigravityLogin.cs", "NativeShortcuts.cs",
@@ -46,12 +46,12 @@ def main() -> None:
     ]
     command = [str(compiler), "/nologo", '/target:winexe', "/platform:anycpu", "/optimize+"]
     command.extend(f"/reference:{name}" for name in references)
-    command.extend(SOURCES)
-    command.append("/win32manifest:app.manifest")
+    command.extend(str(Path('src') / name) for name in SOURCES)
+    command.append("/win32manifest:src/app.manifest")
     command.append(r"/win32icon:devproxy_pkg\assets\dagami-agent-proxy.ico")
     command.append(r"/resource:devproxy_pkg\assets\dagami-agent-proxy.ico,Dagami.AgentProxy.ico")
     command.append(r"/resource:devproxy_pkg\assets\icon-64.png,Dagami.AgentProxy.png")
-    command.append(r"/resource:SystemDns.ps1,DevProxy.SystemDns.ps1")
+    command.append(r"/resource:src\SystemDns.ps1,DevProxy.SystemDns.ps1")
     # Keep the assembly name stable while replacing the previous executable
     # only after compilation succeeds.
     with tempfile.TemporaryDirectory(prefix=".devproxy-build-") as build:

@@ -26,6 +26,9 @@ class LocalUiChecks {
     if (list.SelectedItems.Count > 0 && ((AppTarget)list.SelectedItems[0].Tag).IsInstalled)
      Assert(((CheckBox)Get(form, "_shortcutToggle")).Enabled, "Repair disabled by stale shortcut issue");
     Bounds(form); Picture(form, "local-apps.png");
+    Assert(form.Controls.Find("BugReportNavigationButton",true).Length==1,"Global report button missing");
+    Assert(form.Controls.Find("SaveJournalButton",true).Length==1,"Journal export button missing");
+    Call(form,"ShowFluentPage",3);Bounds(form);Picture(form,"local-journal.png");
     Call(form, "ShowFluentPage", 2); Bounds(form); Picture(form, "local-antigravity.png");
     form.Size = form.MinimumSize; Application.DoEvents(); Bounds(form); Picture(form, "local-antigravity-min.png");
    }

@@ -183,6 +183,21 @@ class Checks(unittest.TestCase):
         with original() as db:
             self.assertEqual(db.execute('SELECT status FROM reports WHERE id=?',(payload['id'],)).fetchone()[0],'fixed')
 
+    def test_production_admin_requires_private_ssh_channel(self):
+        self.app.admin_channel_required=True
+        self.assertEqual(self.request('/admin/login',{'password':PASSWORD})[0],404)
+        self.assertEqual(self.request('/admin/reports')[0],404)
+        private={'X-Dagami-Admin-Channel':'ssh-loopback','Origin':'http://localhost:3093'}
+        status,data,headers=self.request('/admin/login',{'password':PASSWORD},private)
+        self.assertEqual(status,200)
+        self.assertIn('HttpOnly',headers['Set-Cookie'])
+        self.assertNotIn('; Secure',headers['Set-Cookie'])
+        self.cookie=headers['Set-Cookie'].split(';')[0]
+        self.assertEqual(self.request('/admin/reports',headers=private)[0],200)
+        self.assertEqual(self.request('/admin/reports')[0],404)
+        wrong={**private,'Origin':'http://evil.invalid'}
+        self.assertEqual(self.request('/admin/reports',headers=wrong)[0],403)
+
     @unittest.skipUnless(os.environ.get('REPORTS_NATIVE_CHECKS'), 'native integration executable not supplied')
     def test_native_client_end_to_end(self):
         native_dir=str(Path(os.environ['REPORTS_NATIVE_CHECKS']).resolve().parent)

@@ -11,4 +11,4 @@ if [ "$(id -u)" -eq 0 ]; then
     echo 'Run from your user session. DNS requests admin rights separately.' >&2
     exit 1
 fi
-exec python3 "$TASK_SOURCE_DIR/install_portable.py" "$@"
+exec python3 "$TASK_SOURCE_DIR/tools/install_portable.py" "$@"

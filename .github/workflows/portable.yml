@@ -24,10 +24,10 @@ jobs:
         run: python -m unittest discover -s tests -p 'test_*.py' -v
       - name: Build Linux artifacts with GUI smoke test
         if: runner.os == 'Linux'
-        run: xvfb-run -a python build_portable.py
+        run: xvfb-run -a python tools/build_portable.py
       - name: Build Windows or macOS artifacts with GUI smoke test
         if: runner.os != 'Linux'
-        run: python build_portable.py
+        run: python tools/build_portable.py
       - uses: actions/upload-artifact@v4
         with:
           name: dagami-agent-proxy-${{ matrix.os }}

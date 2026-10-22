@@ -36,6 +36,11 @@ def main():
     for _,name in entries:
         if any(fnmatchcase(name,pattern) for pattern in policy.get('forbidden_paths',[])):
             issues.append('Private tooling is not public source: '+name)
+        if '/' not in name and Path(name).suffix in policy.get('forbidden_root_extensions',[]):
+            issues.append('Source file belongs in src/: '+name)
+    present={name for _,name in entries}
+    for name in policy.get('required_paths',[]):
+        if name not in present:issues.append('Missing required source path: '+name)
     queries=''.join(oid+'\n' for oid,_ in entries).encode()
     proc=subprocess.run(GIT+['cat-file','--batch'],input=queries,stdout=subprocess.PIPE,check=True)
     offset=0; groups=defaultdict(list)

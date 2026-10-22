@@ -12,7 +12,7 @@ Windows не создаст Linux-файл или macOS `.app` этим скри
 Скачайте `Dagami-Agent-Proxy-v0.2.0-alpha-source.zip` из
 [этого выпуска](https://github.com/j46871417-ui/Dagami-Agent-Proxy/releases/tag/v0.2.0-alpha).
 Распакуйте в новую папку и откройте в ней Terminal. В ней должны быть
-`pyproject.toml`, `build_portable.py`, `devproxy_gui.py` и папка `devproxy_pkg`.
+`pyproject.toml`, `tools/build_portable.py`, `devproxy_gui.py` и папка `devproxy_pkg`.
 
 Либо получите тот же код через Git:
 
@@ -44,7 +44,7 @@ python -m pip install '.[build,desktop]'
 ```sh
 python -m tkinter
 python -m unittest discover -s tests -p 'test_*.py' -v
-python build_portable.py
+python tools/build_portable.py
 ```
 
 Если тесты упали, сначала разберите отчёт; не считайте сборку проверенной.
@@ -80,7 +80,7 @@ chmod +x dagami-agent-proxy
 ```sh
 sudo apt install xvfb
 xvfb-run -a python -m unittest discover -s tests -p 'test_*.py' -v
-xvfb-run -a python build_portable.py
+xvfb-run -a python tools/build_portable.py
 ```
 
 Трей зависит от панели. Базовая сборка может использовать XEmbed в X11.
@@ -109,7 +109,7 @@ python -m tkinter
 
 ```sh
 python -m unittest discover -s tests -p 'test_*.py' -v
-python build_portable.py
+python tools/build_portable.py
 ```
 
 Если Python уже был взят из Homebrew, Tk должен быть из той же версии:
