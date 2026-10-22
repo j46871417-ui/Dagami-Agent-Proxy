@@ -6,7 +6,7 @@ namespace DevProxyApp {
     public static class AppProxyPolicy {
         public static bool IsGemini(AppTarget target) {
             string name=Path.GetFileName(target.ExePath ?? "");
-            return name.Equals("Gemini.exe",StringComparison.OrdinalIgnoreCase) || name.Equals("GeminiAppLauncher.exe",StringComparison.OrdinalIgnoreCase);
+            return (name.Equals("Gemini.exe",StringComparison.OrdinalIgnoreCase) || name.Equals("GeminiAppLauncher.exe",StringComparison.OrdinalIgnoreCase)) && !NativeCliApps.IsCli(target);
         }
         public static string Executable(AppTarget target) {
             if(IsGemini(target) && Path.GetFileName(target.ExePath).Equals("GeminiAppLauncher.exe",StringComparison.OrdinalIgnoreCase)) {

@@ -93,7 +93,7 @@ def register_executable(app,path):
     return str(path)
 
 def launch_desktop_app(app,profile):
-    if app not in ('codex','opencode'):return start_session(app,profile)
+    if not app_adapter(app).is_cli:return start_session(app,profile)
     command=entry_command()+['run',app,'--profile',profile]
     if os.name=='nt':
         subprocess.Popen(command,creationflags=subprocess.CREATE_NEW_CONSOLE,env=independent_environment());return 'Открыта отдельная консоль приложения.'
@@ -226,7 +226,12 @@ def serve_session(app, profile_name):
         local = f'http://127.0.0.1:{tunnel.start()}'
         env = {key: local for key in ('HTTP_PROXY','HTTPS_PROXY','ALL_PROXY','http_proxy','https_proxy','all_proxy','AG_LS_PROXY','AGY_PROXY_URL','agy_proxy_url')}
         env.update(NO_PROXY='localhost,127.0.0.1,::1', no_proxy='localhost,127.0.0.1,::1')
-        flags = [f.replace('{PROXY_URL}', local) for f in adapter.get_cli_launch_flags(profile)]
+        try:
+            env.update(adapter.get_launch_environment(local,exe))
+        except BaseException:
+            tunnel.stop()
+            raise
+        flags = [f.replace('{PROXY_URL}', local) for f in adapter.launch_flags(profile,exe)]
         job=None
         if os.name=='nt':
             from .core.windows_job import WindowsJobManager
@@ -330,9 +335,9 @@ def main(argv=None):
                 if data: print(json.dumps(data,ensure_ascii=False))
         elif args.command=='session':serve_session(args.app,args.profile)
         elif args.command=='run':
-            if args.app in ('codex','opencode'):
+            if app_adapter(args.app).is_cli:
                 adapter=app_adapter(args.app);exe=executable(adapter)
-                process,_=Launcher.launch_with_tunnel(exe,load_profile(args.profile),adapter.get_cli_launch_flags(load_profile(args.profile)),extra,wait=True)
+                process,_=Launcher.launch_with_tunnel(exe,load_profile(args.profile),adapter.launch_flags(load_profile(args.profile),exe),extra,wait=True,environment_factory=adapter.get_launch_environment)
                 return process.returncode
             data=start_session(args.app,args.profile,extra); print(json.dumps(data,ensure_ascii=False))
             if args.wait:

@@ -1,0 +1,10 @@
+[Unit]
+Description=Daily maintenance of Dagami bug reports
+
+[Timer]
+OnCalendar=daily
+RandomizedDelaySec=30m
+Persistent=true
+
+[Install]
+WantedBy=timers.target

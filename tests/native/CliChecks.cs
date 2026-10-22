@@ -54,6 +54,8 @@ class CliChecks {
    var target=new AppTarget{Id="test-agy",DisplayName="agy",ExePath=original};
    string shim=store.Enable(target,manager),issue;
    Assert(File.Exists(shim),"Command shim not installed");
+   Assert(NativeCliApps.IsCli(new AppTarget{ExePath=shim}),"CLI shim must use the console PE subsystem so cmd waits for it");
+   Assert(!NativeCliApps.IsCli(new AppTarget{ExePath=manager}),"GUI runner subsystem was modified");
    Assert(paths.UserPath.StartsWith(store.BinDirectory+";"),"User PATH not prepended");
    Assert(store.VerifiedCount(target.Id,out issue)==1&&issue==null,"CLI not verified");
    Assert(Hash(original)==originalHash,"Original CLI changed");
@@ -70,7 +72,7 @@ class CliChecks {
    shim=store.Enable(target,manager);File.AppendAllText(shim,"foreign-edit");Reject(()=>store.Restore(target.Id));
    Assert(File.Exists(shim),"Foreign shim deleted");
    // Restore fixture bytes to test ordinary removal; never touch real installations.
-   File.Copy(manager,shim,true);store.Restore(target.Id);
+   File.WriteAllBytes(shim,NativeCliApps.ConsoleRunnerBytes(manager));store.Restore(target.Id);
    paths.MachinePath=originalDir;Reject(()=>store.Enable(target,manager));paths.MachinePath="";
    string cmd=Path.Combine(originalDir,"gemini.cmd");File.WriteAllText(cmd,"@echo off\r\n\"%dp0%\\node_modules\\fake\\cli.js\" %*\r\n");
    string nodeDir=Path.Combine(originalDir,"node_modules","fake");Directory.CreateDirectory(nodeDir);File.WriteAllText(Path.Combine(nodeDir,"cli.js"),"fixture");File.Copy(Self,Path.Combine(originalDir,"node.exe"));

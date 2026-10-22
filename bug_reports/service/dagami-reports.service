@@ -1,0 +1,32 @@
+[Unit]
+Description=Dagami private bug reports
+After=network.target
+
+[Service]
+Type=simple
+User=dagami-reports
+Group=dagami-reports
+WorkingDirectory=/opt/dagami-reports
+EnvironmentFile=/etc/dagami-reports.env
+Environment=REPORTS_DB=/var/lib/dagami-reports/reports.sqlite
+ExecStart=/opt/dagami-reports/venv/bin/python /opt/dagami-reports/server.py
+Restart=on-failure
+RestartSec=5
+StateDirectory=dagami-reports
+StateDirectoryMode=0700
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictAddressFamilies=AF_INET AF_UNIX
+ReadWritePaths=/var/lib/dagami-reports
+MemoryMax=512M
+TasksMax=48
+
+[Install]
+WantedBy=multi-user.target

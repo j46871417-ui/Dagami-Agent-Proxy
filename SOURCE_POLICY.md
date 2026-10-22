@@ -20,7 +20,8 @@ scheme or revoke keys. Old commits, tags and release archives may still
 contain the removed script.
 
 The source ZIP includes only the native build's C# file list, the shared
-Python entry point, current guides, tests and named assets. Unused root C#
+Python entry point, current guides, tests, named assets and an explicit list
+of public bug-report service/frontend sources. Runtime data is excluded. Unused root C#
 files and arbitrary image exports are not included automatically.
 
 `.gitignore` does not untrack existing files. Use `git rm --cached` after

@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.IO;
 using System.Net;
 using System.Net.Sockets;
@@ -133,8 +133,8 @@ namespace DevProxyApp
             if (cmd == "--antigravity-inspect" || cmd == "--antigravity-prepare" || cmd == "--antigravity-restore")
             {
                 if (args.Length != 2) throw new ArgumentException("Укажите полный путь к Antigravity.exe.");
-                Console.WriteLine(cmd == "--antigravity-inspect" ? AntigravityIntegration.Inspect(args[1]) :
-                    cmd == "--antigravity-prepare" ? AntigravityIntegration.Prepare(args[1]) : AntigravityIntegration.Restore(args[1]));
+                Console.WriteLine(cmd == "--antigravity-inspect" ? AntigravityIntegration.InspectClient(args[1]) :
+                    cmd == "--antigravity-prepare" ? AntigravityIntegration.PrepareClient(args[1]).Message : AntigravityIntegration.RestoreClient(args[1]));
                 return;
             }
             if (cmd == "--help" || cmd == "-h" || cmd == "help")
@@ -311,7 +311,7 @@ namespace DevProxyApp
 
         public static void Log(string msg)
         {
-            msg = Redact(msg);
+            msg = BugReports.Clean(Redact(msg));
             string line = string.Format("[{0}] {1}", DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss"), msg);
             lock (_lock)
             {
@@ -1194,11 +1194,12 @@ namespace DevProxyApp
                 try
                 {
                     string[] matches = Directory.GetFiles(codexBinDir, "codex.exe", SearchOption.AllDirectories);
+                    Array.Sort(matches,(a,b)=>File.GetLastWriteTimeUtc(b).CompareTo(File.GetLastWriteTimeUtc(a)));
                     if (matches.Length > 0) codexExe = matches[0];
                 }
                 catch { }
             }
-            codexExe=NativeCliApps.FindCommand("codex",Environment.GetEnvironmentVariable("PATH"),NativeCliApps.Current.BinDirectory)??codexExe;
+            codexExe=ApplicationDiscovery.Cli("codex")??codexExe;
             list.Add(new AppTarget {
                 Id = "codex",
                 DisplayName = "Codex CLI",
@@ -1207,12 +1208,16 @@ namespace DevProxyApp
             });
 
             foreach(string command in new[]{"agy","opencode","gemini","claude"}) {
-                string exe=NativeCliApps.FindCommand(command,Environment.GetEnvironmentVariable("PATH"),NativeCliApps.Current.BinDirectory);
+                string exe=ApplicationDiscovery.Cli(command);
                 list.Add(new AppTarget{Id=command+"_cli",DisplayName=command=="gemini"?"Gemini CLI":command=="claude"?"Claude Code":command=="opencode"?"OpenCode CLI":"agy CLI",ExePath=exe,ConfigPath=null});
             }
 
             // 8. JetBrains IDEs
-            ScanJetBrains(list, progFiles, localAppData);
+            list.AddRange(ApplicationDiscovery.JetBrains(new[]{Path.Combine(progFiles,"JetBrains"),Path.Combine(localAppData,@"JetBrains\Toolbox\apps"),Path.Combine(localAppData,@"Programs\JetBrains")}));
+            list.Add(new AppTarget{Id="codex-gui",DisplayName="Codex Desktop",ExePath=ApplicationDiscovery.Desktop("Codex",new[]{Path.Combine(localAppData,@"Programs\Codex\Codex.exe"),Path.Combine(localAppData,@"OpenAI\Codex\Codex.exe"),Path.Combine(progFiles,@"Codex\Codex.exe")})});
+            list.Add(new AppTarget{Id="opencode-gui",DisplayName="OpenCode Desktop",ExePath=ApplicationDiscovery.Desktop("OpenCode",new[]{Path.Combine(localAppData,@"Programs\OpenCode\OpenCode.exe"),Path.Combine(localAppData,@"OpenCode\OpenCode.exe"),Path.Combine(progFiles,@"OpenCode\OpenCode.exe")})});
+            list.Add(new AppTarget{Id="git",DisplayName="Git (dagami-git)",ExePath=NativeCliApps.FindCommand("git",Environment.GetEnvironmentVariable("PATH"),NativeCliApps.Current.BinDirectory)??FindFirstExisting(new[]{Path.Combine(progFiles,@"Git\cmd\git.exe"),Path.Combine(localAppData,@"Programs\Git\cmd\git.exe")})});
+            foreach(var target in list)try{ApplicationSupport.ResolveSettings(target);}catch(Exception ex){Logger.Log("[Detect] "+target.DisplayName+": "+ex.Message);}
 
             // 9. Load saved custom targets from ConfigManager
             foreach (var custom in ConfigManager.Instance.CustomTargets)
@@ -1220,60 +1225,12 @@ namespace DevProxyApp
                 list.Add(custom);
             }
 
+            try {ApplicationDiscovery.IncludeRegistered(list,NativeCliApps.Current.RegisteredTargets());}
+            catch(Exception ex){Logger.Log("[Detect] Журнал CLI: "+ex.GetType().Name);}
+            try {ApplicationDiscovery.IncludeRegistered(list,NativeShortcuts.Current.RegisteredTargets());}
+            catch(Exception ex){Logger.Log("[Detect] Журнал ярлыков: "+ex.GetType().Name);}
+
             return list;
-        }
-
-        static void ScanJetBrains(List<AppTarget> list, string progFiles, string localAppData)
-        {
-            string jbProgramFiles = Path.Combine(progFiles, "JetBrains");
-            if (Directory.Exists(jbProgramFiles))
-            {
-                try
-                {
-                    foreach (string dir in Directory.GetDirectories(jbProgramFiles))
-                    {
-                        string dirName = Path.GetFileName(dir);
-                        string binDir = Path.Combine(dir, "bin");
-                        if (Directory.Exists(binDir))
-                        {
-                            string[] exes = Directory.GetFiles(binDir, "*64.exe");
-                            if (exes.Length > 0)
-                            {
-                                list.Add(new AppTarget {
-                                    Id = "jb_" + dirName.ToLower().Replace(" ", "_"),
-                                    DisplayName = "JetBrains " + dirName,
-                                    ExePath = exes[0],
-                                    ConfigPath = null
-                                });
-                            }
-                        }
-                    }
-                }
-                catch { }
-            }
-
-            string jbToolbox = Path.Combine(localAppData, @"JetBrains\Toolbox\apps");
-            if (Directory.Exists(jbToolbox))
-            {
-                try
-                {
-                    foreach (string appDir in Directory.GetDirectories(jbToolbox))
-                    {
-                        string appName = Path.GetFileName(appDir);
-                        string[] exes = Directory.GetFiles(appDir, "*64.exe", SearchOption.AllDirectories);
-                        if (exes.Length > 0)
-                        {
-                            list.Add(new AppTarget {
-                                Id = "jb_tb_" + appName.ToLower(),
-                                DisplayName = "JetBrains " + appName,
-                                ExePath = exes[0],
-                                ConfigPath = null
-                            });
-                        }
-                    }
-                }
-                catch { }
-            }
         }
 
         public static string FindFirstExisting(string[] paths)
@@ -1305,6 +1262,10 @@ namespace DevProxyApp
 
         public static bool ApplyProxyToTarget(AppTarget target, string proxyUrl, out string msg)
         {
+            if(!ApplicationSupport.SupportsSettings(target)){msg="Этот тип приложения настраивается через управляемый запуск; конфигурация не изменена.";return false;}
+            try { ApplicationSupport.ResolveSettings(target); }
+            catch(Exception ex) { msg=ex.Message; return false; }
+            if(ApplicationSupport.Kind(target)=="jetbrains")return JetBrainsProxySettings.Apply(target,proxyUrl,out msg);
             if (target.ConfigPath == "git://global")
             {
                 msg = "Постоянное изменение глобального Git config отключено; используйте изолированную сессию или настройте Git вручную.";
@@ -1326,15 +1287,15 @@ namespace DevProxyApp
                 if (File.Exists(target.ConfigPath))
                 {
                     content = File.ReadAllText(target.ConfigPath, Encoding.UTF8);
-                    string backup = target.ConfigPath + ".devproxy.bak";
-                    if (!File.Exists(backup)) File.Copy(target.ConfigPath, backup, false);
                 }
 
                 var settings = ParseSettings(content);
+                string backup = target.ConfigPath + ".devproxy.bak";
+                if(!File.Exists(backup))WriteAtomic(backup,content);
                 settings["http.proxy"] = proxyUrl;
                 settings["http.proxyStrictSSL"] = true;
                 settings["http.proxySupport"] = "override";
-                settings["http.noProxy"] = "localhost,127.0.0.1,::1";
+                settings["http.noProxy"] = new[]{"localhost","127.0.0.1","::1"};
                 content = new JavaScriptSerializer().Serialize(settings);
 
                 WriteAtomic(target.ConfigPath, content);
@@ -1350,13 +1311,17 @@ namespace DevProxyApp
 
         public static bool RestoreTarget(AppTarget target, out string msg)
         {
+            if(!ApplicationSupport.SupportsSettings(target)){msg="Этот тип приложения не использует настройки IDE; конфигурация не изменена.";return false;}
+            try { ApplicationSupport.ResolveSettings(target); }
+            catch(Exception ex) { msg=ex.Message; return false; }
+            if(ApplicationSupport.Kind(target)=="jetbrains")return JetBrainsProxySettings.Restore(target,out msg);
             if (target.ConfigPath == "git://global")
             {
                 msg = "DevProxy не изменяет глобальный Git config.";
                 return false;
             }
 
-            if (string.IsNullOrEmpty(target.ConfigPath) || !File.Exists(target.ConfigPath))
+            if (string.IsNullOrEmpty(target.ConfigPath) || (!File.Exists(target.ConfigPath)&&!File.Exists(target.ConfigPath+".devproxy.bak")))
             {
                 msg = "Файл конфигурации не найден.";
                 return false;
@@ -1367,8 +1332,8 @@ namespace DevProxyApp
                 string bak = target.ConfigPath + ".devproxy.bak";
                 if (File.Exists(bak))
                 {
-                    var currentSettings = ParseSettings(File.ReadAllText(target.ConfigPath, Encoding.UTF8));
                     var originalSettings = ParseSettings(File.ReadAllText(bak, Encoding.UTF8));
+                    var currentSettings = File.Exists(target.ConfigPath)?ParseSettings(File.ReadAllText(target.ConfigPath, Encoding.UTF8)):new Dictionary<string,object>(originalSettings);
                     string[] managedKeys = new string[] { "http.proxy", "http.proxyStrictSSL", "http.proxySupport", "http.noProxy" };
                     foreach (string key in managedKeys)
                     {
@@ -1377,7 +1342,7 @@ namespace DevProxyApp
                     }
                     WriteAtomic(target.ConfigPath, new JavaScriptSerializer().Serialize(currentSettings));
                     File.Delete(bak);
-                    msg = "Прокси-ключи восстановлены из .devproxy.bak; остальные изменения сохранены.";
+                    msg = "Исходные прокси-настройки восстановлены из .devproxy.bak. Ручные изменения этих ключей заменены; остальные параметры сохранены.";
                     return true;
                 }
 
@@ -1390,7 +1355,7 @@ namespace DevProxyApp
                 content = new JavaScriptSerializer().Serialize(settings);
 
                 WriteAtomic(target.ConfigPath, content);
-                msg = "Ключи прокси удалены из " + target.ConfigPath;
+                msg = "Ключи прокси, включая ручные значения, удалены из " + target.ConfigPath;
                 return true;
             }
             catch (Exception ex)
@@ -2112,10 +2077,14 @@ namespace DevProxyApp
                 bool antigravity = Path.GetFileName(target.ExePath).Equals("Antigravity.exe", StringComparison.OrdinalIgnoreCase);
                 bool gemini = AppProxyPolicy.IsGemini(target);
                 string executable = AppProxyPolicy.Executable(target);
-                if (!reuse && (IsElectronTarget(target) || gemini)) NativeLogin.RequireStopped(executable);
-                if (antigravity && !reuse && ConfigManager.Instance.PrepareAntigravityClient)
+                if (!reuse && (IsElectronTarget(target) || gemini || ApplicationSupport.Kind(target)=="jetbrains" || ApplicationSupport.Kind(target)=="opencode-desktop")) NativeLogin.RequireStopped(executable);
+                if(!reuse&&ApplicationSupport.Kind(target)=="opencode-desktop") {
+                    NativeLogin.RequireStopped("opencode-cli.exe");
+                    NativeLogin.RequireStopped("opencode-server.exe");
+                }
+                if (AntigravityIntegration.Supports(target.ExePath) && !reuse && ConfigManager.Instance.PrepareAntigravityClient)
                 {
-                    var preparation=AntigravityIntegration.PrepareForProxy(target.ExePath);
+                    var preparation=AntigravityIntegration.PrepareClient(target.ExePath);
                     if(preparation.Prepared)_nativeClientNotices.Remove(target.Id);
                     else _nativeClientNotices[target.Id]=preparation.Message;
                     Logger.Log("[Antigravity] " + preparation.Message);
@@ -2125,11 +2094,10 @@ namespace DevProxyApp
                 psi.UseShellExecute = false;
                 psi.WorkingDirectory = string.IsNullOrEmpty(originalDirectory) ? Path.GetDirectoryName(target.ExePath) : Environment.ExpandEnvironmentVariables(originalDirectory);
                 psi.Arguments = originalArguments ?? "";
-                if(NativeCliApps.IsCli(target)) {
+                if(NativeCliApps.IsConsoleTarget(target)) {
                     // GUI launch gets a real console; ordinary command launch
                     // uses NativeCliApps.Run and retains the caller's console.
-                    psi=NativeCliApps.CreateStart(executable,new string[0],localProxy,psi.WorkingDirectory);
-                    if(!string.IsNullOrEmpty(originalArguments))throw new InvalidOperationException("Для CLI с аргументами используйте обычную команду или dagami-proxy run APP -- ARGS.");
+                    psi=NativeCliApps.CreateStart(executable,NativeCliApps.SplitArguments(originalArguments),localProxy,psi.WorkingDirectory);
                 }
 
                 string noProxy = "localhost,127.0.0.1,::1";
@@ -2142,6 +2110,14 @@ namespace DevProxyApp
                 psi.EnvironmentVariables["AGY_PROXY_URL"] = localProxy;
                 psi.EnvironmentVariables["agy_proxy_url"] = localProxy;
                 psi.EnvironmentVariables["DEVPROXY_DNS_HOST"] = ConfigManager.Instance.DnsHost;
+                if(!NativeCliApps.IsConsoleTarget(target))ApplicationSupport.ConfigureLaunch(target,psi,localProxy);
+                // A previous patch may contain the old/default bridge port.
+                // Refresh it before each managed start, never upstream credentials.
+                ApplicationSupport.ResolveSettings(target);
+                if(!string.IsNullOrEmpty(target.ConfigPath) && File.Exists(target.ConfigPath+".devproxy.bak")) {
+                    string settingsMessage;
+                    if(!ProxyEngine.ApplyProxyToTarget(target,localProxy,out settingsMessage))throw new IOException(settingsMessage);
+                }
 
                 if(gemini) {
                     AppProxyPolicy.ConfigureGemini(psi,localProxy);
@@ -2179,9 +2155,8 @@ namespace DevProxyApp
 
         private static bool IsElectronTarget(AppTarget target)
         {
-            string marker = ((target.Id ?? "") + " " + (target.DisplayName ?? "") + " " + (target.ExePath ?? "")).ToLowerInvariant();
-            return marker.Contains("antigravity") || marker.Contains("cursor") || marker.Contains("windsurf") ||
-                marker.Contains("vscode") || marker.Contains("visual studio code") || marker.Contains("vscodium");
+            string kind=ApplicationSupport.Kind(target);
+            return kind=="vscode"||kind=="codex-desktop";
         }
 
         private static string SafeFileName(string value)
@@ -2205,42 +2180,8 @@ namespace DevProxyApp
 
         private static List<string> CreateManagedShortcuts(AppTarget target)
         {
-            var created = new List<string>();
-            string managerExe = Process.GetCurrentProcess().MainModule.FileName;
-            string fileName = SafeFileName(target.DisplayName) + " — Dagami Agent Proxy.lnk";
-            string[] directories = new string[] {
-                Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory),
-                Environment.GetFolderPath(Environment.SpecialFolder.Programs)
-            };
-            foreach (string directory in directories)
-            {
-                if (string.IsNullOrEmpty(directory)) continue;
-                Directory.CreateDirectory(directory);
-                string shortcutPath = Path.Combine(directory, fileName);
-                object shell = null;
-                object shortcut = null;
-                try
-                {
-                    Type shellType = Type.GetTypeFromProgID("WScript.Shell");
-                    if (shellType == null) throw new InvalidOperationException("Windows Script Host недоступен.");
-                    shell = Activator.CreateInstance(shellType);
-                    shortcut = shellType.InvokeMember("CreateShortcut", BindingFlags.InvokeMethod, null, shell, new object[] { shortcutPath });
-                    Type shortcutType = shortcut.GetType();
-                    shortcutType.InvokeMember("TargetPath", BindingFlags.SetProperty, null, shortcut, new object[] { managerExe });
-                    shortcutType.InvokeMember("Arguments", BindingFlags.SetProperty, null, shortcut, new object[] { "--shortcut-launch \"" + target.Id + "\"" });
-                    shortcutType.InvokeMember("WorkingDirectory", BindingFlags.SetProperty, null, shortcut, new object[] { Path.GetDirectoryName(managerExe) });
-                    shortcutType.InvokeMember("IconLocation", BindingFlags.SetProperty, null, shortcut, new object[] { target.ExePath + ",0" });
-                    shortcutType.InvokeMember("Description", BindingFlags.SetProperty, null, shortcut, new object[] { "Запустить " + target.DisplayName + " через Dagami Agent Proxy" });
-                    shortcutType.InvokeMember("Save", BindingFlags.InvokeMethod, null, shortcut, null);
-                    created.Add(shortcutPath);
-                }
-                finally
-                {
-                    if (shortcut != null && Marshal.IsComObject(shortcut)) Marshal.FinalReleaseComObject(shortcut);
-                    if (shell != null && Marshal.IsComObject(shell)) Marshal.FinalReleaseComObject(shell);
-                }
-            }
-            return created;
+            return NativeShortcuts.Current.EnablePrepared(target, Process.GetCurrentProcess().MainModule.FileName,
+                NativeShortcuts.UserFolders(), () => {}, () => {}, true);
         }
 
         private bool CheckProxyConnection(string proxyUrl)

@@ -84,7 +84,7 @@ class PortableShortcuts:
                 info={'CFBundleName':adapter.display_name+' — Proxy','CFBundleIdentifier':'local.devproxy.launch.'+app,'CFBundleExecutable':'launch','CFBundlePackageType':'APPL','CFBundleVersion':'1','LSUIElement':True}
                 script='#!/bin/sh\nexec '+shlex.join(command)+' -- "$@"\n'
                 planned=[(bundle/'Contents'/'Info.plist',plistlib.dumps(info),0o644)]
-                if app in ('codex','opencode'):
+                if app_adapter(app).is_cli:
                     terminal=bundle/'Contents'/'Resources'/'session.command'
                     planned.append((terminal,script.encode(),0o700))
                     script='#!/bin/sh\nexec /usr/bin/open -a Terminal '+shlex.quote(str(terminal))+'\n'
@@ -106,10 +106,10 @@ class PortableShortcuts:
                         except ValueError:continue
                         if not tokens or Path(tokens[0]).name.casefold() not in exe_names:continue
                         rewritten=rewrite_desktop(raw,command)
-                        if app in ('codex','opencode'):rewritten=re.sub(r'^Terminal=.*$', 'Terminal=true',rewritten,flags=re.M) if re.search(r'^Terminal=',rewritten,re.M) else rewritten+'Terminal=true\n'
+                        if app_adapter(app).is_cli:rewritten=re.sub(r'^Terminal=.*$', 'Terminal=true',rewritten,flags=re.M) if re.search(r'^Terminal=',rewritten,re.M) else rewritten+'Terminal=true\n'
                         planned.append((user/source.name,rewritten.encode(),0o644))
                 if not planned:
-                    raw='[Desktop Entry]\nType=Application\nName='+adapter.display_name+'\nExec='+desktop_quote(str(exe))+' %U\nTerminal='+('true' if app in ('codex','opencode') else 'false')+'\n'
+                    raw='[Desktop Entry]\nType=Application\nName='+adapter.display_name+'\nExec='+desktop_quote(str(exe))+' %U\nTerminal='+('true' if app_adapter(app).is_cli else 'false')+'\n'
                     planned=[(user/('devproxy-'+app+'.desktop'),rewrite_desktop(raw,command).encode(),0o644)]
                     if planned[0][0].exists():raise RuntimeError('Ярлык уже существует без записи в журнале.')
             else:raise RuntimeError('Эта ОС не поддерживается.')

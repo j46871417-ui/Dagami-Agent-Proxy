@@ -68,6 +68,18 @@ class BuildTests(unittest.TestCase):
                 self.assertEqual(original,(output/'dagami-agent-proxy-source.zip').read_bytes())
                 self.assertFalse(list(output.glob('*.tmp')))
 
+    def test_source_archive_contains_public_reports_without_runtime_data(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root=Path(temp).resolve();output=root/'out'
+            public={'bug_reports/README.md','bug_reports/service/server.py','bug_reports/service/requirements.txt','bug_reports/public/support/agent-proxy/index.html','bug_reports/public/support/agent-proxy/admin/index.html'}
+            private={'bug_reports/service/.env','bug_reports/service/reports.sqlite','bug_reports/public/admin-password.txt','bug_reports/service/backups/snapshot.sqlite'}
+            for name in public|private:
+                path=root/name;path.parent.mkdir(parents=True,exist_ok=True);path.write_text('fixture')
+            with patch.object(build_portable,'ROOT',root),patch.object(sys,'argv',['build_portable.py','--source-only','--output-dir',str(output)]),contextlib.redirect_stdout(io.StringIO()):
+                build_portable.main()
+            with zipfile.ZipFile(output/'dagami-agent-proxy-source.zip') as archive:
+                self.assertEqual(public,set(archive.namelist()))
+
     def test_linux_and_mac_build_one_entry_no_companion(self):
         for platform in ('linux','darwin'):
             with self.subTest(platform=platform),tempfile.TemporaryDirectory() as temp:

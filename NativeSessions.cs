@@ -30,6 +30,40 @@ namespace DevProxyApp
         }
     }
     public static class NativeAppPatcher {
+        static void RestoreFiles(Dictionary<string,byte[]> files) {
+            var failures=new List<string>();
+            foreach(var pair in files) {
+              try {
+                if(pair.Value!=null&&File.Exists(pair.Key)&&AntigravityIntegration.Hash(File.ReadAllBytes(pair.Key))==AntigravityIntegration.Hash(pair.Value))continue;
+                if(pair.Value==null) {if(File.Exists(pair.Key))File.Delete(pair.Key);continue;}
+                Directory.CreateDirectory(Path.GetDirectoryName(pair.Key));
+                string temp=Path.Combine(Path.GetDirectoryName(pair.Key),".dagami-"+Guid.NewGuid().ToString("N")+".tmp");
+                try {File.WriteAllBytes(temp,pair.Value);if(File.Exists(pair.Key))File.Replace(temp,pair.Key,null);else File.Move(temp,pair.Key);}finally{if(File.Exists(temp))File.Delete(temp);}
+              }catch(Exception ex){failures.Add(Path.GetFileName(pair.Key)+": "+ex.Message);}
+            }
+            if(failures.Count>0)throw new IOException("Не удалось вернуть файлы: "+string.Join("; ",failures.ToArray()));
+        }
+        public static void RestoreSettings(AppTarget target) {
+            if(!ApplicationSupport.SupportsSettings(target))return;
+            ApplicationSupport.ResolveSettings(target);
+            if(!string.IsNullOrEmpty(target.ConfigPath)&&File.Exists(target.ConfigPath+".devproxy.bak")) {
+                string message;if(!ProxyEngine.RestoreTarget(target,out message))throw new IOException(message);
+                Logger.Log("[Restore] "+message);
+            }
+        }
+        public static List<string> RestoreWithLauncher(AppTarget target,Func<List<string>> restoreLauncher) {
+            var before=new Dictionary<string,byte[]>();
+            if(ApplicationSupport.SupportsSettings(target)) {
+                ApplicationSupport.ResolveSettings(target);
+                if(!string.IsNullOrEmpty(target.ConfigPath)&&File.Exists(target.ConfigPath+".devproxy.bak"))
+                    foreach(string path in new[]{target.ConfigPath,target.ConfigPath+".devproxy.bak"})before[path]=File.Exists(path)?File.ReadAllBytes(path):null;
+            }
+            try {RestoreSettings(target);return restoreLauncher();}
+            catch(Exception error) {
+                try {RestoreFiles(before);}catch(Exception rollback){throw new IOException(error.Message+" "+rollback.Message,error);}
+                throw;
+            }
+        }
         public static List<string> Apply(AppTarget target, string manager, IEnumerable<string> folders, NativeShortcuts shortcuts) {
             string summary;
             return Apply(target, manager, folders, shortcuts, null, out summary, false);
@@ -37,60 +71,68 @@ namespace DevProxyApp
 
         public static List<string> Apply(AppTarget target, string manager, IEnumerable<string> folders, NativeShortcuts shortcuts, string proxyUrl, out string summary, bool autoCreateShortcut = true) {
             if (target == null || !target.IsInstalled) throw new InvalidOperationException("Приложение не найдено.");
-            if(NativeCliApps.IsCli(target)) {
-                string shim=NativeCliApps.Current.Enable(target,manager);
-                summary="Команда «"+Path.GetFileNameWithoutExtension(target.ExePath)+"» настроена через прокси. Полностью перезапустите терминал. Исходный CLI не изменялся.";
-                return new List<string>{shim};
+            if(NativeCliApps.UsesCommandShim(target)) {
+                Dictionary<string,string> snapshot = null;
+                string preparation = "";
+                try {
+                    if (AntigravityIntegration.Supports(target.ExePath)) {
+                        snapshot = AntigravityIntegration.Snapshot(target.ExePath);
+                        preparation = AntigravityIntegration.PrepareClient(target.ExePath).Message;
+                    }
+                    string shim=NativeCliApps.Current.Enable(target,manager);
+                    summary="Команда «"+NativeCliApps.CommandName(target)+"» настроена через прокси. Полностью перезапустите терминал." + (preparation.Length > 0 ? "\r\n" + preparation : " Исходный CLI не изменялся.");
+                    return new List<string>{shim};
+                } catch { if (snapshot != null) AntigravityIntegration.Rollback(snapshot); throw; }
             }
-            string backend = null, before = null;
+            Dictionary<string,string> before = null;
             bool binaryPrepared=false, binaryChanged=false;
+            string binaryMessage = null;
             bool antigravity = string.Equals(Path.GetFileName(target.ExePath), "Antigravity.exe", StringComparison.OrdinalIgnoreCase);
 
             string configResult = null;
-            bool configApplied = false;
-            if (!string.IsNullOrEmpty(proxyUrl) && !string.IsNullOrEmpty(target.ConfigPath) && target.ConfigPath != "git://global") {
+            var configBefore=new Dictionary<string,byte[]>();
+            ApplicationSupport.ResolveSettings(target);
+            try {
+            if (!string.IsNullOrEmpty(proxyUrl) && ApplicationSupport.SupportsSettings(target) && !string.IsNullOrEmpty(target.ConfigPath) && target.ConfigPath != "git://global") {
+                foreach(string file in new[]{target.ConfigPath,target.ConfigPath+".devproxy.bak"})configBefore[file]=File.Exists(file)?File.ReadAllBytes(file):null;
                 string msg;
-                if (ProxyEngine.ApplyProxyToTarget(target, proxyUrl, out msg)) {
-                    configApplied = true;
+                if (ProxyEngine.ApplyProxyToTarget(target, ApplicationSupport.LocalSettingsProxy(proxyUrl), out msg)) {
                     configResult = "прокси записан в " + Path.GetFileName(target.ConfigPath);
                 } else {
-                    configResult = msg;
+                    throw new IOException(msg);
                 }
             }
 
-            try {
                 var paths = shortcuts.EnablePrepared(target, manager, folders, () => {
                     if (!antigravity) return;
-                    try { backend = AntigravityIntegration.BackendPath(target.ExePath); }
-                    catch(UnsupportedAntigravityBinaryException) { backend=null; }
-                    if(backend!=null)before = AntigravityIntegration.Hash(File.ReadAllBytes(backend));
+                    try { before = AntigravityIntegration.Snapshot(target.ExePath); }
+                    catch(UnsupportedAntigravityBinaryException) { before=null; }
                     // Unexpected write/verification failures still enter the guarded
                     // rollback path. Only a classified incompatibility is optional.
                     binaryChanged=true;
-                    var result=AntigravityIntegration.PrepareForProxy(target.ExePath);
+                    var result=AntigravityIntegration.PrepareClient(target.ExePath);
                     binaryPrepared=result.Prepared;
-                    binaryChanged=binaryPrepared && backend!=null && before!=AntigravityIntegration.Hash(File.ReadAllBytes(backend));
+                    binaryMessage=result.Message;
+                    binaryChanged=false;
+                    if (before != null) foreach (var pair in before) if (pair.Value != AntigravityIntegration.Hash(File.ReadAllBytes(pair.Key))) binaryChanged=true;
                     Logger.Log("[Patch] " + result.Message);
                 }, () => {
-                    if (binaryChanged && backend != null && before != null && before != AntigravityIntegration.Hash(File.ReadAllBytes(backend))) {
-                        AntigravityIntegration.Restore(target.ExePath);
-                        if (before != AntigravityIntegration.Hash(File.ReadAllBytes(backend))) throw new IOException("Не удалось вернуть исходное состояние клиента.");
-                    }
+                    if (binaryChanged && before != null) AntigravityIntegration.Rollback(before);
                 }, autoCreateShortcut);
 
                 var parts = new List<string>();
                 parts.Add("ярлыков: " + paths.Count);
+                if(shortcuts.SkippedReadOnlyLinks>0)parts.Add("недоступных ярлыков пропущено: "+shortcuts.SkippedReadOnlyLinks+"; используйте настроенную пользовательскую копию");
                 if (!string.IsNullOrEmpty(configResult)) parts.Add(configResult);
                 if (antigravity && binaryPrepared) parts.Add("бинарная подготовка проверена");
                 if (AppProxyPolicy.IsGemini(target)) parts.Add("параметры Chromium/WebView2 при запуске; доступ к сервису проверяется отдельно");
                 summary = "Готово (" + string.Join(", ", parts.ToArray()) + "). Запускайте приложение привычным ярлыком.";
                 if(antigravity && !binaryPrepared)summary="Прокси и ярлыки настроены: "+paths.Count+". Бинарная подготовка пропущена — несовместимые сигнатуры, backend не изменялся. Проверьте вход и модели в Antigravity.";
+                if (antigravity && !string.IsNullOrEmpty(binaryMessage)) summary += "\r\n" + binaryMessage;
+                if(antigravity&&shortcuts.SkippedReadOnlyLinks>0)summary+="\r\nНедоступные ярлыки остались без изменений; используйте настроенную пользовательскую копию.";
                 return paths;
-            } catch (Exception) {
-                if (configApplied) {
-                    string rollbackMsg;
-                    ProxyEngine.RestoreTarget(target, out rollbackMsg);
-                }
+            } catch (Exception error) {
+                try {RestoreFiles(configBefore);}catch(Exception rollback){throw new IOException(error.Message+" "+rollback.Message,error);}
                 throw;
             }
         }
@@ -129,7 +171,7 @@ namespace DevProxyApp
         void ConfigureNativeShortcuts(bool restore) {
             var target = SelectedNativeTarget();
             if (!restore) SaveNativeSettings();
-            if(NativeCliApps.IsCli(target)) {
+            if(NativeCliApps.IsCommandTarget(target)) {
                 if(restore)NativeCliApps.Current.Restore(target.Id);
                 else NativeCliApps.Current.Enable(target,Process.GetCurrentProcess().MainModule.FileName);
                 UpdateNativeDetails();
@@ -137,8 +179,8 @@ namespace DevProxyApp
                 return;
             }
             var store = NativeShortcuts.Current;
-            List<string> paths = restore ? store.Restore(target.Id) : store.Enable(target, Process.GetCurrentProcess().MainModule.FileName, NativeShortcuts.UserFolders());
-            if (paths.Count == 0) throw new InvalidOperationException(restore ? "Настроенных обычных ярлыков нет." : "Обычные ярлыки приложения на рабочем столе и в меню «Пуск» не найдены. Используйте «Ещё → Создать ярлык».");
+            List<string> paths = restore ? NativeAppPatcher.RestoreWithLauncher(target,()=>store.Restore(target.Id)) : store.EnablePrepared(target, Process.GetCurrentProcess().MainModule.FileName, NativeShortcuts.UserFolders(), () => {}, () => {}, true);
+            if (paths.Count == 0) throw new InvalidOperationException(restore ? "Настроенных обычных ярлыков нет." : "Ярлыки не найдены. Используйте «Ещё → Найти или создать ярлык».");
             foreach (string path in paths) Logger.Log("[Shortcut] " + (restore ? "Восстановлен: " : "Прокси включён: ") + path);
             UpdateNativeDetails();
             System.Windows.Forms.MessageBox.Show(this, restore ? "Обычные ярлыки восстановлены. Запуск снова выполняется напрямую." :

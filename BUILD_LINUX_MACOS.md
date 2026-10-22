@@ -1,6 +1,6 @@
 # Как собрать Dagami Agent Proxy на Linux и macOS
 
-Выпуск `v0.1.0-alpha.10`: готовый файл есть для Windows. Для Linux и macOS
+Выпуск `v0.2.0-alpha`: готовый файл есть для Windows. Для Linux и macOS
 дан код и этот план сборки. Запуск, запрос прав, DNS и трей на этих ОС ещё
 не прошли наши живые пробы. Сборка на своей машине не равна полному тесту сети.
 
@@ -9,15 +9,15 @@ Windows не создаст Linux-файл или macOS `.app` этим скри
 
 ## 1. Получить код
 
-Скачайте `Dagami-Agent-Proxy-v0.1.0-alpha.10-source.zip` из
-[этого выпуска](https://github.com/j46871417-ui/Dagami-Agent-Proxy/releases/tag/v0.1.0-alpha.10).
+Скачайте `Dagami-Agent-Proxy-v0.2.0-alpha-source.zip` из
+[этого выпуска](https://github.com/j46871417-ui/Dagami-Agent-Proxy/releases/tag/v0.2.0-alpha).
 Распакуйте в новую папку и откройте в ней Terminal. В ней должны быть
 `pyproject.toml`, `build_portable.py`, `devproxy_gui.py` и папка `devproxy_pkg`.
 
 Либо получите тот же код через Git:
 
 ```sh
-git clone --branch v0.1.0-alpha.10 --depth 1 https://github.com/j46871417-ui/Dagami-Agent-Proxy.git Dagami-Agent-Proxy
+git clone --branch v0.2.0-alpha --depth 1 https://github.com/j46871417-ui/Dagami-Agent-Proxy.git Dagami-Agent-Proxy
 cd Dagami-Agent-Proxy
 ```
 

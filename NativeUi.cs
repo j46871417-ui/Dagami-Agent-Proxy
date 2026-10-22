@@ -78,11 +78,12 @@ namespace DevProxyApp
         private void BuildAppActionsMenu()
         {
             _appActions = new ContextMenuStrip();
-            _appActions.Items.Add(AppMenuItem("Создать ярлык", () => {
+            _appActions.Items.Add(AppMenuItem("Найти или создать ярлык", () => {
                 var target = SelectedNativeTarget(); SaveNativeSettings();
                 if (!target.IsInstalled) throw new InvalidOperationException("Исполняемый файл не найден.");
                 foreach (string path in CreateManagedShortcuts(target)) Logger.Log("[✓] Ярлык создан: " + path);
-                _appFeedback.Text = "Ярлык Dagami Agent Proxy создан на рабочем столе и в меню «Пуск».";
+                UpdateNativeDetails();
+                _appFeedback.Text = "Ярлыки найдены или созданы и проверены. Удалённые записи восстановлению не мешают.";
             }));
             _appActions.Items.Add(AppMenuItem("Проверить прокси", CheckFluentProxy));
             _appActions.Items.Add(AppMenuItem("Изменить прокси", () => ShowFluentPage(1)));
@@ -95,7 +96,7 @@ namespace DevProxyApp
             _appActions.Items.Add(_stopAppItem);
             var advanced = new ToolStripMenuItem("Дополнительно");
             advanced.DropDownItems.Add(AppMenuItem("Записать настройки приложения", () => ApplySelectedNativeTarget(false)));
-            advanced.DropDownItems.Add(AppMenuItem("Восстановить настройки приложения", () => ApplySelectedNativeTarget(true)));
+            advanced.DropDownItems.Add(AppMenuItem("Восстановить исходные настройки (заменить ручные правки)", () => ApplySelectedNativeTarget(true)));
             advanced.DropDownItems.Add(AppMenuItem("Проверить ярлыки", UpdateNativeDetails));
             _restoreShortcutItem = AppMenuItem("Восстановить обычные ярлыки", () => ConfigureNativeShortcuts(true));
             advanced.DropDownItems.Add(_restoreShortcutItem);
@@ -192,18 +193,20 @@ namespace DevProxyApp
             _primaryAppAction.Enabled = !configured || (target != null && target.IsInstalled);
             _moreAppActions.Enabled = target != null;
             _patchAppAction.Enabled = target != null && target.IsInstalled;
-            _shortcutToggle.Enabled = target != null && target.IsInstalled && _shortcutIssue == null;
+            _shortcutToggle.Enabled = target != null && target.IsInstalled;
             _stopAppItem.Enabled = running;
             _removeAppItem.Enabled = target != null && target.IsCustom;
             _restoreShortcutItem.Enabled = _shortcutRecords > 0 || _shortcutIssue != null;
             string state = target == null ? "Выберите приложение" : !target.IsInstalled ? "Не установлено" :
                 running ? "Работает через Dagami Agent Proxy" : "Сессия Dagami Agent Proxy не запущена";
             _targetDetails.Text = _proxyCheckFailed ? "Ошибка подключения к прокси" : state;
-            _shortcutExplanation.Text = target == null ? "Выберите приложение, чтобы настроить его ярлыки." : _shortcutIssue ??
+            _shortcutExplanation.Text = target == null ? "Выберите приложение, чтобы настроить его ярлыки." : _shortcutIssue != null ?
+                _shortcutIssue + " Для удалённого или заново установленного ярлыка нажмите «Пропатчить»." :
                 (_shortcutRecords > 0 ? "Включено · ярлыков: " + _shortcutRecords + ". Dagami Agent Proxy запускается в фоне до выключения режима." :
                 "Выключено. Для запуска привычным ярлыком нажмите «Пропатчить».");
-            bool cli=NativeCliApps.IsCli(target);
+            bool cli=NativeCliApps.IsCommandTarget(target);
             _shortcutToggle.Text=cli?"Запускать обычную команду через прокси":"Запускать через прокси из обычного ярлыка";
+            if(target!=null&&ApplicationSupport.Kind(target)=="git")_shortcutToggle.Text="Команда dagami-git через прокси";
             if(cli&&_shortcutIssue==null)_shortcutExplanation.Text=_shortcutRecords>0?"Включено для команды. После изменения полностью перезапустите терминал. Явный путь к исходному EXE обходит запускатель.":"Выключено. «Пропатчить» настроит команду CLI в пользовательском PATH; ярлыки не нужны.";
             _restoreShortcutItem.Text=cli?"Восстановить прямой запуск команды":"Восстановить обычные ярлыки";
             if (_proxyCheckMessage != null) _appFeedback.Text = _proxyCheckMessage;
@@ -284,7 +287,7 @@ namespace DevProxyApp
                     var item = new ListViewItem(target.DisplayName) { Tag = target };
                     item.SubItems.Add(target.IsInstalled ? "Установлено" : "Не найдено");
                     item.SubItems.Add(target.ExePath ?? "");
-                    item.ToolTipText = target.ExePath ?? target.DisplayName;
+                    item.ToolTipText = (target.ExePath ?? target.DisplayName)+"\r\n"+ApplicationSupport.Describe(target);
                     item.Checked = ConfigManager.Instance.CheckedIds.Contains(target.Id);
                     if (!target.IsInstalled) item.ForeColor = SystemColors.GrayText;
                     _targetList.Items.Add(item);
@@ -308,7 +311,7 @@ namespace DevProxyApp
                 _shortcutRecords = 0; _shortcutIssue = null;
                 if (_targetList.SelectedItems.Count > 0) {
                     AppTarget target = (AppTarget)_targetList.SelectedItems[0].Tag;
-                    try { _shortcutRecords = NativeCliApps.IsCli(target)?NativeCliApps.Current.VerifiedCount(target.Id,out _shortcutIssue):NativeShortcuts.Current.VerifiedCount(target.Id, out _shortcutIssue); }
+                    try { _shortcutRecords = NativeCliApps.IsCommandTarget(target)?NativeCliApps.Current.VerifiedCount(target.Id,out _shortcutIssue):NativeShortcuts.Current.VerifiedCount(target.Id, out _shortcutIssue); }
                     catch (Exception) { _shortcutIssue = "Не удалось прочитать настройки ярлыков. Откройте журнал для проверки."; }
                 }
                 _shortcutToggle.Checked = _shortcutRecords > 0 && _shortcutIssue == null;

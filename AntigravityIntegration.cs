@@ -20,7 +20,7 @@ namespace DevProxyApp
         public string Message { get; private set; }
         internal AntigravityPreparationResult(bool prepared, string message) { Prepared=prepared; Message=message; }
     }
-    // Independent implementation. Only protobuf descriptor/tag names are changed;
+    // Independent implementation. Only metadata and proxy-variable literals change;
     // executable instructions, TLS verification and server authentication are preserved.
     public static class AntigravityIntegration
     {
@@ -34,10 +34,90 @@ namespace DevProxyApp
 
         public static string BackendPath(string executable)
         {
+            string name = Path.GetFileName(executable);
+            if (name.Equals("agy.exe", StringComparison.OrdinalIgnoreCase) ||
+                (name.StartsWith("language_server", StringComparison.OrdinalIgnoreCase) && name.EndsWith(".exe", StringComparison.OrdinalIgnoreCase))) {
+                if (!File.Exists(executable)) throw new UnsupportedAntigravityBinaryException("Файл Antigravity не найден: " + name);
+                return Path.GetFullPath(executable);
+            }
             string candidate = Path.Combine(Path.GetDirectoryName(executable), "resources", "bin", "language_server.exe");
-            if (!File.Exists(candidate))
-                throw new UnsupportedAntigravityBinaryException("Не найден поддерживаемый backend resources/bin/language_server.exe. Бинарная подготовка этой структуры Antigravity не поддерживается.");
+            if (!File.Exists(candidate)) {
+                string directory = Path.Combine(Path.GetDirectoryName(executable), @"resources\app\extensions\antigravity\bin");
+                string[] matches = Directory.Exists(directory) ? Directory.GetFiles(directory, "language_server*.exe") : new string[0];
+                if (matches.Length != 1)
+                    throw new UnsupportedAntigravityBinaryException("Backend Antigravity не найден или найдено несколько файлов. Добавьте нужный language_server*.exe либо agy.exe отдельно.");
+                candidate = matches[0];
+            }
             return candidate;
+        }
+
+        public static bool Supports(string executable) {
+            string name = Path.GetFileName(executable ?? "");
+            return name.Equals("Antigravity.exe", StringComparison.OrdinalIgnoreCase) || name.Equals("agy.exe", StringComparison.OrdinalIgnoreCase) ||
+                (name.StartsWith("language_server", StringComparison.OrdinalIgnoreCase) && name.EndsWith(".exe", StringComparison.OrdinalIgnoreCase));
+        }
+
+        public static List<string> BackendPaths(string executable) {
+            if (!Path.GetFileName(executable).Equals("Antigravity.exe", StringComparison.OrdinalIgnoreCase))
+                return new List<string> { BackendPath(executable) };
+            var paths = new List<string>(); string root = Path.GetDirectoryName(executable);
+            foreach (string folder in new[] { Path.Combine(root, @"resources\bin"), Path.Combine(root, @"resources\app\extensions\antigravity\bin") }) {
+                if (!Directory.Exists(folder)) continue;
+                foreach (string file in Directory.GetFiles(folder, "language_server*.exe"))
+                    if (!paths.Exists(path => string.Equals(path, file, StringComparison.OrdinalIgnoreCase))) paths.Add(file);
+            }
+            if (paths.Count == 0) throw new UnsupportedAntigravityBinaryException("В Antigravity не найден language_server*.exe. Прокси можно использовать отдельно от бинарной подготовки.");
+            paths.Sort(StringComparer.OrdinalIgnoreCase); return paths;
+        }
+
+        public static Dictionary<string, string> Snapshot(string executable) {
+            var result = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            foreach (string path in BackendPaths(executable)) result[path] = Hash(File.ReadAllBytes(path));
+            return result;
+        }
+        public static void Rollback(Dictionary<string, string> before) {
+            var errors = new List<string>();
+            foreach (var pair in before) try {
+                if (Hash(File.ReadAllBytes(pair.Key)) == pair.Value) continue;
+                Restore(pair.Key);
+                if (Hash(File.ReadAllBytes(pair.Key)) != pair.Value) throw new IOException("Исходный SHA-256 не совпал.");
+            } catch (Exception ex) { errors.Add(Path.GetFileName(pair.Key) + ": " + ex.Message); }
+            if (errors.Count > 0) throw new IOException("Откат клиента не завершён: " + string.Join("; ", errors.ToArray()));
+        }
+        public static AntigravityPreparationResult PrepareClient(string executable) {
+            List<string> paths;
+            try { paths = BackendPaths(executable); }
+            catch (UnsupportedAntigravityBinaryException ex) { return new AntigravityPreparationResult(false, ex.Message); }
+            var before = new Dictionary<string, string>(); var messages = new List<string>(); bool prepared = false; int skipped = 0;
+            try {
+                foreach (string path in paths) {
+                    before[path] = Hash(File.ReadAllBytes(path));
+                    var result = PrepareForProxy(path); prepared |= result.Prepared; if (!result.Prepared) skipped++;
+                    messages.Add(Path.GetFileName(path) + ": " + result.Message);
+                }
+                return new AntigravityPreparationResult(prepared, (prepared && skipped > 0 ? "Частичная подготовка: есть неподдержанные backend.\r\n" : "") + string.Join(Environment.NewLine, messages.ToArray()));
+            } catch (Exception error) {
+                try { Rollback(before); }
+                catch (Exception rollback) { throw new IOException(error.Message + " " + rollback.Message, error); }
+                throw;
+            }
+        }
+        public static string InspectClient(string executable) {
+            var messages = new List<string>();
+            foreach (string path in BackendPaths(executable)) {
+                try { messages.Add(path + ": " + Inspect(path)); }
+                catch (UnsupportedAntigravityBinaryException ex) { messages.Add(path + ": " + ex.Message); }
+            }
+            return string.Join(Environment.NewLine, messages.ToArray());
+        }
+        public static string RestoreClient(string executable) {
+            var messages = new List<string>(); var errors = new List<string>();
+            foreach (string path in BackendPaths(executable)) {
+                try { messages.Add(Path.GetFileName(path) + ": " + Restore(path)); }
+                catch (Exception ex) { errors.Add(Path.GetFileName(path) + ": " + ex.Message); }
+            }
+            if (errors.Count > 0) throw new IOException("Восстановление выполнено частично: " + string.Join("; ", errors.ToArray()));
+            return string.Join(Environment.NewLine, messages.ToArray());
         }
 
         public static string Hash(byte[] data)
@@ -63,6 +143,24 @@ namespace DevProxyApp
             // and its matching Go tag must agree; partial or ambiguous builds fail.
             var offsets = new List<int>();
             replacements = new List<byte[]>();
+            bool legacy = true;
+            foreach (string pattern in Patterns) if (FindAll(original, Encoding.ASCII.GetBytes(pattern)).Count == 0) { legacy = false; break; }
+            if (!legacy) {
+                // Newer Go builds use different protobuf field numbers/layouts.
+                // Require both a descriptor and its Go tag, plus Go build data.
+                // Unknown/partially modified files are never patched by guesswork.
+                bool go = FindAll(original, Encoding.ASCII.GetBytes("Go build ID:")).Count > 0 ||
+                    FindAll(original, Encoding.ASCII.GetBytes("Go buildinf:")).Count > 0;
+                bool descriptor = FindAll(original, Encoding.ASCII.GetBytes("\n\nineligible\x18")).Count > 0;
+                bool tag = FindAll(original, Encoding.ASCII.GetBytes("name=ineligible,")).Count > 0;
+                if (!go || !descriptor || !tag || FindAll(original, Encoding.ASCII.GetBytes("dpeligible")).Count > 0 ||
+                    FindAll(original, Encoding.ASCII.GetBytes("inexigible")).Count > 0)
+                    throw new UnsupportedAntigravityBinaryException("Не найдена согласованная структура protobuf Antigravity. Файл не изменён; SHA-256: " + Hash(original) + ".");
+                var matches = FindAll(original, Encoding.ASCII.GetBytes("ineligible"));
+                if (matches.Count < 2 || matches.Count > 64) throw new UnsupportedAntigravityBinaryException("Неоднозначное количество полей Antigravity; файл не изменён.");
+                foreach (int offset in matches) { offsets.Add(offset); replacements.Add(Encoding.ASCII.GetBytes("dpeligible")); }
+                return offsets;
+            }
             foreach (string pattern in Patterns) {
                 byte[] from = Encoding.ASCII.GetBytes(pattern);
                 byte[] to = Encoding.ASCII.GetBytes(pattern.Replace("ineligible", "dpeligible"));
@@ -81,6 +179,11 @@ namespace DevProxyApp
             byte[] patched = (byte[])original.Clone();
             for (int i = 0; i < offsets.Count; i++) Array.Copy(replacements[i], 0, patched, offsets[i], replacements[i].Length);
             changes = offsets.Count;
+            // A private process environment variable lets managed LS/agy traffic
+            // use the existing bridge without changing Windows environment.
+            var proxyOffsets = FindAll(original, Encoding.ASCII.GetBytes("https_proxy"));
+            if (proxyOffsets.Count > 8) throw new UnsupportedAntigravityBinaryException("Неоднозначные переменные прокси Antigravity; файл не изменён.");
+            foreach (int offset in proxyOffsets) { Array.Copy(Encoding.ASCII.GetBytes("AG_LS_PROXY"), 0, patched, offset, 11); changes++; }
             return patched;
         }
 
@@ -103,7 +206,10 @@ namespace DevProxyApp
             if (manifest != null && hash == Convert.ToString(manifest["patched_sha256"])) {
                 if (!File.Exists(backend + BackupSuffix) || Hash(File.ReadAllBytes(backend + BackupSuffix)) != Convert.ToString(manifest["original_sha256"]))
                     throw new InvalidDataException("Подготовленный клиент найден, но резервная копия повреждена или отсутствует.");
-                return "Клиент подготовлен; резервная копия проверена.";
+                bool legacyProxy = FindAll(current, Encoding.ASCII.GetBytes("https_proxy")).Count > 0 &&
+                    FindAll(current, Encoding.ASCII.GetBytes("AG_LS_PROXY")).Count == 0;
+                return "Клиент подготовлен; резервная копия проверена. Файл: " + Path.GetFileName(backend) + "." +
+                    (legacyProxy ? " Прежний патч использует HTTPS_PROXY управляемого процесса. Для отдельной AG_LS_PROXY выполните «Отменить подготовку», затем «Подготовить клиент»." : "");
             }
             List<byte[]> replacements; int count=ValidatePatterns(current,out replacements).Count;
             return "Antigravity " + FileVersionInfo.GetVersionInfo(executable).ProductVersion + ": найдено " + count + " сигнатур; требуется подготовка клиента.";
@@ -111,7 +217,7 @@ namespace DevProxyApp
 
         private static void AtomicWrite(string path, byte[] bytes)
         {
-            string temp = path + "." + Guid.NewGuid().ToString("N") + ".tmp";
+            string temp = Path.Combine(Path.GetDirectoryName(path), ".dagami-" + Guid.NewGuid().ToString("N") + ".tmp");
             try {
                 using (var stream = new FileStream(temp, FileMode.CreateNew, FileAccess.Write, FileShare.None)) {
                     stream.Write(bytes, 0, bytes.Length); stream.Flush(true);
@@ -123,7 +229,7 @@ namespace DevProxyApp
 
         private static void EnsureNotRunning(string backend)
         {
-            foreach (Process process in Process.GetProcessesByName("language_server")) {
+            foreach (Process process in Process.GetProcessesByName(Path.GetFileNameWithoutExtension(backend))) {
                 try {
                     if (string.Equals(process.MainModule.FileName, backend, StringComparison.OrdinalIgnoreCase))
                         throw new InvalidOperationException("Закройте Antigravity перед подготовкой или восстановлением клиента.");
@@ -145,8 +251,21 @@ namespace DevProxyApp
                 int changes;
                 byte[] patched = PatchData(original, out changes);
                 string backup = backend + BackupSuffix;
-                if (File.Exists(backup) && Hash(File.ReadAllBytes(backup)) != originalHash)
-                    throw new InvalidOperationException("Antigravity обновлён, а резервная копия относится к другой версии. Архивируйте старые .devproxy-region.bak/.json перед новой подготовкой.");
+                if (File.Exists(backup) && Hash(File.ReadAllBytes(backup)) != originalHash) {
+                    if (previous == null || Hash(File.ReadAllBytes(backup)) != Convert.ToString(previous["original_sha256"]))
+                        throw new InvalidOperationException("Резервная копия Antigravity не соответствует манифесту. Подготовка остановлена.");
+                    // Compatible application update: keep the previous generation
+                    // and take a new baseline, rather than blocking every upgrade.
+                    string archive = backend + ".devproxy-history"; Directory.CreateDirectory(archive);
+                    string originalGenerationHash = Convert.ToString(previous["original_sha256"]);
+                    string generation = originalGenerationHash.Substring(0, 16);
+                    string archivedBackup = Path.Combine(archive, generation + ".bak");
+                    if (File.Exists(archivedBackup) && Hash(File.ReadAllBytes(archivedBackup)) != originalGenerationHash)
+                        throw new InvalidDataException("Архив старой версии занят другой копией; файлы не перезаписаны.");
+                    AtomicWrite(archivedBackup, File.ReadAllBytes(backup));
+                    AtomicWrite(Path.Combine(archive, generation + ".json"), File.ReadAllBytes(backend + ManifestSuffix));
+                    AtomicWrite(backup, original);
+                }
                 if (!File.Exists(backup)) AtomicWrite(backup, original);
                 if (Hash(File.ReadAllBytes(backup)) != originalHash) throw new InvalidDataException("Проверка резервной копии не пройдена.");
                 var manifest = new Dictionary<string, object> {
@@ -159,7 +278,7 @@ namespace DevProxyApp
                 AtomicWrite(backend, patched);
                 if (Hash(File.ReadAllBytes(backend)) != Convert.ToString(manifest["patched_sha256"]))
                     throw new InvalidDataException("Проверка записанного клиента не пройдена; используйте восстановление.");
-                return "Клиент подготовлен: " + changes + " согласованных полей. Оригинал сохранён и проверен по SHA-256.";
+                return "Клиент подготовлен: " + Path.GetFileName(backend) + ", изменений: " + changes + ". Оригинал сохранён и проверен по SHA-256.";
             }
         }
 

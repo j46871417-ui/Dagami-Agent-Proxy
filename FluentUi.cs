@@ -291,7 +291,10 @@ namespace DevProxyApp
             _shortcutExplanation = new Label { Dock = DockStyle.Fill, ForeColor = FluentTheme.Muted, Font = new Font("Segoe UI", 9), Margin = Padding.Empty };
             actionRows.Controls.Add(_shortcutExplanation, 0, 3);
             _appFeedback = new Label { Dock = DockStyle.Fill, ForeColor = FluentTheme.Muted, Font = new Font("Segoe UI", 9), Margin = Padding.Empty,
-                Text = "«Запустить» — разово. «Пропатчить» — для привычных ярлыков." };
+                AutoEllipsis=true, Text = "«Запустить» — разово. «Пропатчить» — для привычных ярлыков." };
+            var feedbackTip=new ToolTip{AutoPopDelay=30000,InitialDelay=400,ReshowDelay=100};
+            _appFeedback.TextChanged+=(sender,e)=>feedbackTip.SetToolTip(_appFeedback,_appFeedback.Text);
+            Disposed+=(sender,e)=>feedbackTip.Dispose();
             actionRows.Controls.Add(_appFeedback, 0, 4);
             actionCard.Controls.Add(actionRows); apps.Controls.Add(actionCard, 0, 3);
 
@@ -351,6 +354,10 @@ namespace DevProxyApp
                 BorderStyle = BorderStyle.None, WordWrap = true, BackColor = FluentTheme.Surface, ForeColor = FluentTheme.Text,
                 Font = new Font("Consolas", 10), AccessibleName = "Журнал Dagami Agent Proxy" };
             logCard.Controls.Add(_nativeLog);
+            var reportActions = new FlowLayoutPanel { Dock = DockStyle.Bottom, Height = 48, Padding = new Padding(0, 6, 0, 0) };
+            var reportButton = new FluentButton { Text = "Сообщить об ошибке", Width = 200, Height = 36 };
+            reportButton.Click += (sender, e) => { using (var dialog = new BugReportDialog()) dialog.ShowDialog(this); };
+            reportActions.Controls.Add(reportButton); logCard.Controls.Add(reportActions);
             Panel antigravityPage = BuildAntigravityPage();
             Panel[] pages = new Panel[] { apps, settingsPage, antigravityPage, logCard };
             string[] names = new string[] { "Приложения", "Подключение", "Antigravity", "Журнал" };

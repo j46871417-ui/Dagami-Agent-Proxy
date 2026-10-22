@@ -28,7 +28,7 @@ public static class NativeLoginChecks
             Assert(!flags.Contains("new-window"),"OAuth return forced another window");
             Assert(flags.Contains("--disable-quic") && flags.Contains("[::1]"),"Proxy/loopback policy missing");
             app.ExePath=@"C:\Apps\Cursor.exe";
-            Assert(NativeLogin.ElectronArguments(app,"http://127.0.0.1:53200",Path.Combine(temp,"profile")).Contains("user-data-dir"),"Other IDE isolation changed");
+            Assert(!NativeLogin.ElectronArguments(app,"http://127.0.0.1:53200",Path.Combine(temp,"profile")).Contains("user-data-dir"),"Cursor lost its real settings/account profile");
             string url="https://accounts.google.com/v3/signin/accountchooser?state=PRIVATE&code_challenge=SECRET";
             Assert(NativeLogin.ValidateLoginUrl(url)==url,"Valid URL changed");
             foreach(string bad in new string[]{"http://accounts.google.com/","https://accounts.google.com.evil.invalid/","https://user:pass@accounts.google.com/","https://accounts.google.com:444/",url+"\" --no-proxy-server"}) Reject(()=>NativeLogin.ValidateLoginUrl(bad));

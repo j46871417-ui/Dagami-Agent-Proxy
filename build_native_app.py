@@ -13,7 +13,8 @@ SOURCES = [
     "DevProxyApp.cs", "NativeUi.cs", "FluentUi.cs", "AntigravityIntegration.cs",
     "AntigravityUi.cs", "AntigravityLogin.cs", "NativeShortcuts.cs",
     "NativeLaunchBroker.cs", "NativeSessions.cs", "SystemDnsManager.cs", "NativeCli.cs", "Brand.cs",
-    "LicenseManager.cs", "AppProxyPolicy.cs", "NativeCliApps.cs", "NativeUpdates.cs",
+    "LicenseManager.cs", "AppProxyPolicy.cs", "ApplicationSupport.cs", "JetBrainsProxySettings.cs",
+    "ApplicationDiscovery.cs", "NativeCliApps.cs", "BugReports.cs", "NativeUpdates.cs",
     "UpdateInstaller.cs", "UpdateUi.cs", "NativeStartup.cs",
 ]
 

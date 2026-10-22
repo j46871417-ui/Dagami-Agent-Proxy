@@ -21,6 +21,10 @@ env/
 /finalize_local.py
 /docs/dagami-infra/
 
+# Public bug-report pages are source, not generated UI previews.
+!/bug_reports/public/support/agent-proxy/index.html
+!/bug_reports/public/support/agent-proxy/admin/index.html
+
 # Credentials and local state
 .env
 .env.*

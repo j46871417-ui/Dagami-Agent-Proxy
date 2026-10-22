@@ -9,13 +9,14 @@ import sys
 import shutil
 import re
 from typing import List, Optional, Tuple
-from .base import ApplicationAdapter
+from .base import ApplicationAdapter, is_cli_executable
 from ..core.profile import ProxyProfile
 from ..core.config_editor import ConfigEditor
 from ..core.recovery import StateManager
 
 
 class CodexCliAdapter(ApplicationAdapter):
+    is_cli = True
     @property
     def app_id(self) -> str:
         return "codex"
@@ -31,7 +32,7 @@ class CodexCliAdapter(ApplicationAdapter):
     def detect_executable(self) -> Optional[str]:
         # 1. Check PATH
         p = shutil.which("codex") or shutil.which("codex.exe")
-        if p:
+        if p and is_cli_executable(p):
             return p
 
         # 2. Check OpenAI Codex standard installed path
@@ -39,10 +40,13 @@ class CodexCliAdapter(ApplicationAdapter):
             local = os.environ.get("LOCALAPPDATA", "")
             base = os.path.join(local, "OpenAI", "Codex", "bin")
             if os.path.exists(base):
-                for entry in os.listdir(base):
-                    sub = os.path.join(base, entry, "codex.exe")
-                    if os.path.exists(sub):
-                        return sub
+                try:
+                    files = [os.path.join(base, entry, "codex.exe") for entry in os.listdir(base)]
+                    files = [path for path in files if os.path.isfile(path)]
+                    for path in sorted(files, key=os.path.getmtime, reverse=True):
+                        if is_cli_executable(path): return path
+                except OSError:
+                    pass
 
         home = os.path.expanduser("~")
         candidates = [
@@ -51,7 +55,7 @@ class CodexCliAdapter(ApplicationAdapter):
             "/usr/local/bin/codex"
         ]
         for c in candidates:
-            if os.path.exists(c):
+            if os.path.isfile(c) and is_cli_executable(c):
                 return c
         return None
 
@@ -65,80 +69,46 @@ class CodexCliAdapter(ApplicationAdapter):
         return []
 
     def apply_persistent(self, profile: ProxyProfile) -> Tuple[bool, str]:
-        return False, "Codex persistent proxy configuration is not supported. Use isolated session mode so proxy settings are passed through the process environment."
-
-        # Kept below for migration/restore compatibility with older DevProxy state.
-        configs = self.detect_config_files()
-        target_path = configs[0]
-        if not os.path.exists(target_path):
-            return False, f"Codex config not found at {target_path}"
-
-        proxy_url = profile.to_url()
-        try:
-            with open(target_path, "r", encoding="utf-8") as f:
-                content = f.read()
-        except Exception as e:
-            return False, f"Failed to read {target_path}: {e}"
-
-        # Match proxy = "..." in config.toml
-        orig_proxy = None
-        m = re.search(r'^\s*proxy\s*=\s*"([^"]*)"', content, re.MULTILINE)
-        if m:
-            orig_proxy = m.group(1)
-
-        StateManager.record_applied_change(
-            self.app_id,
-            target_path,
-            {"proxy": proxy_url},
-            {"proxy": orig_proxy}
-        )
-
-        if m:
-            new_content = re.sub(r'^\s*proxy\s*=\s*"[^"]*"', f'proxy = "{proxy_url}"', content, flags=re.MULTILINE)
-        else:
-            new_content = f'proxy = "{proxy_url}"\n' + content
-
-        try:
-            ConfigEditor.atomic_write(target_path, new_content)
-            return True, f"Updated {target_path} (proxy = \"{proxy_url}\")"
-        except Exception as e:
-            return False, str(e)
+        return False, "Codex has no verified global upstream proxy key in config.toml. Use a managed session; sandbox settings are not changed."
 
     def restore_persistent(self) -> Tuple[bool, str]:
         record = StateManager.get_applied_record(self.app_id)
         if not record:
             return False, "No persistent changes recorded for Codex CLI"
 
-        messages = []
+        messages, errors = [], []
         for file_path, data in record.items():
-            if not os.path.exists(file_path):
-                continue
             try:
-                with open(file_path, "r", encoding="utf-8") as f:
-                    content = f.read()
-            except Exception as e:
-                continue
-
-            orig_proxy = data.get("original_values", {}).get("proxy")
-            if orig_proxy:
-                content = re.sub(r'^\s*proxy\s*=\s*"[^"]*"', f'proxy = "{orig_proxy}"', content, flags=re.MULTILINE)
-            else:
-                content = re.sub(r'^\s*proxy\s*=\s*"[^"]*"\n?', '', content, flags=re.MULTILINE)
-
-            try:
+                if not os.path.isfile(file_path):
+                    raise FileNotFoundError("Configuration is missing; recovery record retained")
+                with open(file_path, "r", encoding="utf-8") as stream:
+                    content = stream.read()
+                orig_proxy = data.get("original_values", {}).get("proxy")
+                table = re.search(r'^\s*\[', content, re.MULTILINE)
+                split = table.start() if table else len(content)
+                root, sections = content[:split], content[split:]
+                if orig_proxy is not None:
+                    import json
+                    line = 'proxy = ' + json.dumps(orig_proxy)
+                    if re.search(r'^\s*proxy\s*=', root, re.MULTILINE):
+                        root = re.sub(r'^\s*proxy\s*=\s*"[^\"]*"', lambda _: line, root, flags=re.MULTILINE)
+                    else:
+                        root = line + '\n' + root
+                else:
+                    root = re.sub(r'^\s*proxy\s*=\s*"[^\"]*"\n?', '', root, flags=re.MULTILINE)
+                content = root + sections
                 ConfigEditor.atomic_write(file_path, content)
-                messages.append(f"Restored {file_path}")
-            except Exception as e:
-                messages.append(f"Error {file_path}: {e}")
-
-        StateManager.clear_applied_record(self.app_id)
-        return True, "; ".join(messages)
+                StateManager.clear_applied_file(self.app_id, file_path)
+                messages.append("Restored " + file_path)
+            except Exception as error:
+                errors.append(file_path + ": " + str(error))
+        return not errors, "; ".join(messages + errors)
 
     def get_limitations(self) -> List[str]:
         return [
             "Codex CLI spawns sandbox subprocesses (cmd, node_repl, powershell).",
-            "Session launch injects HTTP_PROXY and HTTPS_PROXY which propagate to spawned sandboxes.",
-            "Streaming responses use HTTP SSE; TCP tunnel ensures no mid-stream reset."
+            "Proxy environment is passed to the local process; sandbox, WSL and remote execution may need separate network configuration.",
+            "The tunnel preserves streaming bytes; upstream availability and account access require a live check."
         ]
 
 
@@ -214,6 +184,6 @@ class CodexGuiAdapter(ApplicationAdapter):
     def get_limitations(self) -> List[str]:
         return [
             "Codex Desktop GUI coordinates with background stdio core worker (codex.exe).",
-            "Session launch with LocalTunnel routes both the GUI Electron frontend and the internal core worker.",
+            "Launch configures the GUI and new local backend processes; reused workers and sandboxes require a separate check.",
             "Packaged Windows Store MSIX versions may require launching via protocol handler if executable permissions are locked by OS."
         ]

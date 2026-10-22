@@ -40,6 +40,13 @@ class VSCodeFamilyAdapter(ApplicationAdapter):
         for b in self._bin_names:
             p = shutil.which(b)
             if p:
+                if sys.platform == "win32" and p.lower().endswith((".cmd", ".bat", ".ps1")):
+                    # PATH usually exposes bin/code.cmd; GUI needs the actual EXE.
+                    exe = "Code.exe" if self.app_id == "vscode" else self._folder_name + ".exe"
+                    for folder in (os.path.dirname(p), os.path.dirname(os.path.dirname(p))):
+                        candidate = os.path.join(folder, exe)
+                        if os.path.isfile(candidate): return candidate
+                    continue
                 return p
 
         # Check standard installation folders
@@ -50,6 +57,8 @@ class VSCodeFamilyAdapter(ApplicationAdapter):
             for b in self._bin_names:
                 exe = f"{b}.exe" if not b.endswith(".exe") else b
                 candidates.extend([
+                    os.path.join(local, "Programs", "Microsoft VS Code" if self.app_id == "vscode" else self._folder_name, exe),
+                    os.path.join(prog, "Microsoft VS Code" if self.app_id == "vscode" else self._folder_name, exe),
                     os.path.join(local, "Programs", self._folder_name, exe),
                     os.path.join(local, "Programs", self._display_name, exe),
                     os.path.join(prog, self._folder_name, exe),
@@ -76,6 +85,11 @@ class VSCodeFamilyAdapter(ApplicationAdapter):
         return None
 
     def detect_config_files(self) -> List[str]:
+        executable = self.detect_executable()
+        if executable:
+            portable = os.path.join(os.path.dirname(executable), "data")
+            if os.path.isdir(portable):
+                return [os.path.join(portable, "user-data", "User", "settings.json")]
         if sys.platform == "win32":
             appdata = os.environ.get("APPDATA", "")
             return [os.path.join(appdata, self._folder_name, "User", "settings.json")]
@@ -85,13 +99,13 @@ class VSCodeFamilyAdapter(ApplicationAdapter):
         else:
             home = os.path.expanduser("~")
             return [
-                os.path.join(home, ".config", self._folder_name, "User", "settings.json"),
+                os.path.join(os.environ.get("XDG_CONFIG_HOME", os.path.join(home, ".config")), self._folder_name, "User", "settings.json"),
                 # Flatpak path
-                os.path.expanduser(f"~/.var/app/com.visualstudio.{self._bin_names[0]}/config/{self._folder_name}/User/settings.json")
+                os.path.expanduser(f"~/.var/app/{'com.vscodium.codium' if self.app_id == 'vscodium' else 'com.visualstudio.code'}/config/{self._folder_name}/User/settings.json")
             ]
 
     def get_cli_launch_flags(self, profile: ProxyProfile) -> List[str]:
-        return ["--proxy-server={PROXY_URL}"]
+        return ["--proxy-server={PROXY_URL}", "--proxy-bypass-list=localhost;127.0.0.1;[::1]", "--disable-quic"]
 
     def apply_persistent(self, profile: ProxyProfile) -> Tuple[bool, str]:
         if profile.has_auth:
@@ -108,7 +122,7 @@ class VSCodeFamilyAdapter(ApplicationAdapter):
 
         updates = {
             "http.proxy": proxy_url,
-            "http.proxySupport": "on"
+            "http.proxySupport": "override"
             # Strict SSL remains unmodified (never disabled)
         }
 
@@ -127,41 +141,7 @@ class VSCodeFamilyAdapter(ApplicationAdapter):
             return False, str(e)
 
     def restore_persistent(self) -> Tuple[bool, str]:
-        record = StateManager.get_applied_record(self.app_id)
-        if not record:
-            return False, f"No persistent changes recorded for {self.display_name}"
-
-        messages = []
-        for file_path, data in record.items():
-            if not os.path.exists(file_path):
-                continue
-            parsed, raw = ConfigEditor.load_jsonc(file_path)
-            if parsed is None:
-                continue
-
-            orig_values = data.get("original_values", {})
-            keys_to_remove = []
-            updates = {}
-            for k, v in orig_values.items():
-                if v is None:
-                    keys_to_remove.append(k)
-                else:
-                    updates[k] = v
-
-            content = raw
-            if keys_to_remove:
-                content = ConfigEditor.remove_json_fields_preserving(content, keys_to_remove)
-            if updates:
-                content = ConfigEditor.update_json_fields_preserving(content, updates)
-
-            try:
-                ConfigEditor.atomic_write(file_path, content)
-                messages.append(f"Restored {file_path}")
-            except Exception as e:
-                messages.append(f"Error {file_path}: {e}")
-
-        StateManager.clear_applied_record(self.app_id)
-        return True, "; ".join(messages)
+        return StateManager.restore_json(self.app_id)
 
     def get_limitations(self) -> List[str]:
         return [
@@ -183,7 +163,7 @@ class CursorAdapter(VSCodeFamilyAdapter):
 
     def get_limitations(self) -> List[str]:
         lim = super().get_limitations()
-        lim.append("Cursor AI chat and indexing communicate with api2.cursor.sh using HTTP/2; SOCKS5 / transparent tunnel recommended.")
+        lim.append("Check AI HTTP/2/SSE streaming against the selected upstream; individual extensions may use separate network settings.")
         return lim
 
 
@@ -193,7 +173,7 @@ class WindsurfAdapter(VSCodeFamilyAdapter):
 
     def get_limitations(self) -> List[str]:
         lim = super().get_limitations()
-        lim.append("Windsurf utilizes Codeium language server daemon; session launch ensures daemon inherits tunnel.")
+        lim.append("A newly spawned language server can inherit proxy environment; an already running daemon needs a separate restart/check.")
         return lim
 
 

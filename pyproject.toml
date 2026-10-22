@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "dagami-agent-proxy"
-version = "0.1.0a10"
+version = "0.2.0a0"
 description = "Dagami Agent Proxy: application proxy sessions and reversible launchers"
 requires-python = ">=3.10"
 readme = "PORTABLE.md"

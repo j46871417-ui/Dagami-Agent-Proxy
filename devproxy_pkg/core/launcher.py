@@ -12,6 +12,8 @@ import os
 import sys
 import subprocess
 import threading
+import re
+from pathlib import Path
 from typing import List, Dict, Optional, Tuple, Any
 from .tunnel import LocalTunnel
 from .profile import ProxyProfile
@@ -26,6 +28,31 @@ from .agent_ipc import EphemeralAgentIPC
 
 
 class Launcher:
+    @staticmethod
+    def command(executable, extra_args=None):
+        """Resolve standard npm wrappers without invoking cmd.exe or a shell."""
+        args = list(extra_args or [])
+        wrapper = Path(executable)
+        if sys.platform != "win32" or wrapper.suffix.lower() not in (".cmd", ".bat", ".ps1"):
+            return [executable, *args]
+        source = wrapper.read_text(encoding="utf-8-sig")
+        npm = next((match for match in re.finditer(r'''["'](?:%dp0%[\\/]|\$basedir[\\/])([^"'\r\n]+)["']''', source, re.I)
+                    if Path(match.group(1).replace("\\", "/")).suffix.lower() in ("", ".js", ".mjs", ".cjs")), None)
+        if npm:
+            base = wrapper.resolve().parent
+            entry = (base / npm.group(1).replace("\\", "/")).resolve()
+            if not entry.is_relative_to(base) or not entry.is_file():
+                raise FileNotFoundError("The npm CLI entrypoint is missing or outside its installation")
+            node = base / "node.exe"
+            found = str(node) if node.is_file() else shutil_which("node.exe")
+            if not found:
+                raise FileNotFoundError("node.exe is required for this npm CLI")
+            return [found, str(entry), *args]
+        if wrapper.suffix.lower() == ".ps1":
+            powershell = Path(os.environ.get("SystemRoot", r"C:\Windows")) / "System32/WindowsPowerShell/v1.0/powershell.exe"
+            return [str(powershell), "-NoLogo", "-NoProfile", "-File", executable, *args]
+        raise ValueError("Unsupported CMD/BAT wrapper: select the original EXE or a standard npm wrapper")
+
     @staticmethod
     def launch(
         executable: str,
@@ -44,9 +71,7 @@ class Launcher:
         if not os.path.exists(executable) and not shutil_which(executable):
             raise FileNotFoundError(f"Executable not found: {executable}")
 
-        cmd = [executable]
-        if extra_args:
-            cmd.extend(extra_args)
+        cmd = Launcher.command(executable, extra_args)
 
         env = external_environment(env_vars)
 
@@ -82,7 +107,8 @@ class Launcher:
         adapter_cli_flags: Optional[List[str]] = None,
         extra_args: Optional[List[str]] = None,
         wait: bool = True,
-        enable_ipc: bool = True
+        enable_ipc: bool = True,
+        environment_factory=None
     ) -> Tuple[subprocess.Popen, LocalTunnel]:
         """
         Starts ephemeral LocalTunnel and launches application configured to use it.
@@ -109,6 +135,14 @@ class Launcher:
             "no_proxy": "localhost,127.0.0.1,::1"
         }
 
+        env_vars["NODE_USE_ENV_PROXY"] = "1"
+        if environment_factory:
+            try:
+                env_vars.update(environment_factory(local_proxy_url, executable))
+            except BaseException:
+                tunnel.stop()
+                raise
+
         # Combine arguments
         cmd_args = []
         if adapter_cli_flags:
@@ -123,7 +157,8 @@ class Launcher:
             try:
                 job_mgr = WindowsJobManager()
             except Exception:
-                job_mgr = None
+                tunnel.stop()
+                raise
 
         # Initialize Ephemeral per-session IPC server
         ipc_server = None
@@ -134,6 +169,8 @@ class Launcher:
                 env_vars["DEVPROXY_IPC_PORT"] = str(ipc_port)
                 env_vars["DEVPROXY_IPC_KEY_FILE"] = ipc_server.key_file
             except Exception:
+                if ipc_server:
+                    ipc_server.stop()
                 ipc_server = None
 
         proc = None

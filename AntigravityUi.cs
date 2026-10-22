@@ -19,11 +19,11 @@ namespace DevProxyApp
             page.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
             var card = new FluentCard { Dock = DockStyle.Fill };
             var body = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 3, BackColor = FluentTheme.Surface };
-            body.Controls.Add(FluentLabel("Вход и проверка Antigravity", 15, true), 0, 0);
+            body.Controls.Add(FluentLabel("Патчинг и проверка Antigravity / agy CLI", 15, true), 0, 0);
             _prepareAntigravity = new CheckBox { Text = "Дополнительная бинарная подготовка совместимых версий", AutoSize = true, Checked = ConfigManager.Instance.PrepareAntigravityClient };
             body.Controls.Add(_prepareAntigravity, 0, 1);
             body.Controls.Add(new Label { Dock = DockStyle.Fill, ForeColor = FluentTheme.Muted,
-                Text = "Прокси и обычные ярлыки настраиваются независимо от совместимости бинарного патча. Неизвестная версия backend не изменяется.\nДля поддерживаемых версий сохраняются резервная копия и откат. Доступ аккаунта и моделей проверяет Google." }, 0, 2);
+                Text = "Поддерживаются Manager, backend IDE и agy.exe. Для agy выберите его в списке приложений. Патч проверяется при управляемом запуске, в том числе после обновления клиента.\nОригиналы и прежние версии копий сохраняются. Неизвестные сигнатуры пропускаются; результат входа и модели проверяется в самом клиенте." }, 0, 2);
             body.RowStyles.Add(new RowStyle(SizeType.Absolute, 32)); body.RowStyles.Add(new RowStyle(SizeType.Absolute, 30)); body.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
             card.Controls.Add(body); page.Controls.Add(card, 0, 0);
             var actions = new FlowLayoutPanel { Dock = DockStyle.Fill, WrapContents = false, AutoScroll = true };
@@ -48,7 +48,9 @@ namespace DevProxyApp
 
         private void RunAntigravityOperation(string operation)
         {
-            AppTarget target = _cachedTargets.Find(x => x.IsInstalled && Path.GetFileName(x.ExePath).Equals("Antigravity.exe", StringComparison.OrdinalIgnoreCase));
+            AppTarget target = _targetList.SelectedItems.Count > 0 ? _targetList.SelectedItems[0].Tag as AppTarget : null;
+            if (target == null || !target.IsInstalled || !AntigravityIntegration.Supports(target.ExePath))
+                target = _cachedTargets.Find(x => x.IsInstalled && AntigravityIntegration.Supports(x.ExePath));
             if (target == null) throw new InvalidOperationException("Antigravity Manager не найден. Добавьте Antigravity.exe в список приложений.");
             if (operation == "diagnose") SaveNativeSettings();
             _nativeBusy = true; SetNativeButtonsEnabled(false);
@@ -60,11 +62,12 @@ namespace DevProxyApp
             System.Threading.ThreadPool.QueueUserWorkItem(o => {
                 var report = new StringBuilder();
                 try {
-                    if (operation == "prepare") report.AppendLine(AntigravityIntegration.Prepare(target.ExePath));
-                    else if (operation == "restore") report.AppendLine(AntigravityIntegration.Restore(target.ExePath));
+                    report.AppendLine("Выбран клиент: " + target.ExePath);
+                    if (operation == "prepare") report.AppendLine(AntigravityIntegration.PrepareClient(target.ExePath).Message);
+                    else if (operation == "restore") report.AppendLine(AntigravityIntegration.RestoreClient(target.ExePath));
                     else {
                         report.AppendLine(AntigravityDiagnostics.LoginRouteReport(bridgePort,useDns,dnsHost,proxy));
-                        try { report.AppendLine(AntigravityIntegration.Inspect(target.ExePath)); }
+                        try { report.AppendLine(AntigravityIntegration.InspectClient(target.ExePath)); }
                         catch (Exception ex) { report.AppendLine("Клиент: " + ex.Message); }
                         try { report.AppendLine(AntigravityDiagnostics.ProbeToken(bridgePort)); }
                         catch (Exception ex) { report.AppendLine("OAuth POST /token: " + ex.GetType().Name + ": " + ex.Message); }

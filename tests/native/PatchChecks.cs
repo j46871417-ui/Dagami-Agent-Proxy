@@ -21,7 +21,7 @@ class PatchChecks {
  [STAThread]static int Main(){
   string root=Path.Combine(Path.GetTempPath(),"DevProxy-patch-"+Guid.NewGuid().ToString("N"));Directory.CreateDirectory(root);
   try{
-   Assert(!ProxyEngine.ScanAllTargets().Exists(x=>!x.IsCustom&&(x.Id=="git"||string.Equals(Path.GetFileName(x.ExePath),"git.exe",StringComparison.OrdinalIgnoreCase))),"Git remains in automatic discovery");
+   Assert(ProxyEngine.ScanAllTargets().Exists(x=>!x.IsCustom&&x.Id=="git"&&x.ConfigPath==null),"Git needs a separate alias without a global config patch");
    shell=Activator.CreateInstance(Type.GetTypeFromProgID("WScript.Shell"));
    string links=Path.Combine(root,"Links");Directory.CreateDirectory(links);
    string exe=Path.Combine(root,"Antigravity.exe");File.Copy(typeof(MainForm).Assembly.Location,exe);

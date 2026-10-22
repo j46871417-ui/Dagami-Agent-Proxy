@@ -1,0 +1,2 @@
+# Version exercised by the local end-to-end suite; upgrade and retest deliberately.
+Pillow==12.3.0

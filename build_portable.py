@@ -20,6 +20,17 @@ SOURCE_ASSETS = {
     'dagami-agent-proxy.ico', 'dagami-agent-proxy.icns', 'dagami-agent-proxy.svg',
     'dagami-logo.jpg', 'icon-64.png', 'icon-256.png', 'dns-domains.json',
 }
+BUG_REPORTS_FILES = {
+    'README.md',
+    'service/server.py', 'service/maintenance.py', 'service/test_server.py',
+    'service/dev_server.py', 'service/hash_password.py', 'service/requirements.txt',
+    'service/nginx.conf', 'service/dagami-reports.service',
+    'service/dagami-reports-maintenance.service', 'service/dagami-reports-maintenance.timer',
+    'public/site-theme.js', 'public/dagami-site.css', 'public/site-preferences.css',
+    'public/support/agent-proxy/index.html', 'public/support/agent-proxy/admin/index.html',
+    'public/support/agent-proxy/reports.css', 'public/support/agent-proxy/reports.js',
+    'public/support/agent-proxy/admin.js',
+}
 
 def source_member(path):
     relative=path.relative_to(ROOT)
@@ -31,6 +42,7 @@ def source_member(path):
             path.name in SOURCE_ASSETS)
     if relative.parts[0]=='tests':return path.suffix in ('.py','.cs','.ps1')
     if relative.parts[0]=='tools':return path.name in ('check_source_hygiene.py','source-policy.json','test_source_hygiene.py')
+    if relative.parts[0]=='bug_reports':return Path(*relative.parts[1:]).as_posix() in BUG_REPORTS_FILES
     return relative.parts[:2]==('.github','workflows') and path.suffix in ('.yml','.yaml')
 
 def add_source(archive,path):
@@ -64,7 +76,8 @@ def main():
     source=output/'dagami-agent-proxy-source.zip'
     names=['.gitignore','.gitattributes','.gitleaks.toml','.githooks/pre-commit',
            'devproxy_gui.py','pyproject.toml','PORTABLE.md','BUILD_LINUX_MACOS.md',
-           'README.md','SYSTEM_DNS.md','SOURCE_POLICY.md','STARTUP.md','LICENSE',
+           'README.md','MATRIX.md','APPS_RESEARCH.md','BUG_REPORTS.md','RELEASE_NOTES.md',
+           'RECHECK_20261022.md','SYSTEM_DNS.md','SOURCE_POLICY.md','STARTUP.md','LICENSE',
            'build_portable.py','build_native_app.py','install_portable.py','install.sh',
            'SystemDns.ps1','app.manifest',*NATIVE_SOURCES]
     staged=output/('source-'+uuid.uuid4().hex+'.tmp')
@@ -73,7 +86,7 @@ def main():
             for name in names:
                 if (ROOT/name).is_symlink():raise RuntimeError('Source archive refuses links: '+name)
                 if (ROOT/name).exists():add_source(archive,ROOT/name)
-            for folder in ('devproxy_pkg','tests','tools','.github/workflows'):
+            for folder in ('devproxy_pkg','tests','tools','.github/workflows','bug_reports'):
                 for path in sorted((ROOT/folder).rglob('*')):
                     if path.is_file() and source_member(path):add_source(archive,path)
         staged.replace(source)
@@ -93,7 +106,7 @@ def main():
         (native/'SHA256-native.json').write_text(json.dumps(hashes,indent=2)+'\n',encoding='utf-8')
         archive=output/f'dagami-agent-proxy-{host}-{arch}.zip'
         with zipfile.ZipFile(archive,'w',zipfile.ZIP_DEFLATED) as package:
-            for path in (exe,native/'SHA256-native.json',ROOT/'SYSTEM_DNS.md',ROOT/'SOURCE_POLICY.md',ROOT/'STARTUP.md',ROOT/'PORTABLE.md',ROOT/'LICENSE'):
+            for path in (exe,native/'SHA256-native.json',ROOT/'README.md',ROOT/'RELEASE_NOTES.md',ROOT/'BUG_REPORTS.md',ROOT/'MATRIX.md',ROOT/'SYSTEM_DNS.md',ROOT/'SOURCE_POLICY.md',ROOT/'STARTUP.md',ROOT/'PORTABLE.md',ROOT/'LICENSE'):
                 package.write(path,path.name)
         manifest={p.name:hashlib.sha256(p.read_bytes()).hexdigest() for p in (source,archive)}
         (output/f'SHA256-{host}-{arch}.json').write_text(json.dumps(manifest,indent=2)+'\n',encoding='utf-8')

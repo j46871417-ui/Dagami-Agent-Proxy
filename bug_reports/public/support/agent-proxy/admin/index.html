@@ -1,0 +1,12 @@
+<!doctype html>
+<html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex,nofollow">
+<title>Баг-репорты · Dagami</title><script src="/site-theme.js"></script><link rel="stylesheet" href="/dagami-site.css"><link rel="stylesheet" href="/site-preferences.css"><link rel="stylesheet" href="/support/agent-proxy/reports.css"><script defer src="/support/agent-proxy/admin.js"></script></head>
+<body><main class="report-wrap admin-wrap"><a href="/support/agent-proxy/">← Форма отчёта</a><h1>Баг-репорты</h1>
+<form id="login" class="report-card"><label>Пароль администратора<input id="password" type="password" required maxlength="256" autocomplete="current-password"></label><button class="report-primary">Войти</button></form>
+<p id="admin-message" role="status" aria-live="polite"></p>
+<section id="dashboard" hidden><div class="report-toolbar"><label>Статус<select id="filter"><option value="">Все</option><option value="new">Новые</option><option value="triaged">Разобраны</option><option value="in_progress">В работе</option><option value="fixed">Исправлены</option><option value="closed">Закрыты</option></select></label><button id="refresh" type="button">Обновить</button><button id="logout" type="button">Выйти</button></div>
+<p id="report-count"></p><div id="report-list" class="report-list"></div><div class="report-toolbar"><button id="previous" type="button">← Назад</button><button id="next" type="button">Далее →</button></div>
+<article id="detail" class="report-card" hidden tabindex="-1"><h2 id="detail-title"></h2><p id="detail-meta" class="hint"></p><pre id="detail-description"></pre><p id="detail-contact"></p>
+<div class="report-toolbar"><label>Новый статус<select id="detail-status"><option value="new">Новый</option><option value="triaged">Разобран</option><option value="in_progress">В работе</option><option value="fixed">Исправлен</option><option value="closed">Закрыт</option></select></label><button id="save-status" type="button">Сохранить статус</button></div>
+<h3>Журнал</h3><button id="download-log" type="button">Скачать журнал</button><pre id="detail-logs"></pre><h3 id="image-heading" hidden>Картинка</h3><img id="detail-image" class="report-image" hidden alt="Картинка из отчёта"></article>
+</section></main></body></html>

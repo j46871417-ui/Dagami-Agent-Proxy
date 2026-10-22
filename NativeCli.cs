@@ -75,7 +75,10 @@ namespace DevProxyApp {
                 return true;
             }
             if(command=="apps"){
-                foreach(var target in ProxyEngine.ScanAllTargets()) Console.WriteLine(target.Id+"\t"+target.DisplayName+"\t"+(target.IsInstalled?"installed":"missing"));
+                foreach(var target in ProxyEngine.ScanAllTargets()) {
+                    Console.WriteLine(target.Id+"\t"+target.DisplayName+"\t"+(target.IsInstalled?"installed":"missing"));
+                    if(args.Length>1&&args[1]=="--details")Console.WriteLine("  "+ApplicationSupport.Describe(target)+"\r\n  Config: "+(target.ConfigPath??"—"));
+                }
                 return true;
             }
             if(command=="proxy") {
@@ -116,7 +119,7 @@ namespace DevProxyApp {
             string branded=Path.Combine(Path.GetDirectoryName(current),"DagamiAgentProxy.exe");
             string manager=File.Exists(branded)?branded:File.Exists(companion)?companion:current;
             if(command=="run"){
-                if(NativeCliApps.IsCli(app)) {
+                if(NativeCliApps.IsConsoleTarget(app)) {
                     int offset=args.Length>2&&args[2]=="--"?3:2;
                     string[] forwarded=new string[args.Length-offset];Array.Copy(args,offset,forwarded,0,forwarded.Length);
                     var config=ConfigManager.Instance;
@@ -127,7 +130,7 @@ namespace DevProxyApp {
             }
             var store=NativeShortcuts.Current;
             if(command=="shortcuts"){
-                string issue;int count=NativeCliApps.IsCli(app)?NativeCliApps.Current.VerifiedCount(app.Id,out issue):store.VerifiedCount(app.Id,out issue);
+                string issue;int count=NativeCliApps.IsCommandTarget(app)?NativeCliApps.Current.VerifiedCount(app.Id,out issue):store.VerifiedCount(app.Id,out issue);
                 Console.WriteLine(new JavaScriptSerializer().Serialize(new{app=app.Id,enabled=count>0&&issue==null,count=count,error=issue}));return true;
             }
             List<string> paths;
@@ -136,8 +139,10 @@ namespace DevProxyApp {
                 string summary;
                 paths=NativeAppPatcher.Apply(app,manager,NativeShortcuts.UserFolders(),store,ConfigManager.Instance.LastProxy,out summary,true);
                 Console.WriteLine(summary);
-            }else paths=NativeCliApps.IsCli(app)?NativeCliApps.Current.Restore(app.Id):store.Restore(app.Id);
-            foreach(string path in paths)Console.WriteLine(path);Console.WriteLine("Ярлыков: "+paths.Count);return true;
+            }else {
+                paths=NativeAppPatcher.RestoreWithLauncher(app,()=>NativeCliApps.IsCommandTarget(app)?NativeCliApps.Current.Restore(app.Id):store.Restore(app.Id));
+            }
+            foreach(string path in paths)Console.WriteLine(path);Console.WriteLine("Файлов запуска: "+paths.Count);return true;
         }
     }
 }

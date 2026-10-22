@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Сообщить об ошибке · Dagami Agent Proxy</title>
+<script src="/site-theme.js"></script><link rel="stylesheet" href="/dagami-site.css"><link rel="stylesheet" href="/site-preferences.css"><link rel="stylesheet" href="/support/agent-proxy/reports.css">
+<script defer src="/support/agent-proxy/reports.js"></script></head>
+<body><main class="report-wrap"><a href="/">← Dagami</a><h1>Сообщить об ошибке</h1>
+<p class="lead">Dagami Agent Proxy</p><p>Опишите, что произошло и как это повторить. Отчёт и вложения видны только администратору.</p>
+<p class="hint">В программе откройте «Журнал → Сообщить об ошибке»: очищенный журнал приложится автоматически. Здесь его можно добавить файлом. Не прикладывайте пароли, ключи и содержимое переписки. Картинку проверьте сами: её содержимое не скрывается автоматически.</p>
+<form id="report-form" class="report-card">
+<label>Кратко об ошибке<input name="title" required minlength="3" maxlength="160" autocomplete="off"></label>
+<label>Что произошло и как повторить<textarea name="description" rows="7" required minlength="10" maxlength="12000"></textarea></label>
+<div class="report-row"><label>Версия программы<input name="version" maxlength="100" placeholder="Например, alpha.10"></label><label>Система<input name="platform" maxlength="200" placeholder="Например, Windows 11"></label></div>
+<label>Контакт для ответа · необязательно<input name="contact" maxlength="200" autocomplete="off" placeholder="Почта или Telegram"></label>
+<label>Журнал · необязательно<input id="log-file" type="file" accept=".log,.txt,text/plain"></label>
+<details><summary>Посмотреть очищенный журнал</summary><pre id="log-preview">Журнал не выбран.</pre></details>
+<label>Картинка · необязательно<input id="image-file" type="file" accept="image/png,image/jpeg"></label>
+<p class="hint">PNG/JPEG до 2 МБ и 12 мегапикселей. Метаданные будут удалены при сохранении.</p>
+<img id="image-preview" class="report-image" alt="Картинка, выбранная для отчёта" hidden>
+<button id="send-report" type="submit" class="report-primary">Отправить отчёт</button>
+<p id="report-message" role="status" aria-live="polite"></p></form>
+<section id="receipt" class="report-card" hidden><h2>Отчёт принят</h2><p id="receipt-id"></p><p>Сохраните квитанцию: она содержит ключ проверки статуса. Сам отчёт публично недоступен.</p><button id="download-receipt" type="button">Сохранить квитанцию</button> <button id="check-status" type="button">Проверить статус</button><p id="receipt-status" role="status"></p></section>
+<details class="report-card"><summary>Проверить ранее отправленный отчёт</summary><label>Сохранённая квитанция<input id="receipt-file" type="file" accept=".json,application/json"></label><p class="hint">Квитанция открывает только статус вашего обращения.</p></details>
+<footer><a href="/support/agent-proxy/admin/">Вход администратора</a></footer>
+</main></body></html>

@@ -14,7 +14,14 @@ namespace DevProxyApp
             foreach (var process in Process.GetProcessesByName(Path.GetFileNameWithoutExtension(executable)))
                 using (process) {
                     if (!process.HasExited)
+                    {
+                        // Codex Desktop and Codex CLI can share a basename;
+                        // another installed copy must not block this launcher.
+                        if(Path.IsPathRooted(executable))try {
+                            if(!string.Equals(Path.GetFullPath(process.MainModule.FileName),Path.GetFullPath(executable),StringComparison.OrdinalIgnoreCase))continue;
+                        }catch(System.ComponentModel.Win32Exception){}catch(InvalidOperationException){continue;}
                         throw new InvalidOperationException(Path.GetFileNameWithoutExtension(executable) + " уже запущен (PID " + process.Id + "). Полностью закройте его окна и значок в трее, затем запустите через Dagami Agent Proxy. Уже работающий процесс не получает новые настройки прокси.");
+                    }
                 }
         }
 
@@ -25,10 +32,9 @@ namespace DevProxyApp
                 bridge.Host != "127.0.0.1" || !string.IsNullOrEmpty(bridge.UserInfo) || bridge.Port <= 0)
                 throw new ArgumentException("Expected the local Dagami Agent Proxy bridge.");
             string args = "--proxy-server=\"" + proxy + "\" --proxy-bypass-list=\"localhost;127.0.0.1;[::1]\" --disable-quic";
-            if (Path.GetFileName(target.ExePath).Equals("Antigravity.exe", StringComparison.OrdinalIgnoreCase))
-                return args; // Normal profile shares the native OAuth single-instance lock.
-            Directory.CreateDirectory(profileRoot);
-            return args + " --user-data-dir=\"" + profileRoot + "\" --new-window";
+            // Use the real settings/account profile. RequireStopped prevents an
+            // existing direct process from silently discarding these flags.
+            return args;
         }
 
         public static string ValidateLoginUrl(string value)

@@ -1,7 +1,8 @@
 """
 Recovery: State management and atomic rollback for persistent changes.
 Tracks exact keys and values modified by devproxy in ~/.devproxy/state.json.
-When restoring, reverts ONLY keys modified by devproxy without wiping manual changes made later.
+Restoring replaces manual edits of managed proxy keys with the original values.
+Unrelated settings and failed recovery records are retained.
 """
 
 import os
@@ -24,11 +25,11 @@ class StateManager:
         path = get_devproxy_state_path()
         if not os.path.exists(path):
             return {"profiles": {}, "applied": {}}
-        try:
-            with open(path, "r", encoding="utf-8") as f:
-                return json.load(f)
-        except Exception:
-            return {"profiles": {}, "applied": {}}
+        with open(path, "r", encoding="utf-8") as f:
+            state = json.load(f)
+        if not isinstance(state, dict) or any(not isinstance(state.get(key, {}), dict) for key in ("profiles", "applied")):
+            raise ValueError("Invalid recovery state; the original file was not changed.")
+        return state
 
     @staticmethod
     def save_state(state: dict):
@@ -56,6 +57,8 @@ class StateManager:
         if existing:
             existing["modified_keys"] = sorted(set(existing.get("modified_keys", [])) | set(modified_keys.keys()))
             existing["applied_values"] = dict(modified_keys)
+            for key, value in original_values.items():
+                existing.setdefault("original_values", {}).setdefault(key, value)
         else:
             app_record[file_path] = {
                 "modified_keys": list(modified_keys.keys()),
@@ -75,6 +78,41 @@ class StateManager:
         if "applied" in state and app_id in state["applied"]:
             del state["applied"][app_id]
             cls.save_state(state)
+
+    @classmethod
+    def clear_applied_file(cls, app_id: str, file_path: str):
+        state = cls.load_state()
+        record = state.get("applied", {}).get(app_id, {})
+        record.pop(file_path, None)
+        if not record:
+            state.get("applied", {}).pop(app_id, None)
+        cls.save_state(state)
+
+    @classmethod
+    def restore_json(cls, app_id: str):
+        record = cls.get_applied_record(app_id)
+        if not record:
+            return False, "No persistent changes recorded for " + app_id
+        messages, errors = [], []
+        for file_path, data in record.items():
+            try:
+                if not os.path.isfile(file_path):
+                    raise FileNotFoundError("Configuration is missing; recovery record retained")
+                parsed, raw = ConfigEditor.load_jsonc(file_path)
+                if parsed is None:
+                    raise ValueError("Invalid JSONC; recovery record retained")
+                original = data.get("original_values", {})
+                remove = [key for key, value in original.items() if value is None]
+                updates = {key: value for key, value in original.items() if value is not None}
+                content = ConfigEditor.remove_json_fields_preserving(raw, remove) if remove else raw
+                if updates:
+                    content = ConfigEditor.update_json_fields_preserving(content, updates)
+                ConfigEditor.atomic_write(file_path, content)
+                cls.clear_applied_file(app_id, file_path)
+                messages.append("Restored " + file_path)
+            except Exception as error:
+                errors.append(file_path + ": " + str(error))
+        return not errors, "; ".join(messages + errors)
 
     @classmethod
     def save_profile(cls, profile_dict: dict):

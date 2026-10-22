@@ -120,42 +120,7 @@ class AntigravityAdapter(ApplicationAdapter):
             return False, f"Write error: {e}"
 
     def restore_persistent(self) -> Tuple[bool, str]:
-        record = StateManager.get_applied_record(self.app_id)
-        if not record:
-            return False, "No persistent changes recorded by devproxy for Antigravity"
-
-        messages = []
-        for file_path, data in record.items():
-            if not os.path.exists(file_path):
-                continue
-            parsed, raw = ConfigEditor.load_jsonc(file_path)
-            if parsed is None:
-                messages.append(f"Failed to read {file_path}")
-                continue
-
-            orig_values = data.get("original_values", {})
-            keys_to_remove = []
-            updates = {}
-            for k, v in orig_values.items():
-                if v is None:
-                    keys_to_remove.append(k)
-                else:
-                    updates[k] = v
-
-            content = raw
-            if keys_to_remove:
-                content = ConfigEditor.remove_json_fields_preserving(content, keys_to_remove)
-            if updates:
-                content = ConfigEditor.update_json_fields_preserving(content, updates)
-
-            try:
-                ConfigEditor.atomic_write(file_path, content)
-                messages.append(f"Restored {file_path}")
-            except Exception as e:
-                messages.append(f"Error restoring {file_path}: {e}")
-
-        StateManager.clear_applied_record(self.app_id)
-        return True, "; ".join(messages)
+        return StateManager.restore_json(self.app_id)
 
     def get_limitations(self) -> List[str]:
         return [

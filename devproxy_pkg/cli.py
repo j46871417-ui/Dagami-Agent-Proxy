@@ -193,7 +193,7 @@ def cmd_run(args):
         return
 
     print(f"{Colors.CYAN}[+] Запуск {adapter.display_name} через прокси {profile.to_safe_url()} (Режим сессии)...{Colors.RESET}")
-    flags = adapter.get_cli_launch_flags(profile)
+    flags = adapter.launch_flags(profile, exe)
 
     if args.dry_run:
         print(f"  [Dry-Run] Команда: {exe}")
@@ -207,7 +207,8 @@ def cmd_run(args):
             profile=profile,
             adapter_cli_flags=flags,
             extra_args=args.extra_args,
-            wait=True
+            wait=True,
+            environment_factory=adapter.get_launch_environment
         )
         print(f"{Colors.GREEN}[✓] Сессия {adapter.display_name} завершена. Локальный туннель остановлен.{Colors.RESET}")
     except KeyboardInterrupt:
@@ -238,7 +239,7 @@ def cmd_apply(args):
 
 def cmd_restore(args):
     app_targets = [x.strip() for x in args.app.split(",") if x.strip()]
-    print(f"\n{Colors.YELLOW}[-] Восстановление исходных настроек...{Colors.RESET}")
+    print(f"\n{Colors.YELLOW}[-] Восстановление исходных настроек. Ручные изменения прокси после применения будут заменены.{Colors.RESET}")
     for target in app_targets:
         adapter = get_adapter(target)
         if not adapter:
@@ -376,8 +377,8 @@ def interactive_wizard():
                         print(f"{Colors.RED}Исполняемый файл для {sel_adapter.display_name} не найден.{Colors.RESET}")
                         continue
                     print(f"\n{Colors.CYAN}Запуск {sel_adapter.display_name}...{Colors.RESET}")
-                    flags = sel_adapter.get_cli_launch_flags(profile)
-                    Launcher.launch_with_tunnel(exe, profile, adapter_cli_flags=flags, wait=True)
+                    flags = sel_adapter.launch_flags(profile, exe)
+                    Launcher.launch_with_tunnel(exe, profile, adapter_cli_flags=flags, wait=True, environment_factory=sel_adapter.get_launch_environment)
             except Exception as e:
                 print(f"Ошибка: {e}")
 
