@@ -1,7 +1,7 @@
 <p align="center">
   <img src="devproxy_pkg/assets/dagami-logo.jpg" alt="Dagami Agent Proxy" width="380" />
 </p>
-
+**[Группа Dagami](https://t.me/dagamvi) | [Канал Dagami](https://t.me/dagamivibe) | [Обсуждение и техподдержка](https://t.me/dagamvi/2140) | [Сообщить об ошибке](https://dns.dagami.ru/support/agent-proxy/)
 # Dagami Agent Proxy
 
 Менеджер запуска IDE и CLI через свой прокси. Профили, запуск приложений,
