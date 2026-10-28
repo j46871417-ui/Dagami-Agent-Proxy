@@ -18,7 +18,7 @@
 | Windsurf | Настройки семейства VS Code, ярлыки, Chromium/env | Отдельный language server и вход требуют проверки |
 | VSCodium | Настройки семейства VS Code, ярлыки, Chromium/env | Marketplace и расширения имеют свои особенности |
 | Codex CLI | Команда CLI, env локального моста | config.toml не меняется; sandbox/WSL/remote — отдельный сетевой контекст |
-| Codex Desktop | Ярлыки, Chromium/env; обычный профиль | Доступность MSIX EXE, backend и sandbox |
+| Codex Desktop | Ярлыки, Chromium/env; обычный профиль; MSIX-пакет OpenAI.Codex и основной EXE из манифеста | Backend, sandbox и живая сессия проверяются отдельно; WindowsApps ACL не меняются |
 | OpenCode CLI | Команда, env, исключение loopback | JSON-ключ proxy не добавляется; проверить провайдера |
 | OpenCode Desktop | Ярлыки, env; Electron определяется по ресурсам, для прежних Windows-версий WebView2 | Старый сервер нужно закрыть: он не получает новое окружение |
 | Gemini CLI | Команда native/npm, env | Google auth; настройки sandbox и проекта |

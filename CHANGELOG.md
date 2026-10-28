@@ -2,6 +2,9 @@
 
 ## Unreleased — 2026-10-28
 
+- Fixed Codex Desktop detection for Microsoft Store/MSIX installations whose main
+  executable is `app/ChatGPT.exe`: query current-user package registration and
+  validate package identity/manifest, independent of a running process.
 - Added detection of `Antigravity IDE.exe` alongside Manager, separate IDE settings,
   the `extensions/agy/bin` layout and the shared per-user `agy/bin/agy.exe` backend.
 - Kept local RPC/CONNECT traffic on loopback in the native and Python bridges;

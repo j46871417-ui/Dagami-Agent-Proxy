@@ -152,6 +152,10 @@ HTTP 407 означает отказ авторизации прокси, 403/50
 OpenCode Desktop/CLI, Gemini CLI, Claude Code, Git и JetBrains. PowerShell/cmd
 из автоматического поиска удалены; ручное добавление и откат старых настроек доступны.
 Для Git создаётся команда `dagami-git`; для JetBrains используется штатный XML.
+Codex Desktop из Microsoft Store обнаруживается по пакету `OpenAI.Codex` и его
+манифесту: главный файл может называться `app/ChatGPT.exe`, а не `Codex.exe`.
+Обычный ChatGPT и CLI-помощники не считаются Codex Desktop. Запускать Desktop
+заранее для обнаружения не требуется; права на WindowsApps не меняются.
 Механизмы и ограничения: [MATRIX.md](MATRIX.md), структуры и источники:
 [APPS_RESEARCH.md](APPS_RESEARCH.md), повторная проверка и оставшиеся доработки:
 [RECHECK_20261022.md](RECHECK_20261022.md). Поддержка конкретной версии,

@@ -2,13 +2,65 @@ using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
+using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 using System.Text;
 using System.Web.Script.Serialization;
+using System.Xml;
 using Microsoft.Win32;
 
 namespace DevProxyApp {
  public static class ApplicationDiscovery {
+  public const string CodexPackageFamily = "OpenAI.Codex_2p2nqsd0c76g0";
+  [DllImport("kernel32.dll",CharSet=CharSet.Unicode,ExactSpelling=true)]
+  static extern int GetPackagesByPackageFamily(string family,ref uint count,[Out] IntPtr[] names,ref uint length,IntPtr buffer);
+  [DllImport("kernel32.dll",CharSet=CharSet.Unicode,ExactSpelling=true)]
+  static extern int GetPackagePathByFullName(string name,ref uint length,StringBuilder path);
+
+  public static List<string> PackageRoots(string family) {
+   var roots=new List<string>();
+   try {
+    // Query the current user's registrations. Do not enumerate WindowsApps or
+    // alter package ACLs, and do not depend on an already-running GUI process.
+    for(int attempt=0;attempt<2;attempt++) {
+     uint count=0,length=0;int status=GetPackagesByPackageFamily(family,ref count,null,ref length,IntPtr.Zero);
+     if(status!=122||count==0||count>128||length==0||length>1048576)return roots;
+     var names=new IntPtr[(int)count];IntPtr buffer=Marshal.AllocHGlobal(checked((int)length*2));
+     try {
+      status=GetPackagesByPackageFamily(family,ref count,names,ref length,buffer);
+      if(status==122)continue;
+      if(status!=0)return roots;
+      for(int i=0;i<(int)count;i++) {
+       string fullName=Marshal.PtrToStringUni(names[i]);uint capacity=0;
+       if(GetPackagePathByFullName(fullName,ref capacity,null)!=122||capacity==0||capacity>32768)continue;
+       var path=new StringBuilder((int)capacity);
+       if(GetPackagePathByFullName(fullName,ref capacity,path)==0&&!roots.Contains(path.ToString()))roots.Add(path.ToString());
+      }
+      return roots;
+     }finally{Marshal.FreeHGlobal(buffer);}
+    }
+   }catch(EntryPointNotFoundException){}catch(DllNotFoundException){}
+   return roots;
+  }
+  public static string PackagedDesktop(string root,string identity,string applicationId="App") {
+   if(string.IsNullOrEmpty(root))return null;
+   try {
+    string manifest=Path.Combine(root,"AppxManifest.xml");if(!File.Exists(manifest))return null;
+    var settings=new XmlReaderSettings{DtdProcessing=DtdProcessing.Prohibit,XmlResolver=null,MaxCharactersInDocument=2*1024*1024};
+    var document=new XmlDocument{XmlResolver=null};using(var reader=XmlReader.Create(manifest,settings))document.Load(reader);
+    var name=document.SelectSingleNode("/*[local-name()='Package']/*[local-name()='Identity']");
+    if(name==null||name.Attributes["Name"]==null||name.Attributes["Name"].Value!=identity)return null;
+    string prefix=Path.GetFullPath(root).TrimEnd(Path.DirectorySeparatorChar)+Path.DirectorySeparatorChar;
+    foreach(XmlNode app in document.SelectNodes("/*[local-name()='Package']/*[local-name()='Applications']/*[local-name()='Application']")) {
+     if(app.Attributes["Id"]==null||app.Attributes["Id"].Value!=applicationId||app.Attributes["Executable"]==null)continue;
+     string relative=app.Attributes["Executable"].Value.Replace('/',Path.DirectorySeparatorChar);
+     if(string.IsNullOrWhiteSpace(relative)||Path.IsPathRooted(relative)||!relative.EndsWith(".exe",StringComparison.OrdinalIgnoreCase))continue;
+     string executable=Path.GetFullPath(Path.Combine(root,relative));
+     if(executable.StartsWith(prefix,StringComparison.OrdinalIgnoreCase)&&File.Exists(executable)&&!NativeCliApps.IsCli(new AppTarget{ExePath=executable}))return executable;
+    }
+   }catch(IOException){}catch(UnauthorizedAccessException){}catch(XmlException){}catch(ArgumentException){}catch(NotSupportedException){}
+   return null;
+  }
   public static string AntigravityIde(IEnumerable<string> roots) {
    var candidates = new List<string>();
    foreach(string root in roots) foreach(string folder in new[]{"Antigravity IDE","antigravity-ide","antigravity"})
@@ -31,12 +83,15 @@ namespace DevProxyApp {
    return null;
   }
   public static string Desktop(string name,IEnumerable<string> candidates) {
-   foreach(string path in candidates)if(File.Exists(path))return path;
+   foreach(string path in candidates)if(File.Exists(path)&&!NativeCliApps.IsCli(new AppTarget{ExePath=path}))return path;
    foreach(var hive in new[]{Registry.CurrentUser,Registry.LocalMachine})try {
     using(var key=hive.OpenSubKey(@"Software\Microsoft\Windows\CurrentVersion\App Paths\"+name+".exe")) {
-     string path=key==null?null:Convert.ToString(key.GetValue(null));if(!string.IsNullOrEmpty(path)&&File.Exists(path.Trim('"')))return path.Trim('"');
+     string path=key==null?null:Convert.ToString(key.GetValue(null));if(!string.IsNullOrEmpty(path)&&File.Exists(path.Trim('"'))&&!NativeCliApps.IsCli(new AppTarget{ExePath=path.Trim('"')}))return path.Trim('"');
     }
    }catch(System.Security.SecurityException){}
+   if(name.Equals("Codex",StringComparison.OrdinalIgnoreCase))foreach(string root in PackageRoots(CodexPackageFamily)) {
+    string executable=PackagedDesktop(root,"OpenAI.Codex");if(executable!=null)return executable;
+   }
    // A running packaged Desktop app reveals its real launcher without guessing
    // a versioned WindowsApps directory or changing package permissions.
    foreach(var process in Process.GetProcessesByName(name))using(process)try {

@@ -23,3 +23,6 @@ control bounds and saves screenshots; it does not verify every DPI/theme combina
 `ProxyFailureChecks` uses only loopback fixtures for CONNECT 407/403/503, escaped
 credentials, port-range fallback and synthetic OAuth route comparison. It never
 contacts proxy addresses copied from user logs.
+`CodexDiscoveryChecks` validates MSIX identity/manifest and Desktop/CLI separation.
+If Codex is installed for the current user, it also verifies package discovery
+without launching or patching the installed app; otherwise that integration is skipped.
