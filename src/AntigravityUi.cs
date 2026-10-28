@@ -68,7 +68,7 @@ namespace DevProxyApp
                         report.AppendLine(AntigravityDiagnostics.LoginRouteReport(bridgePort,useDns,dnsHost,proxy));
                         try { report.AppendLine(AntigravityIntegration.InspectClient(target.ExePath)); }
                         catch (Exception ex) { report.AppendLine("Клиент: " + ex.Message); }
-                        try { report.AppendLine(AntigravityDiagnostics.ProbeToken(bridgePort)); }
+                        try { report.AppendLine(AntigravityDiagnostics.TokenRouteReport(bridgePort,useDns,dnsHost,proxy)); }
                         catch (Exception ex) { report.AppendLine("OAuth POST /token: " + ex.GetType().Name + ": " + ex.Message); }
                         foreach (string host in new[] { "accounts.google.com", "lh3.googleusercontent.com", "gemini.google.com" }) {
                             try { report.AppendLine(AntigravityDiagnostics.ProbePublic(host, bridgePort)); }

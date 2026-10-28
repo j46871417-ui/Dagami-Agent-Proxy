@@ -507,6 +507,28 @@ namespace DevProxyApp
             return report.ToString();
         }
 
+        public static string TokenRouteReport(int bridgePort, bool useDns, string dnsHost, string proxy, Func<int,string> syntheticProbe = null) {
+            var report = new StringBuilder("OAuth POST /token: только вымышленные диагностические данные.\r\n");
+            var probe = syntheticProbe ?? ProbeToken;
+            try { report.AppendLine(probe(bridgePort)); }
+            catch (Exception error) {
+                report.AppendLine("Ошибка текущего OAuth-маршрута: " + error.GetType().Name + ": " + error.Message);
+                bool compareDns = !useDns;
+                if (string.IsNullOrWhiteSpace(proxy) || (compareDns && string.IsNullOrWhiteSpace(dnsHost))) {
+                    report.AppendLine("Сравнение недоступно: настройте прокси и DNS."); return report.ToString();
+                }
+                report.AppendLine("Сравнение OAuth: " + (compareDns ? "Smart DNS" : "выбранный upstream без Smart DNS") + "; настройки не меняются.");
+                try {
+                    using (var alternate = new LocalProxyBridge()) {
+                        if (!alternate.Start(0, proxy, compareDns ? dnsHost : null)) throw new IOException("Не удалось открыть диагностический мост.");
+                        report.AppendLine(probe(alternate.BoundPort));
+                    }
+                    report.AppendLine("Альтернативный OAuth-маршрут ответил. Проверьте режим Smart DNS в «Подключении». Вход аккаунта не проверен; реальные OAuth-коды не повторялись.");
+                } catch (Exception alternative) { report.AppendLine("Ошибка альтернативного OAuth-маршрута: " + alternative.GetType().Name + ": " + alternative.Message); }
+            }
+            return report.ToString();
+        }
+
         private static string ProbeRequest(string host, string path, string contentType, string body, int bridgePort, bool token)
         {
             using (var client = new TcpClient()) {

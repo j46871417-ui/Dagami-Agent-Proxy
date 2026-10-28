@@ -70,6 +70,7 @@ namespace DevProxyApp {
                 using(var bridge=new LocalProxyBridge()) {
                     if(!bridge.Start(0,config.LastProxy,config.UseDagamiDns?config.DnsHost:null))throw new IOException("Не удалось запустить диагностический мост.");
                     Console.WriteLine(AntigravityDiagnostics.LoginRouteReport(bridge.BoundPort,config.UseDagamiDns,config.DnsHost,config.LastProxy));
+                    Console.WriteLine(AntigravityDiagnostics.TokenRouteReport(bridge.BoundPort,config.UseDagamiDns,config.DnsHost,config.LastProxy));
                     Console.WriteLine(bridge.RouteReport());
                 }
                 return true;
@@ -96,7 +97,7 @@ namespace DevProxyApp {
                 if(Console.IsInputRedirected)text.Append(Console.ReadLine());
                 else {while(true){var key=Console.ReadKey(true);if(key.Key==ConsoleKey.Enter)break;if(key.Key==ConsoleKey.Backspace){if(text.Length>0)text.Length--;continue;}if(!char.IsControl(key.KeyChar))text.Append(key.KeyChar);}}
                 Console.WriteLine();Uri value;
-                if(!Uri.TryCreate(text.ToString(),UriKind.Absolute,out value)||(value.Scheme!="http"&&value.Scheme!="https")||string.IsNullOrEmpty(value.Host)||value.Port<1)throw new ArgumentException("Нужен корректный HTTP/HTTPS URL.");
+                if(!UpstreamProxyDiagnostics.TryParse(text.ToString(),out value))throw new ArgumentException("Нужен корректный HTTP/HTTPS URL.");
                 ConfigManager.Instance.LastProxy=value.AbsoluteUri;ConfigManager.Instance.Save();Console.WriteLine("Подключение сохранено для CLI и Windows GUI.");return true;
             }
             if(command=="dns"){

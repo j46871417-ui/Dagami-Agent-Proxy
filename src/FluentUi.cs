@@ -420,17 +420,16 @@ namespace DevProxyApp
         private void CheckFluentProxy()
         {
             SaveNativeSettings(); string proxy = ConfigManager.Instance.LastProxy;
-            _nativeBusy = true; SetNativeButtonsEnabled(false); _nativeStatus.Text = "Проверка TCP-соединения…";
+            _nativeBusy = true; SetNativeButtonsEnabled(false); _nativeStatus.Text = "Проверка CONNECT и авторизации прокси…";
             if (_primaryAppAction != null) _primaryAppAction.Text = "Проверка…";
             System.Threading.ThreadPool.QueueUserWorkItem(o => {
-                bool available = CheckProxyConnection(proxy);
+                var probe = UpstreamProxyDiagnostics.Check(proxy);
                 try { BeginInvoke(new Action(() => {
                     _nativeBusy = false; SetNativeButtonsEnabled(true);
-                    _proxyCheckFailed = !available;
-                    _proxyCheckMessage = available ? "Прокси доступен по TCP. Вход в аккаунт и модели не проверены." :
-                        "Прокси недоступен. Повторите проверку или измените адрес в разделе «Подключение».";
+                    _proxyCheckFailed = !probe.Available;
+                    _proxyCheckMessage = probe.Message;
                     if (_appFeedback != null) _appFeedback.Text = _proxyCheckMessage;
-                    Logger.Log(available ? "[✓] Прокси доступен по TCP." : "[-] Прокси недоступен по TCP."); UpdateNativeStatus();
+                    Logger.Log((probe.Available ? "[✓] " : "[-] ") + probe.Message); UpdateNativeStatus();
                 })); } catch (InvalidOperationException) { }
             });
         }

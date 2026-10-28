@@ -19,6 +19,7 @@ class LocalUiChecks {
    Console.WriteLine("UI fixture: constructing preview");Console.Out.Flush();
    using (var form = new MainForm(null, false, true)) {
     Console.WriteLine("UI fixture: rendering pages");Console.Out.Flush();
+    Assert(typeof(MainForm).GetMethod("AntigravitySession",Private).Invoke(form,null)==null,"Login lookup crashes on missing application paths without a session");
     form.StartPosition = FormStartPosition.Manual; form.Location = new Point(-30000, -30000); form.Opacity = 1; form.Show(); Application.DoEvents();
     var menu = (ContextMenuStrip)Get(form, "_appActions");
     Assert(menu.Items[0].Text == "Найти или создать ярлык", "Shortcut action remains misleading");

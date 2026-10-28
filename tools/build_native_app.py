@@ -10,7 +10,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 SOURCES = [
-    "DevProxyApp.cs", "NativeUi.cs", "FluentUi.cs", "AntigravityIntegration.cs",
+    "DevProxyApp.cs", "NativeUi.cs", "FluentUi.cs", "AntigravityIntegration.cs", "ProxyDiagnostics.cs",
     "AntigravityUi.cs", "AntigravityLogin.cs", "NativeShortcuts.cs",
     "NativeLaunchBroker.cs", "NativeSessions.cs", "SystemDnsManager.cs", "NativeCli.cs", "Brand.cs",
     "LicenseManager.cs", "AppProxyPolicy.cs", "ApplicationSupport.cs", "JetBrainsProxySettings.cs",

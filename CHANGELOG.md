@@ -12,6 +12,9 @@
   Antigravity action menu. Preparation/rollback now use the application actions.
 - Added confirmation before resetting managed settings or restoring a backend.
 - Added IDE 2.6 regression fixtures and repaired the static UI-preview check.
+- Followed up on previous-version user logs: CONNECT/authentication checks replace
+  TCP-only checks, bridge startup falls back to a Windows-assigned port, synthetic
+  OAuth diagnostics compare routes, and UI/updater errors retain sanitized reasons.
 
 ## 0.2.0 alpha — 2026-10-22
 

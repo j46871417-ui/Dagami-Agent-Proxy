@@ -394,8 +394,12 @@ namespace DevProxyApp
         {
             try
             {
+                if (_running) throw new InvalidOperationException("Мост уже запущен.");
+                if (port < 0 || port > 65535) throw new ArgumentOutOfRangeException("port");
+                Uri u;
+                if (!UpstreamProxyDiagnostics.TryParse(proxyUrl, out u))
+                    throw new ArgumentException("Укажите HTTP/HTTPS proxy URL без пути, query и fragment.");
                 _scopedDns = string.IsNullOrWhiteSpace(dnsHost) ? null : new ScopedDnsResolver(dnsHost);
-                Uri u = new Uri(proxyUrl);
                 _upstreamHost = u.Host;
                 _upstreamPort = u.Port > 0 ? u.Port : 8080;
                 _isHttps = proxyUrl.StartsWith("https://", StringComparison.OrdinalIgnoreCase);
@@ -410,7 +414,11 @@ namespace DevProxyApp
                     _authHeader = null;
                 }
 
-                for (int tryPort = port; tryPort < port + 10; tryPort++)
+                var ports = new List<int>();
+                if (port != 0) for (int candidate = port; candidate <= 65535 && candidate < port + 10; candidate++) ports.Add(candidate);
+                ports.Add(0); // Windows may exclude the entire preferred range.
+                string bindError = null;
+                foreach (int tryPort in ports)
                 {
                     try
                     {
@@ -418,15 +426,24 @@ namespace DevProxyApp
                         _listener.ExclusiveAddressUse = true;
                         _listener.Start(100);
                         BoundPort = ((IPEndPoint)_listener.LocalEndpoint).Port;
+                        if (IsBridgeEndpoint(u, BoundPort)) {
+                            _listener.Stop(); _listener = null; BoundPort = 0;
+                            bindError = "upstream points to the bridge port"; continue;
+                        }
                         _running = true;
                         break;
                     }
-                    catch { }
+                    catch (Exception error) {
+                        var socketError = error as SocketException;
+                        bindError = socketError == null ? error.GetType().Name : socketError.SocketErrorCode.ToString();
+                        try { if (_listener != null) _listener.Stop(); } catch { }
+                        _listener = null; BoundPort = 0;
+                    }
                 }
 
                 if (!_running || _listener == null)
                 {
-                    Logger.Log("[-] Не удалось привязать порт моста.");
+                    Logger.Log("[-] Не удалось привязать порт моста, включая свободный порт Windows. Причина: " + bindError + ". Проверьте зарезервированные порты и правила защиты.");
                     return false;
                 }
 
@@ -610,6 +627,7 @@ namespace DevProxyApp
                     }
                     else
                     {
+                        Logger.Log("[Proxy] CONNECT HTTP " + status + ": " + (status == 407 ? "прокси отклонил авторизацию; проверьте логин/пароль и доступ у провайдера" : "отказ внешнего прокси до TLS с целевым сервисом"));
                         throw new IOException("Upstream proxy refused CONNECT; HTTP status=" + status);
                     }
                 }
@@ -2333,19 +2351,7 @@ namespace DevProxyApp
 
         private bool CheckProxyConnection(string proxyUrl)
         {
-            if (string.IsNullOrEmpty(proxyUrl)) return false;
-            try
-            {
-                Uri u = new Uri(proxyUrl);
-                using (var client = new TcpClient())
-                {
-                    var result = client.BeginConnect(u.Host, u.Port > 0 ? u.Port : 8080, null, null);
-                    bool success = result.AsyncWaitHandle.WaitOne(3000);
-                    if (success) client.EndConnect(result);
-                    return success;
-                }
-            }
-            catch { return false; }
+            return UpstreamProxyDiagnostics.Check(proxyUrl).Available;
         }
 
         private void RestartRescueBridge()
@@ -2368,25 +2374,19 @@ namespace DevProxyApp
 
         private static bool TryParseSupportedProxy(string value, out Uri proxy)
         {
-            proxy = null;
-            if (string.IsNullOrWhiteSpace(value) || !Uri.TryCreate(value.Trim(), UriKind.Absolute, out proxy))
-                return false;
-            string scheme = proxy.Scheme.ToLowerInvariant();
-            return !string.IsNullOrEmpty(proxy.Host) && proxy.Port > 0 &&
-                (scheme == "http" || scheme == "https");
+            return UpstreamProxyDiagnostics.TryParse(value, out proxy);
         }
 
         private void DoTestProxy()
         {
             ThreadPool.QueueUserWorkItem((o) => {
                 Logger.Log("[*] Запуск тестирования соединения...");
-                var sw = Stopwatch.StartNew();
-                bool ok = CheckProxyConnection(ConfigManager.Instance.LastProxy);
-                sw.Stop();
-                if (ok)
-                    _trayIcon.ShowBalloonTip(3000, Brand.Name, "Прокси-сервер доступен (" + sw.ElapsedMilliseconds + " ms)", ToolTipIcon.Info);
-                else
-                    _trayIcon.ShowBalloonTip(3000, Brand.Name, "Ошибка подключения к вышестоящему прокси", ToolTipIcon.Warning);
+                var probe = UpstreamProxyDiagnostics.Check(ConfigManager.Instance.LastProxy);
+                Logger.Log("[Proxy check] " + probe.Message);
+                try { BeginInvoke(new Action(() => {
+                    if (_exitRequested || IsDisposed || _trayIcon == null) return;
+                    _trayIcon.ShowBalloonTip(5000, Brand.Name, probe.Message, probe.Available ? ToolTipIcon.Info : ToolTipIcon.Warning);
+                })); } catch (InvalidOperationException) { }
             });
         }
 

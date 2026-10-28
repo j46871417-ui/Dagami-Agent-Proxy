@@ -62,7 +62,7 @@ namespace DevProxyApp
             if (_nativeBusy) return;
             try { action(); }
             catch (Exception ex) {
-                Logger.Log("[-] " + ex.Message);
+                Logger.Log("[UI] " + (action == null ? "<no action>" : action.Method.Name) + ": " + BugReports.Clean(ex.ToString()));
                 if (_appFeedback != null) _appFeedback.Text = ex.Message;
                 MessageBox.Show(this, ex.Message, "Dagami Agent Proxy", MessageBoxButtons.OK, MessageBoxIcon.Warning);
             }

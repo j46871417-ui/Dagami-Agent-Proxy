@@ -20,3 +20,6 @@ external agy discovery, safe preparation/restore, local CONNECT and streamed RPC
 with CSRF/auth and chunked trailers, upstream credential isolation and bridge shutdown.
 `LocalUiChecks` uses preview mode with no polling timer, checks default/minimum
 control bounds and saves screenshots; it does not verify every DPI/theme combination.
+`ProxyFailureChecks` uses only loopback fixtures for CONNECT 407/403/503, escaped
+credentials, port-range fallback and synthetic OAuth route comparison. It never
+contacts proxy addresses copied from user logs.
