@@ -7,11 +7,22 @@ import unittest
 from unittest.mock import patch
 
 from devproxy_pkg.adapters.antigravity import AntigravityAdapter
+from devproxy_pkg.adapters.cli_tools import CliToolAdapter
 from devproxy_pkg.core.profile import ProxyProfile
 from devproxy_pkg.core.tunnel import LocalTunnel
 
 
 class Ide26Tests(unittest.TestCase):
+    def test_ide_downloaded_cli_is_found_without_path_and_not_used_for_other_tools(self):
+        with tempfile.TemporaryDirectory() as temp:
+            backend = Path(temp) / '.gemini' / 'bin' / 'agy.exe'
+            backend.parent.mkdir(parents=True)
+            backend.write_bytes(b'fixture')
+            with patch('sys.platform', 'win32'), patch('os.path.expanduser', return_value=temp), \
+                 patch('shutil.which', return_value=None), patch('devproxy_pkg.adapters.cli_tools.is_cli_executable', return_value=True):
+                self.assertEqual(str(backend), CliToolAdapter('agy', 'agy', 'agy').detect_executable())
+                self.assertIsNone(CliToolAdapter('claude', 'Claude', 'claude').detect_executable())
+
     def test_windows_ide_filename_and_separate_settings(self):
         with tempfile.TemporaryDirectory() as temp:
             executable = os.path.join(temp, 'Programs', 'Antigravity IDE', 'Antigravity IDE.exe')

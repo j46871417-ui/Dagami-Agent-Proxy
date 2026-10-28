@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Drawing;
 using System.Drawing.Drawing2D;
@@ -249,7 +249,7 @@ namespace DevProxyApp
             apps.RowStyles.Add(new RowStyle(SizeType.Absolute, 44));
             apps.RowStyles.Add(new RowStyle(SizeType.Absolute, 42));
             apps.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
-            apps.RowStyles.Add(new RowStyle(SizeType.Absolute, 178));
+            apps.RowStyles.Add(new RowStyle(SizeType.Absolute, 202));
             var connection = new FluentCard { Dock = DockStyle.Fill, Padding = new Padding(12, 2, 12, 2), Margin = new Padding(0, 0, 0, 8) };
             _connectionSummary = FluentLabel("Подключение", 9, true);
             _connectionSummary.Dock = DockStyle.Fill;
@@ -258,8 +258,12 @@ namespace DevProxyApp
             connection.Controls.Add(_connectionSummary);
             apps.Controls.Add(connection, 0, 0);
             var tools = new FlowLayoutPanel { Dock = DockStyle.Fill, WrapContents = false };
-            AddNativeButton(tools, "Добавить", AddNativeTarget);
-            AddNativeButton(tools, "Найти приложения", RefreshNativeTargets);
+            var addMenu=new ContextMenuStrip();
+            addMenu.Items.Add(AppMenuItem("Выбрать файл приложения…",AddNativeTarget));
+            addMenu.Items.Add(AppMenuItem("Обновить список установленных",RefreshNativeTargets));
+            var add=new FluentButton{Text="Добавить",Width=120,Height=34};
+            add.Click+=(sender,e)=>addMenu.Show(add,new Point(0,add.Height));tools.Controls.Add(add);_nativeButtons.Add(add);
+            Disposed+=(sender,e)=>addMenu.Dispose();
             apps.Controls.Add(tools, 0, 1);
 
             var listCard = new FluentCard { Dock = DockStyle.Fill, Padding = new Padding(8), Margin = new Padding(0, 0, 0, 8) };
@@ -276,15 +280,15 @@ namespace DevProxyApp
             _targetList.SizeChanged += (sender, e) => FitNativeListColumns();
             _targetList.HandleCreated += (sender, e) => FitNativeListColumns();
             _targetList.SelectedIndexChanged += (sender, e) => {
-                if (_appFeedback != null) _appFeedback.Text = _proxyCheckMessage ?? "«Запустить» — разово. «Пропатчить» — для привычных ярлыков.";
+                if (_appFeedback != null) _appFeedback.Text = _proxyCheckMessage ?? "Настройте один раз, затем запускайте приложение как обычно.";
                 UpdateNativeDetails();
             };
             listCard.Controls.Add(_targetList);
             apps.Controls.Add(listCard, 0, 2);
             var actionCard = new FluentCard { Dock = DockStyle.Fill, Padding = new Padding(12, 8, 12, 8), Margin = Padding.Empty };
-            var actionRows = new FluentLayout { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 5, BackColor = FluentTheme.Surface };
+            var actionRows = new FluentLayout { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 6, BackColor = FluentTheme.Surface };
             actionRows.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
-            foreach (int height in new int[] { 28, 42, 25, 29 }) actionRows.RowStyles.Add(new RowStyle(SizeType.Absolute, height));
+            foreach (int height in new int[] { 28, 42, 25, 25, 29 }) actionRows.RowStyles.Add(new RowStyle(SizeType.Absolute, height));
             actionRows.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
             var selectedHeader = new FluentLayout { Dock = DockStyle.Fill, ColumnCount = 2, RowCount = 1, Margin = Padding.Empty };
             selectedHeader.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 55));
@@ -298,77 +302,30 @@ namespace DevProxyApp
             var launch = new FlowLayoutPanel { Dock = DockStyle.Fill, WrapContents = false, Margin = Padding.Empty };
             AddNativeButton(launch, "Запустить", RunPrimaryNativeAction);
             _primaryAppAction = (FluentButton)_nativeButtons[_nativeButtons.Count - 1];
-            _primaryAppAction.Primary = true; _primaryAppAction.AutoSize = false; _primaryAppAction.Width = 130;
-            AddNativeButton(launch, "Пропатчить", PatchSelectedNativeTarget);
-            _patchAppAction = (FluentButton)_nativeButtons[_nativeButtons.Count - 1];
+            _primaryAppAction.Primary = true; _primaryAppAction.AutoSize = false; _primaryAppAction.Width = 230;
             BuildAppActionsMenu();
-            AddNativeButton(launch, "Ещё…", () => _appActions.Show(_moreAppActions, new Point(0, _moreAppActions.Height)));
+            AddNativeButton(launch, "Действия", () => _appActions.Show(_moreAppActions, new Point(0, _moreAppActions.Height)));
             _moreAppActions = (FluentButton)_nativeButtons[_nativeButtons.Count - 1];
             _moreAppActions.Primary = false;
             actionRows.Controls.Add(launch, 0, 1);
             _shortcutState = new Label { Name = "ShortcutStateLabel", Dock = DockStyle.Fill, ForeColor = FluentTheme.Text,
-                AccessibleName = "Состояние настройки ярлыков или команды", Margin = new Padding(0, 2, 0, 0) };
+                AccessibleName = "Состояние обычного запуска и бинарного патча", AutoEllipsis=true, Margin = new Padding(0, 2, 0, 0) };
             actionRows.Controls.Add(_shortcutState, 0, 2);
+            _clientPreparationStatus = new Label { Name="ClientPatchStatusLabel", Dock=DockStyle.Fill, ForeColor=FluentTheme.Text, AutoEllipsis=true, Margin=Padding.Empty, AccessibleName="Состояние бинарного патча Antigravity" };
+            actionRows.Controls.Add(_clientPreparationStatus, 0, 3);
             _shortcutExplanation = new Label { Dock = DockStyle.Fill, ForeColor = FluentTheme.Muted, Font = new Font("Segoe UI", 9), Margin = Padding.Empty };
-            actionRows.Controls.Add(_shortcutExplanation, 0, 3);
+            actionRows.Controls.Add(_shortcutExplanation, 0, 4);
             _appFeedback = new Label { Dock = DockStyle.Fill, ForeColor = FluentTheme.Muted, Font = new Font("Segoe UI", 9), Margin = Padding.Empty,
-                AutoEllipsis=true, Text = "«Запустить» — разово. «Пропатчить» — для привычных ярлыков." };
+                AutoEllipsis=true, Text = "Настройте один раз, затем запускайте приложение как обычно." };
             var feedbackTip=new ToolTip{AutoPopDelay=30000,InitialDelay=400,ReshowDelay=100};
             _appFeedback.TextChanged+=(sender,e)=>feedbackTip.SetToolTip(_appFeedback,_appFeedback.Text);
             Disposed+=(sender,e)=>feedbackTip.Dispose();
-            actionRows.Controls.Add(_appFeedback, 0, 4);
+            actionRows.Controls.Add(_appFeedback, 0, 5);
             actionCard.Controls.Add(actionRows); apps.Controls.Add(actionCard, 0, 3);
 
-            var settingsPage = new FluentLayout { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 3, BackColor = BackColor };
-            settingsPage.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
-            settingsPage.RowStyles.Add(new RowStyle(SizeType.Absolute, 270));
-            settingsPage.RowStyles.Add(new RowStyle(SizeType.Absolute, 175));
-            settingsPage.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
-            var settingsCard = new FluentCard { Dock = DockStyle.Fill };
-            var settings = new FluentLayout { Dock = DockStyle.Fill, ColumnCount = 2, RowCount = 6, BackColor = FluentTheme.Surface };
-            settings.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100)); settings.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 170));
-            foreach (int height in new int[] { 35, 25, 38, 32, 38, 40 }) settings.RowStyles.Add(new RowStyle(SizeType.Absolute, height));
-            settings.Controls.Add(FluentLabel("Прокси и DNS", 15, true), 0, 0);
-            settings.Controls.Add(FluentLabel("Адрес HTTP / HTTPS прокси", 9, false), 0, 1);
-            _proxyBox = new TextBox { Text = ConfigManager.Instance.LastProxy, UseSystemPasswordChar = true, BorderStyle = BorderStyle.FixedSingle, Dock = DockStyle.Fill, AccessibleName = "Адрес HTTP или HTTPS прокси" };
-            settings.Controls.Add(_proxyBox, 0, 2);
-            var reveal = new CheckBox { Text = "Показать адрес", AutoSize = true, Anchor = AnchorStyles.Top | AnchorStyles.Left, Margin = new Padding(14, 3, 0, 0) };
-            reveal.CheckedChanged += (s, e) => _proxyBox.UseSystemPasswordChar = !reveal.Checked; settings.Controls.Add(reveal, 1, 2);
-            _dnsEnabled = new CheckBox { Text = "Smart DNS для входа Google, Antigravity и Gemini", Checked = ConfigManager.Instance.UseDagamiDns, AutoSize = true };
-            settings.Controls.Add(_dnsEnabled, 0, 3);
-            _dnsBox = new TextBox { Text = ConfigManager.Instance.DnsHost, Dock = DockStyle.Fill, BorderStyle = BorderStyle.FixedSingle, AccessibleName = "Имя DNS сервера", Enabled = _dnsEnabled.Checked };
-            _dnsEnabled.CheckedChanged += (s, e) => _dnsBox.Enabled = _dnsEnabled.Checked; settings.Controls.Add(_dnsBox, 0, 4);
-            var settingsActions = new FlowLayoutPanel { Dock = DockStyle.Fill, WrapContents = false };
-            settings.Controls.Add(settingsActions, 0, 5); settings.SetColumnSpan(settingsActions, 2);
-            AddNativeButton(settingsActions, "Сохранить", () => { SaveNativeSettings(); Logger.Log("[✓] Настройки сохранены."); });
-            ((FluentButton)_nativeButtons[_nativeButtons.Count - 1]).Primary = true;
-            AddNativeButton(settingsActions, "Проверить прокси", CheckFluentProxy);
-            AddNativeButton(settingsActions, "Записать DNS в систему…", () => { using (var dialog = new SystemDnsForm(_dnsBox.Text.Trim())) dialog.ShowDialog(this); UpdateNativeStatus(); });
-            settingsCard.Controls.Add(settings); settingsPage.Controls.Add(settingsCard, 0, 0);
-            var behaviorCard = new FluentCard { Dock = DockStyle.Fill };
-            var behavior = new FlowLayoutPanel { Dock = DockStyle.Fill, FlowDirection = FlowDirection.TopDown, WrapContents = false };
-            behavior.Controls.Add(FluentLabel("Постоянные настройки", 13, true));
-            _systemEnvironment = new CheckBox { Text = "Переменные прокси Windows — запись через «Ещё → Дополнительно»", AutoSize = true, Checked = ConfigManager.Instance.SetSystemEnv };
-            behavior.Controls.Add(_systemEnvironment);
-            _startWithWindows = new CheckBox { Text = "Запускать при входе в Windows — в трей, с правами администратора", AutoSize = true, AccessibleName = "Автозапуск Dagami с правами администратора" };
-            _startupStatus = FluentLabel("", 9, false);
-            behavior.Controls.Add(_startWithWindows); behavior.Controls.Add(_startupStatus);
-            Action readStartup = () => {
-                _updatingStartup = true;
-                try { _startWithWindows.Checked = !_preview && NativeStartup.Current.IsEnabled(); _startupStatus.Text = _startWithWindows.Checked ? "Автозапуск включён для этой копии программы." : "Автозапуск выключен для этой копии программы."; }
-                catch(Exception ex) { _startWithWindows.Checked = false; _startupStatus.Text = "Не удалось проверить автозапуск: " + ex.Message; }
-                finally { _updatingStartup = false; }
-            };
-            readStartup();
-            _startWithWindows.CheckedChanged += (s,e) => {
-                if(_updatingStartup || _preview) return;
-                try { NativeStartup.Current.SetEnabled(_startWithWindows.Checked); }
-                catch(Exception ex) { MessageBox.Show(this, ex.Message, "Автозапуск", MessageBoxButtons.OK, MessageBoxIcon.Warning); }
-                readStartup();
-            };
-            behaviorCard.Controls.Add(behavior); settingsPage.Controls.Add(behaviorCard, 0, 1);
-            var note = new Label { Dock = DockStyle.Fill, ForeColor = FluentTheme.Muted, Text = "Smart DNS — для нужных доменов. Системный DNS — отдельная кнопка с копией и откатом.", Padding = new Padding(2, 4, 2, 0) };
-            settingsPage.Controls.Add(note, 0, 2);
+            Panel antigravityPage = BuildAntigravityPage();
+            Panel connectionSettings = BuildConnectionSettings();
+            Panel advancedSettings = BuildAdvancedSettings();
 
             var logCard = new FluentCard { Dock = DockStyle.Fill };
             _nativeLog = new TextBox { Dock = DockStyle.Fill, Multiline = true, ReadOnly = true, ScrollBars = ScrollBars.Vertical,
@@ -379,22 +336,23 @@ namespace DevProxyApp
             var saveLogButton = new FluentButton { Name = "SaveJournalButton", Text = "Сохранить в файл…", AccessibleName = "Сохранить журнал в выбранный файл", Width = 190, Height = 36 };
             saveLogButton.Click += (sender, e) => SaveJournalToFile();
             reportActions.Controls.Add(saveLogButton); logCard.Controls.Add(reportActions);
-            Panel antigravityPage = BuildAntigravityPage();
-            Panel[] pages = new Panel[] { apps, settingsPage, antigravityPage, logCard };
-            string[] names = new string[] { "Приложения", "Подключение", "Antigravity", "Журнал" };
+            Panel settingsPage = BuildSettingsTabs(connectionSettings,advancedSettings,antigravityPage,logCard);
+            Panel dnsPage = BuildDnsPage();
+            Panel[] pages = new Panel[] { apps, settingsPage, dnsPage };
+            string[] names = new string[] { "Приложения", "Настройки", "DNS" };
             string[] descriptions = new string[] {
-                "Запускайте рабочие инструменты через выбранное подключение.",
-                "Настройте прокси и DNS для приложений и управляемых ярлыков.",
-                "Вход в аккаунт и дополнительные средства проверки клиента.",
-                "События запуска, состояние подключения и сообщения приложения."
+                "Выберите приложение и запустите через Dagami.",
+                "Подключение, дополнительные параметры, диагностика и журнал.",
+                "Шифрованный DNS: Dagami с резервом MagicDNS."
             };
             for (int i = 0; i < pages.Length; i++) {
                 int pageIndex = i; pages[i].Visible = i == 0; _fluentPages.Controls.Add(pages[i]);
                 var button = new FluentButton { Text = names[i], Width = 148, Height = 36, Margin = new Padding(0, 0, 0, 6), NavigationSelected = i == 0, BackColor = sidebar.BackColor };
                 button.Click += (s, e) => ShowFluentPage(pageIndex);
-                nav.Controls.Add(button); _navigation.Add(button);
+                _navigation.Add(button);
             }
-            var globalReport = new FluentButton { Name = "BugReportNavigationButton", Text = "Баг-репорт", AccessibleName = "Сообщить об ошибке — журнал и картинка", Width = 148, Height = 36, Margin = new Padding(0, 10, 0, 6) };
+            foreach(int index in new[]{0,2,1})nav.Controls.Add(_navigation[index]);
+            var globalReport = new FluentButton { Name = "BugReportNavigationButton", Text = "Сообщить о сбое", AccessibleName = "Сообщить об ошибке — журнал и картинка", Width = 148, Height = 36, Margin = new Padding(0, 10, 0, 6) };
             globalReport.Click += (sender, e) => OpenBugReport();
             nav.Controls.Add(globalReport);
             _pageControls = pages; _pageNames = names; _pageDescriptions = descriptions;
@@ -413,7 +371,11 @@ namespace DevProxyApp
             Resize += (sender, e) => {
                 if (WindowState != FormWindowState.Minimized) _nativeRestoreState = WindowState;
             };
-            if (!_preview) _nativeLogTimer.Start();
+            if (!_preview) {
+                _nativeLogTimer.Start();DnsProviders.Initialize();
+                DateTime nextDiscovery=DateTime.UtcNow;
+                Activated+=(sender,e)=>{if(!_nativeBusy&&DateTime.UtcNow>=nextDiscovery){nextDiscovery=DateTime.UtcNow.AddSeconds(15);RefreshNativeTargets();QueueClientStatus(true);UpdateAppActionState();}};
+            }
             RefreshNativeTargets();
         }
 

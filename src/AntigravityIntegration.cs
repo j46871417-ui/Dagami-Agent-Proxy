@@ -21,8 +21,9 @@ namespace DevProxyApp
         public string Message { get; private set; }
         internal AntigravityPreparationResult(bool prepared, string message, bool complete = true) { Prepared=prepared; Complete=prepared && complete; Message=message; }
     }
-    // Independent implementation. Only metadata and proxy-variable literals change;
-    // executable instructions, TLS verification and server authentication are preserved.
+    // Independent implementation. Changes are limited to supported metadata/proxy
+    // literals and a verified local CLI eligibility test. TLS and server-side
+    // authentication/entitlement checks are not changed.
     public static class AntigravityIntegration
     {
         private const string BackupSuffix = ".devproxy-region.bak";
@@ -58,9 +59,12 @@ namespace DevProxyApp
         }
 
         public static List<string> BackendPaths(string executable) {
-            return BackendPaths(executable, Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData));
+            return BackendPaths(executable, Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), Environment.GetFolderPath(Environment.SpecialFolder.UserProfile));
         }
         public static List<string> BackendPaths(string executable, string localAppData) {
+            return BackendPaths(executable, localAppData, null);
+        }
+        public static List<string> BackendPaths(string executable, string localAppData, string userProfile) {
             if (!File.Exists(executable)) throw new UnsupportedAntigravityBinaryException("Клиент Antigravity не найден.");
             if (!IsIde(executable))
                 return new List<string> { BackendPath(executable) };
@@ -77,8 +81,12 @@ namespace DevProxyApp
                 string cli = Path.Combine(localAppData, "agy", "bin", "agy.exe");
                 if (File.Exists(cli) && !paths.Exists(path => string.Equals(path, Path.GetFullPath(cli), StringComparison.OrdinalIgnoreCase))) paths.Add(Path.GetFullPath(cli));
             }
+            if (externalLayout && !string.IsNullOrEmpty(userProfile)) {
+                string cli = Path.Combine(userProfile, ".gemini", "bin", "agy.exe");
+                if (File.Exists(cli) && !paths.Exists(path => string.Equals(path, Path.GetFullPath(cli), StringComparison.OrdinalIgnoreCase))) paths.Add(Path.GetFullPath(cli));
+            }
             if (paths.Count == 0) throw new UnsupportedAntigravityBinaryException(externalLayout ?
-                "IDE использует внешний agy.exe, но он не найден в %LOCALAPPDATA%\\agy\\bin. Установите Antigravity CLI для этого пользователя. Прокси и ярлыки можно настроить отдельно." :
+                "IDE использует внешний agy.exe, но он не найден в %USERPROFILE%\\.gemini\\bin или %LOCALAPPDATA%\\agy\\bin. Дайте IDE завершить загрузку backend либо установите Antigravity CLI для этого пользователя. Прокси и ярлыки можно настроить отдельно." :
                 "В Antigravity не найден language_server*.exe. Прокси можно использовать отдельно от бинарной подготовки.");
             paths.Sort(StringComparer.OrdinalIgnoreCase); return paths;
         }
@@ -98,8 +106,11 @@ namespace DevProxyApp
             if (errors.Count > 0) throw new IOException("Откат клиента не завершён: " + string.Join("; ", errors.ToArray()));
         }
         public static AntigravityPreparationResult PrepareClient(string executable) {
+            return PrepareClient(executable, Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), Environment.GetFolderPath(Environment.SpecialFolder.UserProfile));
+        }
+        public static AntigravityPreparationResult PrepareClient(string executable, string localAppData, string userProfile) {
             List<string> paths;
-            try { paths = BackendPaths(executable); }
+            try { paths = BackendPaths(executable,localAppData,userProfile); }
             catch (UnsupportedAntigravityBinaryException ex) { return new AntigravityPreparationResult(false, ex.Message); }
             var before = new Dictionary<string, string>(); var messages = new List<string>(); bool prepared = false; int skipped = 0;
             try {
@@ -116,16 +127,39 @@ namespace DevProxyApp
             }
         }
         public static string InspectClient(string executable) {
+            bool compatible;return InspectClient(executable,out compatible);
+        }
+        public static string InspectClient(string executable,out bool compatible) {
+            compatible=true;
             var messages = new List<string>();
             foreach (string path in BackendPaths(executable)) {
-                try { messages.Add(path + ": " + Inspect(path)); }
-                catch (UnsupportedAntigravityBinaryException ex) { messages.Add(path + ": " + ex.Message); }
+                try {string detail=Inspect(path);if(detail.StartsWith("Прежняя подготовка CLI"))compatible=false;messages.Add(path + ": " + detail);}
+                catch (UnsupportedAntigravityBinaryException ex) {compatible=false;messages.Add(path + ": " + ex.Message); }
             }
             return string.Join(Environment.NewLine, messages.ToArray());
         }
+        public static string ClientPreparationStatus(string executable) {
+            try {
+                int prepared=0,unprepared=0,unsupported=0;
+                foreach(string path in BackendPaths(executable))try{
+                    string detail=Inspect(path);
+                    if(detail.StartsWith("Клиент подготовлен;"))prepared++;
+                    else if(detail.StartsWith("Прежняя подготовка CLI"))unsupported++;
+                    else unprepared++;
+                }catch(UnsupportedAntigravityBinaryException){unsupported++;}
+                if(prepared>0&&(unprepared>0||unsupported>0))return "Патч: частично применён";
+                if(unsupported>0)return "Патч: версия или состояние не поддерживается";
+                if(unprepared>0)return "Патч: не применён";
+                return prepared>0?"Патч: применён, копия проверена":"Патч: backend не найден";
+            }catch(UnsupportedAntigravityBinaryException){return "Патч: backend не найден";}
+            catch(Exception){return "Патч: не удалось проверить";}
+        }
         public static string RestoreClient(string executable) {
+            return RestoreClient(executable, Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), Environment.GetFolderPath(Environment.SpecialFolder.UserProfile));
+        }
+        public static string RestoreClient(string executable, string localAppData, string userProfile) {
             var messages = new List<string>(); var errors = new List<string>();
-            foreach (string path in BackendPaths(executable)) {
+            foreach (string path in BackendPaths(executable,localAppData,userProfile)) {
                 try { messages.Add(Path.GetFileName(path) + ": " + Restore(path)); }
                 catch (Exception ex) { errors.Add(Path.GetFileName(path) + ": " + ex.Message); }
             }
@@ -185,8 +219,29 @@ namespace DevProxyApp
             return offsets;
         }
 
+        private static int ValidatePatchData(byte[] original)
+        {
+            int? eligibility=CliRegionGate.Find(original);
+            var proxySites=FindAll(original,Encoding.ASCII.GetBytes("https_proxy"));
+            if(eligibility.HasValue){
+                if(proxySites.Count<1||proxySites.Count>8)throw new UnsupportedAntigravityBinaryException("CLI: неизвестная структура переменных прокси. Файл не изменён.");
+                return 1+proxySites.Count;
+            }
+            List<byte[]> replacements;int count=ValidatePatterns(original,out replacements).Count;
+            if(proxySites.Count>8)throw new UnsupportedAntigravityBinaryException("Неоднозначные переменные прокси Antigravity; файл не изменён.");
+            return count+proxySites.Count;
+        }
+
         public static byte[] PatchData(byte[] original, out int changes)
         {
+            int? eligibility=CliRegionGate.Find(original);
+            if(eligibility.HasValue){
+                var proxySites=FindAll(original,Encoding.ASCII.GetBytes("https_proxy"));
+                if(proxySites.Count<1||proxySites.Count>8)throw new UnsupportedAntigravityBinaryException("CLI: неизвестная структура переменных прокси. Файл не изменён.");
+                byte[] result=(byte[])original.Clone();byte[] gate={0x48,0x85,0xc0,0x90};Array.Copy(gate,0,result,eligibility.Value,gate.Length);
+                byte[] variable=Encoding.ASCII.GetBytes("AG_LS_PROXY");foreach(int site in proxySites)Array.Copy(variable,0,result,site,variable.Length);
+                changes=1+proxySites.Count;return result;
+            }
             List<byte[]> replacements;
             var offsets=ValidatePatterns(original,out replacements);
             byte[] patched = (byte[])original.Clone();
@@ -219,13 +274,18 @@ namespace DevProxyApp
             if (manifest != null && hash == Convert.ToString(manifest["patched_sha256"])) {
                 if (!File.Exists(backend + BackupSuffix) || Hash(File.ReadAllBytes(backend + BackupSuffix)) != Convert.ToString(manifest["original_sha256"]))
                     throw new InvalidDataException("Подготовленный клиент найден, но резервная копия повреждена или отсутствует.");
+                if(NeedsCliUpgrade(current))return "Прежняя подготовка CLI не отключает локальную проверку региона. Восстановите клиент, затем выполните подготовку снова. Резервная копия проверена.";
                 bool legacyProxy = FindAll(current, Encoding.ASCII.GetBytes("https_proxy")).Count > 0 &&
                     FindAll(current, Encoding.ASCII.GetBytes("AG_LS_PROXY")).Count == 0;
                 return "Клиент подготовлен; резервная копия проверена. Файл: " + Path.GetFileName(backend) + "." +
                     (legacyProxy ? " Прежний патч использует HTTPS_PROXY управляемого процесса. Для отдельной AG_LS_PROXY выполните «Отменить подготовку», затем «Подготовить клиент»." : "");
             }
-            List<byte[]> replacements; int count=ValidatePatterns(current,out replacements).Count;
+            int count=ValidatePatchData(current);
             return "Antigravity " + FileVersionInfo.GetVersionInfo(executable).ProductVersion + ": найдено " + count + " сигнатур; требуется подготовка клиента.";
+        }
+
+        static bool NeedsCliUpgrade(byte[] current) {
+            try{return CliRegionGate.Find(current).HasValue;}catch(UnsupportedAntigravityBinaryException){return false;}
         }
 
         private static void AtomicWrite(string path, byte[] bytes)
@@ -303,8 +363,8 @@ namespace DevProxyApp
                 byte[] current=File.ReadAllBytes(backend);
                 var manifest=Manifest(backend);
                 if(manifest!=null && Hash(current)==Convert.ToString(manifest["patched_sha256"]))
-                    return new AntigravityPreparationResult(true,Inspect(executable));
-                List<byte[]> replacements;ValidatePatterns(current,out replacements);
+                    return new AntigravityPreparationResult(!NeedsCliUpgrade(current),Inspect(executable));
+                ValidatePatchData(current);current=null;
                 return new AntigravityPreparationResult(true,Prepare(executable));
             }
             catch(UnsupportedAntigravityBinaryException ex) {
@@ -344,24 +404,109 @@ namespace DevProxyApp
             "waa-pa.clients6.google.com", "generativelanguage.googleapis.com", "proactivebackend-pa.googleapis.com",
             "robinfrontend-pa.googleapis.com", "aisandbox-pa.googleapis.com"
         };
-        private readonly string _server;
+        public static string[] ServerCandidates(string server) {
+            return DnsProviders.Addresses(server);
+        }
+        private readonly string _configuredServer;
+        private readonly string[] _servers;
+        private readonly IPEndPoint[] _testEndpoints;
+        private readonly int _timeout = 1000;
         private readonly object _sync = new object();
         private readonly Dictionary<string, KeyValuePair<DateTime, IPAddress>> _cache = new Dictionary<string, KeyValuePair<DateTime, IPAddress>>();
-        public ScopedDnsResolver(string server) { _server = server; }
+        private readonly Dictionary<string, DateTime> _cooldown = new Dictionary<string, DateTime>();
+        public ScopedDnsResolver(string server) { _configuredServer=server; _servers = ServerCandidates(server); }
+        internal ScopedDnsResolver(IPEndPoint[] endpoints, int timeout) { _testEndpoints = endpoints; _servers = new string[0]; _timeout = timeout; }
 
         public static bool IsScoped(string host) { return host != null && (Array.Exists(Hosts, x => x.Equals(host, StringComparison.OrdinalIgnoreCase)) || Array.Exists(GoogleDependencies, x => x.Equals(host, StringComparison.OrdinalIgnoreCase))); }
         private static int Read16(byte[] data, int offset) { if (offset < 0 || offset + 2 > data.Length) throw new InvalidDataException("Обрезанный DNS ответ."); return (data[offset] << 8) | data[offset + 1]; }
-        private static int SkipName(byte[] data, int offset)
-        {
-            for (int labels = 0; labels < 128; labels++) {
-                if (offset >= data.Length) throw new InvalidDataException("Обрезанное DNS имя.");
-                int length = data[offset++];
-                if (length == 0) return offset;
-                if ((length & 192) == 192) { if (offset >= data.Length) throw new InvalidDataException("Обрезанный DNS указатель."); return offset + 1; }
-                if (length > 63 || offset + length > data.Length) throw new InvalidDataException("Некорректное DNS имя.");
-                offset += length;
+        private static string ReadName(byte[] data, ref int offset) {
+            int position = offset, end = -1; var labels = new List<string>(); var seen = new HashSet<int>();
+            for (int count = 0; count < 128; count++) {
+                if (position >= data.Length || !seen.Add(position)) throw new InvalidDataException("Некорректное DNS имя.");
+                int size = data[position++];
+                if (size == 0) { offset = end < 0 ? position : end; return string.Join(".", labels.ToArray()); }
+                if ((size & 192) == 192) {
+                    if (position >= data.Length) throw new InvalidDataException("Обрезанный DNS указатель.");
+                    int pointer = ((size & 63) << 8) | data[position++];
+                    if (pointer >= position - 2) throw new InvalidDataException("Некорректный DNS указатель.");
+                    if (end < 0) end = position; position = pointer; continue;
+                }
+                if (size > 63 || position + size > data.Length) throw new InvalidDataException("Некорректная DNS метка.");
+                labels.Add(Encoding.ASCII.GetString(data, position, size)); position += size;
             }
             throw new InvalidDataException("Слишком длинное DNS имя.");
+        }
+        private static byte[] ReadExact(Stream stream, int length, Stopwatch elapsed, int timeout) {
+            var bytes = new byte[length]; int count = 0;
+            while (count < length) {
+                int remaining = timeout - (int)elapsed.ElapsedMilliseconds;
+                if (remaining <= 0) throw new TimeoutException("DNS TCP timeout.");
+                stream.ReadTimeout = remaining;
+                int size = stream.Read(bytes, count, length - count);
+                if (size == 0) throw new EndOfStreamException("Обрезанный DNS TCP ответ.");
+                count += size;
+            }
+            return bytes;
+        }
+        private byte[] Exchange(IPEndPoint server, byte[] query, bool tcp) {
+            if (!tcp) using (var udp = new UdpClient(server.AddressFamily)) {
+                udp.Client.ReceiveTimeout = _timeout; udp.Client.SendTimeout = _timeout; udp.Connect(server);
+                udp.Send(query, query.Length); IPEndPoint remote = null; return udp.Receive(ref remote);
+            }
+            var elapsed = Stopwatch.StartNew();
+            using (var client = new TcpClient(server.AddressFamily)) {
+                var pending = client.BeginConnect(server.Address, server.Port, null, null);
+                using (pending.AsyncWaitHandle) {
+                    if (!pending.AsyncWaitHandle.WaitOne(_timeout)) throw new TimeoutException("DNS TCP connect timeout.");
+                    client.EndConnect(pending);
+                }
+                var stream = client.GetStream(); stream.WriteTimeout = Math.Max(1, _timeout - (int)elapsed.ElapsedMilliseconds);
+                byte[] framed = new byte[query.Length + 2]; framed[0] = (byte)(query.Length >> 8); framed[1] = (byte)query.Length;
+                Array.Copy(query, 0, framed, 2, query.Length); stream.Write(framed, 0, framed.Length);
+                int length = Read16(ReadExact(stream, 2, elapsed, _timeout), 0);
+                if (length < 12) throw new InvalidDataException("Обрезанный DNS TCP ответ.");
+                return ReadExact(stream, length, elapsed, _timeout);
+            }
+        }
+        internal static IPAddress ParseAnswer(byte[] response, byte[] transaction, string host, out int ttl) {
+            ttl = 30;
+            if (response.Length < 12 || response[0] != transaction[0] || response[1] != transaction[1] ||
+                (response[2] & 248) != 128 || (response[2] & 2) != 0 || (response[3] & 15) != 0 || Read16(response, 4) != 1)
+                throw new InvalidDataException("DNS сервер вернул ошибку или неполный ответ.");
+            int offset = 12;
+            if (!ReadName(response, ref offset).Equals(host, StringComparison.OrdinalIgnoreCase) ||
+                Read16(response, offset) != 1 || Read16(response, offset + 2) != 1) throw new InvalidDataException("DNS вопрос не совпадает.");
+            offset += 4;
+            var aliases = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            var addresses = new Dictionary<string, IPAddress>(StringComparer.OrdinalIgnoreCase);
+            for (int answer = 0; answer < Read16(response, 6); answer++) {
+                string owner = ReadName(response, ref offset);
+                int type = Read16(response, offset), dnsClass = Read16(response, offset + 2), length = Read16(response, offset + 8);
+                uint lifetime = ((uint)Read16(response, offset + 4) << 16) | (uint)Read16(response, offset + 6);
+                ttl = Math.Min(ttl, (int)Math.Min(30U, lifetime)); offset += 10;
+                if (offset + length > response.Length) throw new InvalidDataException("Обрезанные DNS данные.");
+                if (dnsClass == 1 && type == 5) {
+                    int nameOffset = offset; string canonical = ReadName(response, ref nameOffset);
+                    if (nameOffset != offset + length) throw new InvalidDataException("Некорректный DNS CNAME.");
+                    aliases[owner] = canonical;
+                } else if (dnsClass == 1 && type == 1 && length == 4) {
+                    addresses[owner] = new IPAddress(new byte[] { response[offset], response[offset+1], response[offset+2], response[offset+3] });
+                }
+                offset += length;
+            }
+            string current = host; var visited = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            for (int hops = 0; hops < 16 && visited.Add(current); hops++) {
+                IPAddress address;
+                if (addresses.TryGetValue(current, out address)) {
+                    byte[] bytes = address.GetAddressBytes(); byte first = bytes[0], second = bytes[1];
+                    if (first == 0 || first == 10 || first == 127 || first >= 224 || (first == 192 && second == 168) ||
+                        (first == 172 && second >= 16 && second <= 31) || (first == 169 && second == 254))
+                        throw new InvalidDataException("DNS вернул локальный или зарезервированный адрес.");
+                    return address;
+                }
+                string next; if (!aliases.TryGetValue(current, out next)) break; current = next;
+            }
+            throw new InvalidDataException("DNS сервер не вернул IPv4 для запрошенного имени.");
         }
 
         public IPAddress Resolve(string host)
@@ -371,12 +516,6 @@ namespace DevProxyApp
                 KeyValuePair<DateTime, IPAddress> cached;
                 if (_cache.TryGetValue(host, out cached) && cached.Key > DateTime.UtcNow) return cached.Value;
             }
-            IPAddress server;
-            if (!IPAddress.TryParse(_server, out server)) {
-                IPAddress[] addresses = Dns.GetHostAddresses(_server);
-                server = Array.Find(addresses, x => x.AddressFamily == AddressFamily.InterNetwork);
-                if (server == null) throw new InvalidOperationException("IPv4 DNS сервера не найден.");
-            }
             byte[] transaction = new byte[2]; using (var rng = RandomNumberGenerator.Create()) rng.GetBytes(transaction);
             byte[] query;
             using (var buffer = new MemoryStream()) {
@@ -384,34 +523,51 @@ namespace DevProxyApp
                 foreach (string label in host.Split('.')) { byte[] bytes = Encoding.ASCII.GetBytes(label); buffer.WriteByte((byte)bytes.Length); buffer.Write(bytes, 0, bytes.Length); }
                 buffer.Write(new byte[] { 0, 0, 1, 0, 1 }, 0, 5); query = buffer.ToArray();
             }
-            byte[] response;
-            using (var udp = new UdpClient(server.AddressFamily)) {
-                udp.Client.ReceiveTimeout = 4000; udp.Client.SendTimeout = 4000; udp.Connect(server, 53);
-                udp.Send(query, query.Length); IPEndPoint remote = null; response = udp.Receive(ref remote);
+            var managed = _testEndpoints == null ? DnsProviders.ForServer(_configuredServer) : null;
+            if(managed!=null){
+                var candidates=new List<DnsEndpoint>();var cooling=new List<DnsEndpoint>();
+                foreach(var endpoint in managed){bool delayed;lock(_sync){DateTime until;delayed=_cooldown.TryGetValue(endpoint.Address+"/DoH",out until)&&until>DateTime.UtcNow;}(delayed?cooling:candidates).Add(endpoint);}candidates.AddRange(cooling);
+                var deadline=Stopwatch.StartNew();int remainingAttempts=candidates.Count;
+                foreach(var endpoint in candidates)try{
+                    int remaining=7000-(int)deadline.ElapsedMilliseconds;if(remaining<=0)break;
+                    int timeout=Math.Min(2400,Math.Max(250,remaining/Math.Max(1,remainingAttempts--)));
+                    int ttl;var address=ParseAnswer(DnsHttpsTransport.Exchange(endpoint,query,Math.Min(remaining,timeout)),transaction,host,out ttl);
+                    lock(_sync){_cooldown.Remove(endpoint.Address+"/DoH");if(ttl>0)_cache[host]=new KeyValuePair<DateTime,IPAddress>(DateTime.UtcNow.AddSeconds(ttl),address);}
+                    Logger.Log("[DNS] provider="+endpoint.Provider+" resolver="+endpoint.Address+"/DoH host="+host+" OK");return address;
+                }catch(Exception error){if(!(error is IOException)&&!(error is InvalidDataException)&&!(error is SocketException)&&!(error is TimeoutException)&&!(error is AuthenticationException))throw;lock(_sync)_cooldown[endpoint.Address+"/DoH"]=DateTime.UtcNow.AddSeconds(30);Logger.Log("[DNS] provider="+endpoint.Provider+" DoH failed="+error.GetType().Name);}
+                throw new IOException("Зашифрованный DNS Dagami и MagicDNS недоступен. Проверьте подключение и диагностику TLS.");
             }
-            if (response.Length < 12 || response[0] != transaction[0] || response[1] != transaction[1] ||
-                (response[2] & 128) == 0 || (response[2] & 2) != 0 || (response[3] & 15) != 0 || Read16(response, 4) != 1)
-                throw new InvalidDataException("DNS сервер вернул ошибку или неполный ответ.");
-            int offset = SkipName(response, 12);
-            if (Read16(response, offset) != 1 || Read16(response, offset + 2) != 1) throw new InvalidDataException("DNS вопрос не совпадает.");
-            offset += 4;
-            int answers = Read16(response, 6);
-            for (int answer = 0; answer < answers; answer++) {
-                offset = SkipName(response, offset);
-                int type = Read16(response, offset); int dnsClass = Read16(response, offset + 2);
-                int length = Read16(response, offset + 8); offset += 10;
-                if (offset + length > response.Length) throw new InvalidDataException("Обрезанные DNS данные.");
-                if (type == 1 && dnsClass == 1 && length == 4) {
-                    var address = new IPAddress(new byte[] { response[offset], response[offset + 1], response[offset + 2], response[offset + 3] });
-                    byte first = response[offset]; byte second = response[offset + 1];
-                    if (first == 0 || first == 10 || first == 127 || first >= 224 || (first == 192 && second == 168) || (first == 172 && second >= 16 && second <= 31) || (first == 169 && second == 254))
-                        throw new InvalidDataException("DNS вернул локальный или зарезервированный адрес.");
-                    lock (_sync) _cache[host] = new KeyValuePair<DateTime, IPAddress>(DateTime.UtcNow.AddSeconds(30), address);
-                    return address;
+            var endpoints = new List<IPEndPoint>();
+            if (_testEndpoints != null) endpoints.AddRange(_testEndpoints);
+            else foreach (string candidate in _servers) {
+                IPAddress server;
+                if (IPAddress.TryParse(candidate, out server)) endpoints.Add(new IPEndPoint(server, 53));
+                else foreach (IPAddress address in Dns.GetHostAddresses(candidate))
+                    if (address.AddressFamily == AddressFamily.InterNetwork) endpoints.Add(new IPEndPoint(address, 53));
+            }
+            var attempts = new List<KeyValuePair<IPEndPoint, bool>>();
+            for (int pass = 0; pass < 2; pass++) foreach (IPEndPoint server in endpoints) foreach (bool tcp in new[] { false, true }) {
+                string key = server + (tcp ? "/TCP" : "/UDP"); bool cooling;
+                lock (_sync) { DateTime until; cooling = _cooldown.TryGetValue(key, out until) && until > DateTime.UtcNow; }
+                if (cooling == (pass == 1)) attempts.Add(new KeyValuePair<IPEndPoint, bool>(server, tcp));
+            }
+            foreach (var attempt in attempts) {
+                IPEndPoint server = attempt.Key; bool tcp = attempt.Value;
+                string key = server + (tcp ? "/TCP" : "/UDP");
+                try {
+                    int ttl; IPAddress address = ParseAnswer(Exchange(server, query, tcp), transaction, host, out ttl);
+                    lock (_sync) {
+                        _cooldown.Remove(key);
+                        if (ttl > 0) _cache[host] = new KeyValuePair<DateTime, IPAddress>(DateTime.UtcNow.AddSeconds(ttl), address);
+                    }
+                    Logger.Log("[DNS] resolver=" + key + " host=" + host + " OK"); return address;
+                } catch (Exception error) {
+                    if (!(error is SocketException) && !(error is IOException) && !(error is InvalidDataException) && !(error is TimeoutException)) throw;
+                    lock (_sync) _cooldown[key] = DateTime.UtcNow.AddSeconds(30);
+                    Logger.Log("[DNS] resolver=" + key + " host=" + host + " failed=" + error.GetType().Name);
                 }
-                offset += length;
             }
-            throw new InvalidOperationException("DNS сервер не вернул IPv4 для " + host + ".");
+            throw new IOException("Smart DNS: все настроенные DNS-узлы недоступны или вернули некорректный ответ.");
         }
     }
 
@@ -419,14 +575,32 @@ namespace DevProxyApp
     {
         private static string Header(Stream stream)
         {
+            string detail; return Header(stream,out detail);
+        }
+        private static string Header(Stream stream,out string detail)
+        {
+            detail="";
             var data = new List<byte>();
             while (data.Count < 32768) {
                 int next = stream.ReadByte();
                 if (next < 0) throw new IOException("Соединение закрыто до получения HTTP заголовка.");
                 data.Add((byte)next);
                 int n = data.Count;
-                if (n >= 4 && data[n-4] == 13 && data[n-3] == 10 && data[n-2] == 13 && data[n-1] == 10)
-                    return Encoding.ASCII.GetString(data.ToArray()).Split(new string[] { "\r\n" }, StringSplitOptions.None)[0];
+                if (n >= 4 && data[n-4] == 13 && data[n-3] == 10 && data[n-2] == 13 && data[n-1] == 10) {
+                    string[] lines=Encoding.ASCII.GetString(data.ToArray()).Split(new string[] { "\r\n" },StringSplitOptions.None);
+                    foreach(string line in lines) {
+                        const string upstream="X-Dagami-Upstream-Status: ";
+                        const string phase="X-Dagami-Failure-Phase: ";
+                        int code;
+                        if(line.StartsWith(upstream,StringComparison.OrdinalIgnoreCase)&&int.TryParse(line.Substring(upstream.Length),out code)&&code>=100&&code<=599)
+                            detail+=" "+UpstreamProxyDiagnostics.StatusMessage(code);
+                        if(line.StartsWith(phase,StringComparison.OrdinalIgnoreCase)) {
+                            string value=line.Substring(phase.Length);
+                            if(Array.IndexOf(new[]{"smart-dns-resolve","smart-dns-connect","upstream-connect","upstream-CONNECT","loopback-connect"},value)>=0)detail+=" Этап: "+value+".";
+                        }
+                    }
+                    return lines[0];
+                }
             }
             throw new InvalidDataException("HTTP заголовок превышает допустимый размер.");
         }
@@ -537,16 +711,14 @@ namespace DevProxyApp
                     if (!connection.AsyncWaitHandle.WaitOne(3000)) throw new TimeoutException("Локальный мост не отвечает.");
                     client.EndConnect(connection);
                 }
-                client.ReceiveTimeout = 10000; client.SendTimeout = 10000;
+                client.ReceiveTimeout = 20000; client.SendTimeout = 10000;
                 Stream stream = client.GetStream();
                 byte[] connect = Encoding.ASCII.GetBytes("CONNECT " + host + ":443 HTTP/1.1\r\nHost: " + host + ":443\r\n\r\n");
                 stream.Write(connect, 0, connect.Length);
-                string status = Header(stream);
+                string detail; string status = Header(stream,out detail);
                 if (HttpStatus(status)!=200)
-                    throw new IOException("CONNECT "+host+": мост вернул HTTP " + HttpStatus(status) + ". DNS или upstream proxy не пропускает маршрут.");
-                using (var tls = new SslStream(stream, false)) {
-                    tls.ReadTimeout = 10000; tls.WriteTimeout = 10000;
-                    tls.AuthenticateAsClient(host, null, SslProtocols.Tls12, true);
+                    throw new IOException("CONNECT "+host+": мост вернул HTTP " + HttpStatus(status) + "."+(detail.Length>0?detail:" DNS или upstream proxy не пропускает маршрут."));
+                using (var tls = TlsDiagnostics.Connect(stream, host, "target-service")) {
                     byte[] request = Encoding.ASCII.GetBytes(body == null ? "GET " + path + " HTTP/1.1\r\nHost: " + host + "\r\nConnection: close\r\n\r\n" : "POST " + path + " HTTP/1.1\r\nHost: " + host + "\r\nContent-Type: " + contentType + "\r\nContent-Length: " + Encoding.ASCII.GetByteCount(body) + "\r\nConnection: close\r\n\r\n" + body);
                     tls.Write(request, 0, request.Length); tls.Flush();
                     status = Header(tls);

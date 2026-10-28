@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Drawing;
 using System.IO;
@@ -26,12 +26,13 @@ namespace DevProxyApp
 
         private FluentButton _primaryAppAction;
         private FluentButton _moreAppActions;
-        private FluentButton _patchAppAction;
+        private ToolStripMenuItem _patchMenuItem;
         private bool _patchInProgress;
         private Label _selectedAppHeading;
         private Label _shortcutExplanation;
         private Label _appFeedback;
         private Label _shortcutState;
+        private Label _clientPreparationStatus;
         private ContextMenuStrip _appActions;
         private ToolStripMenuItem _stopAppItem, _removeAppItem, _restoreShortcutItem, _clientPreparationItem;
         private Panel[] _pageControls;
@@ -43,6 +44,22 @@ namespace DevProxyApp
         private string _shortcutIssue, _proxyCheckMessage;
         private int _shortcutRecords;
         private int _shortcutRefreshTicks;
+        private string _clientStatusKey, _clientStatusText;
+        private int _clientStatusRevision;
+
+        private void QueueClientStatus(bool force=false) {
+            var target=_targetList==null||_targetList.SelectedItems.Count==0?null:_targetList.SelectedItems[0].Tag as AppTarget;
+            string key=target!=null&&target.IsInstalled&&AntigravityIntegration.Supports(target.ExePath)?target.Id+"|"+target.ExePath:null;
+            if(!force&&key==_clientStatusKey)return;
+            _clientStatusKey=key;int revision=++_clientStatusRevision;
+            _clientStatusText=key==null?null:_preview?"Патч: не проверен":"Патч: проверяем…";
+            if(key==null||_preview)return;
+            string path=target.ExePath;
+            System.Threading.ThreadPool.QueueUserWorkItem(state=>{
+                string status=AntigravityIntegration.ClientPreparationStatus(path);
+                try{BeginInvoke(new Action(()=>{if(revision!=_clientStatusRevision)return;_clientStatusText=status;UpdateAppActionState();}));}catch(InvalidOperationException){}
+            });
+        }
 
         private void ShowFluentPage(int index)
         {
@@ -54,7 +71,7 @@ namespace DevProxyApp
             }
             _pageControls[index].BringToFront();
             _fluentHeading.Text = _pageNames[index]; _fluentSubtitle.Text = _pageDescriptions[index];
-            if (index == 1) { _proxyBox.Focus(); _proxyBox.SelectAll(); }
+            if (index == 1 && _settingsTabs.SelectedIndex==0) { _proxyBox.Focus(); _proxyBox.SelectAll(); }
         }
 
         private void ExecuteNativeAction(Action action)
@@ -78,14 +95,8 @@ namespace DevProxyApp
         private void BuildAppActionsMenu()
         {
             _appActions = new ContextMenuStrip();
-            _appActions.Items.Add(AppMenuItem("Найти или создать ярлык", () => {
-                var target = SelectedNativeTarget(); SaveNativeSettings();
-                if (!target.IsInstalled) throw new InvalidOperationException("Исполняемый файл не найден.");
-                foreach (string path in CreateManagedShortcuts(target)) Logger.Log("[✓] Ярлык создан: " + path);
-                UpdateNativeDetails();
-                _appFeedback.Text = "Ярлыки найдены или созданы и проверены. Удалённые записи восстановлению не мешают.";
-            }));
-            _appActions.Items.Add(new ToolStripSeparator());
+            _patchMenuItem=AppMenuItem("Настроить обычный запуск",PatchSelectedNativeTarget);
+            _appActions.Items.Add(_patchMenuItem);
             _stopAppItem = AppMenuItem("Остановить", () => {
                 if (MessageBox.Show(this, "Завершить «" + SelectedNativeTarget().DisplayName + "»? Сохраните работу в приложении перед остановкой.",
                     "Остановить приложение", MessageBoxButtons.YesNo, MessageBoxIcon.Warning, MessageBoxDefaultButton.Button2) != DialogResult.Yes) return;
@@ -103,7 +114,7 @@ namespace DevProxyApp
             advanced.DropDownItems.Add(_clientPreparationItem);
             _appActions.Items.Add(advanced);
             _removeAppItem = AppMenuItem("Удалить из списка", () => {
-                if (_shortcutRecords > 0 || _shortcutIssue != null) throw new InvalidOperationException("Сначала восстановите обычные ярлыки через «Ещё → Дополнительно».");
+                if (_shortcutRecords > 0 || _shortcutIssue != null) throw new InvalidOperationException("Сначала восстановите обычные ярлыки через «Действия → Дополнительно».");
                 NativeSession session;
                 if (_nativeSessions.TryGetValue(SelectedNativeTarget().Id, out session) && session.RunningProcess != null)
                     throw new InvalidOperationException("Сначала остановите приложение.");
@@ -139,7 +150,7 @@ namespace DevProxyApp
             if (!TryParseSupportedProxy(_proxyBox.Text.Trim(), out proxy)) { ShowFluentPage(1); return; }
             var target = SelectedNativeTarget(); SaveNativeSettings();
             string manager = System.Diagnostics.Process.GetCurrentProcess().MainModule.FileName;
-            _nativeBusy = true; _patchInProgress = true; SetNativeButtonsEnabled(false); _patchAppAction.Text = "Подготовка…";
+            _nativeBusy = true; _patchInProgress = true; SetNativeButtonsEnabled(false); _patchMenuItem.Text = "Подготовка…";
             _appFeedback.Text = "Подготовка клиента, конфигурации и ярлыков…";
             string ideProxy = GetIdeProxyUrl();
             var worker = new System.Threading.Thread(() => {
@@ -151,9 +162,9 @@ namespace DevProxyApp
                     Logger.Log("[Patch] " + target.DisplayName + ": " + result); success = true;
                 } catch (Exception ex) { result = ex.Message; Logger.Log("[Patch] " + ex.GetType().Name + ": " + result); }
                 try { BeginInvoke(new Action(() => {
-                    _nativeBusy = false; _patchInProgress = false; _patchAppAction.Text = "Пропатчить"; _proxyCheckMessage = null;
-                    SetNativeButtonsEnabled(true); UpdateNativeDetails(); _appFeedback.Text = result;
-                    if (!success) MessageBox.Show(this, result, "Пропатчить — не завершено", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                    _nativeBusy = false; _patchInProgress = false; _patchMenuItem.Text = "Настроить обычный запуск"; _proxyCheckMessage = null;
+                    SetNativeButtonsEnabled(true); UpdateNativeDetails(); QueueClientStatus(true); _appFeedback.Text = success?"Настройка завершена — подробности в отчёте.":result;
+                    MessageBox.Show(this, result+(success?"\r\n\r\nВ дальнейшем запускайте приложение обычным настроенным ярлыком или командой. Dagami запустится в фоне автоматически; для запуска без запросов UAC можно включить автозапуск в настройках.":""), success?"Настройка обычного запуска":"Настройка не завершена",MessageBoxButtons.OK,success?MessageBoxIcon.Information:MessageBoxIcon.Warning);
                 })); } catch (InvalidOperationException) { }
             });
             worker.IsBackground = true; worker.SetApartmentState(System.Threading.ApartmentState.STA); worker.Start();
@@ -168,6 +179,7 @@ namespace DevProxyApp
                 FocusSession(session.RunningProcess); return;
             }
             if (_proxyCheckFailed) { CheckFluentProxy(); return; }
+            if (_shortcutRecords==0||_shortcutIssue!=null) {PatchSelectedNativeTarget();return;}
             SaveNativeSettings();
             _nativeBusy = true; SetNativeButtonsEnabled(false);
             _primaryAppAction.Text = "Запуск…"; _primaryAppAction.Refresh();
@@ -177,7 +189,7 @@ namespace DevProxyApp
                 _proxyCheckMessage = null;
                 string notice;
                 _appFeedback.Text = _nativeClientNotices.TryGetValue(target.Id,out notice) ? "Приложение запущено через прокси. "+notice : "Приложение запущено. Закрытие окна Dagami Agent Proxy оставляет прокси в трее.";
-            } finally { _nativeBusy = false; SetNativeButtonsEnabled(true); UpdateNativeStatus(); }
+            } finally { _nativeBusy = false; SetNativeButtonsEnabled(true); QueueClientStatus(true); UpdateNativeStatus(); }
         }
 
         private void UpdateAppActionState()
@@ -188,26 +200,29 @@ namespace DevProxyApp
             NativeSession session = null;
             bool running = target != null && _nativeSessions.TryGetValue(target.Id, out session) && session.RunningProcess != null;
             _selectedAppHeading.Text = target == null ? "Выберите приложение" : target.DisplayName;
-            _primaryAppAction.Text = !configured ? "Настроить" : running ? "Открыть" : _proxyCheckFailed ? "Проверить" : "Запустить";
+            bool needsSetup=target!=null&&target.IsInstalled&&!running&&(_shortcutRecords==0||_shortcutIssue!=null);
+            _primaryAppAction.Text = !configured ? "Настроить подключение" : running ? "Открыть" : _proxyCheckFailed ? "Проверить подключение" : needsSetup ? "Настроить обычный запуск" : "Запустить через Dagami";
             _primaryAppAction.Enabled = !configured || (target != null && target.IsInstalled);
             _moreAppActions.Enabled = target != null;
-            _patchAppAction.Enabled = target != null && target.IsInstalled;
+            _patchMenuItem.Enabled = target != null && target.IsInstalled;
+            _patchMenuItem.Visible=!needsSetup;
             _stopAppItem.Enabled = running;
             _removeAppItem.Enabled = target != null && target.IsCustom;
             _restoreShortcutItem.Enabled = _shortcutRecords > 0 || _shortcutIssue != null;
             _clientPreparationItem.Enabled = target != null && target.IsInstalled && AntigravityIntegration.Supports(target.ExePath);
             string state = target == null ? "Выберите приложение" : !target.IsInstalled ? "Не установлено" :
-                running ? "Работает через Dagami Agent Proxy" : "Сессия Dagami Agent Proxy не запущена";
+                running ? "Запущено через Dagami" : "Не запущено через Dagami";
             _targetDetails.Text = _proxyCheckFailed ? "Ошибка подключения к прокси" : state;
             _shortcutExplanation.Text = target == null ? "Выберите приложение, чтобы настроить его ярлыки." : _shortcutIssue != null ?
-                _shortcutIssue + " Для удалённого или заново установленного ярлыка нажмите «Пропатчить»." :
-                (_shortcutRecords > 0 ? "Включено · ярлыков: " + _shortcutRecords + ". Dagami Agent Proxy запускается в фоне до выключения режима." :
-                "Выключено. Для запуска привычным ярлыком нажмите «Пропатчить».");
+                _shortcutIssue + " Нажмите «Настроить обычный запуск»." :
+                (_shortcutRecords > 0 ? "Открывайте настроенный ярлык: Dagami запустится в фоне." :
+                "Настройте запуск, затем открывайте приложение обычным ярлыком.");
             bool cli=NativeCliApps.IsCommandTarget(target);
             _shortcutState.Text=(_shortcutRecords > 0 && _shortcutIssue == null ? "Настроено: " : "Не настроено: ") +
                 (cli ? "обычная команда через прокси" : "обычные ярлыки через прокси");
             if(target!=null&&ApplicationSupport.Kind(target)=="git")_shortcutState.Text="Команда dagami-git: " + (_shortcutRecords > 0 && _shortcutIssue == null ? "настроена" : "не настроена");
-            if(cli&&_shortcutIssue==null)_shortcutExplanation.Text=_shortcutRecords>0?"Включено для команды. После изменения полностью перезапустите терминал. Явный путь к исходному EXE обходит запускатель.":"Выключено. «Пропатчить» настроит команду CLI в пользовательском PATH; ярлыки не нужны.";
+            if(_clientPreparationStatus!=null)_clientPreparationStatus.Text=_clientStatusText??"";
+            if(cli&&_shortcutIssue==null)_shortcutExplanation.Text=_shortcutRecords>0?"Команда настроена. Перезапустите терминал; прямой путь к EXE обходит запускатель.":"Настройте обычную команду CLI, затем перезапустите терминал.";
             _restoreShortcutItem.Text=cli?"Восстановить прямой запуск команды":"Восстановить обычные ярлыки";
             if (_proxyCheckMessage != null) _appFeedback.Text = _proxyCheckMessage;
         }
@@ -268,8 +283,8 @@ namespace DevProxyApp
             BeginInvoke(new Action(() => {
                 _nativeColumnsPending = false;
                 if (_targetList.IsDisposed) return;
-                int remaining = _targetList.ClientSize.Width - _targetList.Columns[0].Width - _targetList.Columns[1].Width - 4;
-                _targetList.Columns[2].Width = Math.Max(80, remaining);
+                _targetList.Columns[0].Width=Math.Max(200,_targetList.ClientSize.Width-130);
+                _targetList.Columns[1].Width=110;_targetList.Columns[2].Width=0;
             }));
         }
 
@@ -311,6 +326,7 @@ namespace DevProxyApp
                 try { _shortcutRecords = NativeCliApps.IsCommandTarget(target)?NativeCliApps.Current.VerifiedCount(target.Id,out _shortcutIssue):NativeShortcuts.Current.VerifiedCount(target.Id, out _shortcutIssue); }
                 catch (Exception) { _shortcutIssue = "Не удалось прочитать настройки ярлыков. Откройте журнал для проверки."; }
             }
+            QueueClientStatus();
             UpdateAppActionState();
         }
 
@@ -319,13 +335,13 @@ namespace DevProxyApp
             if (_nativeStatus == null) return;
             int active = 0;
             foreach (var sessionEntry in _nativeSessions.Values) if (sessionEntry.RunningProcess != null) active++;
-            string session = " | Активных приложений: " + active;
-            _nativeStatus.Text = (_bridgePort > 0 ? "Прокси-мост: 127.0.0.1:" + _bridgePort : "Прокси не настроен") +
-                " | Приложений: " + _cachedTargets.Count + session;
+            _nativeStatus.Text = "Приложений: "+_cachedTargets.Count+" · Запущено через Dagami: "+active;
+            var currentDns=DnsProviders.ForServer(ConfigManager.Instance.DnsHost);
             if (_connectionSummary != null)
-                _connectionSummary.Text = (_bridgePort > 0 ? "Прокси настроен" : "Настройте подключение") +
-                    "  ·  " + (ConfigManager.Instance.UseDagamiDns ? "Smart DNS: " + ConfigManager.Instance.DnsHost : "DNS-маршрут отключён") +
-                    "\nСистемный DNS: " + SystemDnsManager.BriefStatus() + " · запись в разделе «Подключение»";
+                _connectionSummary.Text = (_bridgePort > 0 ? "Прокси сохранён; проверка — в настройках" : "Проверьте подключение в настройках") +
+                    "  ·  " + (ConfigManager.Instance.UseDagamiDns ? currentDns==null?"Свой DNS":currentDns.Length>0&&currentDns[0].Provider=="magicdns"?"DNS: MagicDNS":"DNS: Dagami → MagicDNS" : "DNS для приложений выключен") +
+                    "\nПараметры подключения — в настройках. Системный DNS — в разделе «DNS».";
+            if(!_nativeBusy)UpdateDnsPage();
             UpdateAppActionState();
         }
 

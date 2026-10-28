@@ -1,5 +1,37 @@
 # Changelog
 
+## 0.3.6 alpha — 2026-10-28
+
+- Show whether the selected Antigravity backend is actually prepared and make
+  ordinary-launch setup the primary action until a shortcut or CLI shim exists.
+  Report setup results explicitly and explain automatic background startup.
+- Simplify Windows navigation to Applications, DNS and Settings; put diagnostics,
+  journal, launch preferences and system DNS controls in the settings pages.
+- Add encrypted DNS for managed application routes and an optional Windows
+  loopback DNS service. Refresh verified addresses from official Dagami and
+  MagicDNS profiles, retain the last working list and use Dagami before MagicDNS.
+  The whole-network option requires selected adapters and verified IPv4/IPv6.
+- Recognize the local eligibility gate in compatible x64 Antigravity CLI builds,
+  preserve the original file with hash-checked rollback and reject unknown shapes.
+  Server-side account, region and subscription decisions are not changed.
+- Add CLI doctor, error classification, a read-only patch preview and DNS commands.
+- Detect the IDE-downloaded backend at `%USERPROFILE%/.gemini/bin/agy.exe` in
+  native IDE preparation/CLI discovery and the portable CLI adapter. Keep fixture
+  profile roots separate from installed user backends during regression checks.
+
+- Managed Smart DNS uses verified DNS-over-HTTPS nodes; custom resolvers stay
+  separate and retry over TCP when UDP fails.
+- Validate DNS question/answer ownership and CNAME chains; respect short/zero TTL.
+- System DNS/NRPT can store several verified addresses. Unavailable nodes are
+  excluded before any changes; old single-server backups remain restorable.
+- Replace the obsolete system DNS default with `45.147.31.32`.
+- TLS diagnostics identify the host, connection layer and certificate policy/chain
+  error codes while retaining validation and omitting certificate identities.
+- Login diagnostics expose upstream CONNECT failures such as HTTP 407 instead
+  of reporting only the bridge's HTTP 502.
+- Add loopback DNS/TLS regression suites and reject native test runs without a
+  PASS report, including silent execution failures.
+
 ## 0.3.0 alpha — 2026-10-28
 
 - Fixed Codex Desktop detection for Microsoft Store/MSIX installations whose main

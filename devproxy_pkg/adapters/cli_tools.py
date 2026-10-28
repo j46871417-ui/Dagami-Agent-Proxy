@@ -24,7 +24,10 @@ class CliToolAdapter(ApplicationAdapter):
         found = shutil.which(self._command)
         if found and is_cli_executable(found): return found
         home = os.path.expanduser("~")
-        for folder in (os.path.join(home, ".local", "bin"), os.path.join(home, ".agy", "bin"), os.path.join(home, ".claude", "local")):
+        folders = [os.path.join(home, ".local", "bin"), os.path.join(home, ".agy", "bin"), os.path.join(home, ".claude", "local")]
+        if self._command == "agy":
+            folders.append(os.path.join(home, ".gemini", "bin"))
+        for folder in folders:
             candidate = os.path.join(folder, self._command + (".exe" if sys.platform == "win32" else ""))
             if os.path.isfile(candidate) and is_cli_executable(candidate): return candidate
         return None

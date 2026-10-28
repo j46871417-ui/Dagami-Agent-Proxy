@@ -46,6 +46,7 @@ namespace DevProxyApp
         [STAThread]
         static void Main(string[] args)
         {
+            if(args!=null&&args.Length==1&&args[0]=="--dns-service"){DnsServiceHost.Run();return;}
             // A DNS helper never enters shim, console, tray or GUI startup.
             // The caller reads the protected job report, so no dialogs here.
             if (args != null && args.Length > 0 && args[0] == "--system-dns-helper") {
@@ -142,7 +143,8 @@ namespace DevProxyApp
                 Console.WriteLine(Brand.Name + " " + Brand.Version + " (Windows)");
                 Console.WriteLine("apps | proxy set | proxy status | run APP | patch APP | unpatch APP | shortcuts APP");
                 Console.WriteLine("CLI: patch APP настраивает обычную команду; run APP [-- ARGS] запускает без изменения PATH.");
-                Console.WriteLine("dns status | dns adapters | dns apply REQUEST.json | dns restore (UAC)");
+                Console.WriteLine("doctor | patch APP --dry-run | diagnose error REPORT.log — проверки без изменения настроек");
+                Console.WriteLine("dns status | dns adapters | dns refresh | dns enable | dns apply REQUEST.json | dns restore (UAC)");
                 Console.WriteLine("diagnose login — проверить userinfo без токена и сравнить маршруты при сбое");
                 Console.WriteLine("update check | update download — релизы GitHub; установка по кнопке в GUI");
                 Console.WriteLine("Использование:");
@@ -628,7 +630,7 @@ namespace DevProxyApp
                     else
                     {
                         Logger.Log("[Proxy] CONNECT HTTP " + status + ": " + (status == 407 ? "прокси отклонил авторизацию; проверьте логин/пароль и доступ у провайдера" : "отказ внешнего прокси до TLS с целевым сервисом"));
-                        throw new IOException("Upstream proxy refused CONNECT; HTTP status=" + status);
+                        throw new UpstreamConnectException(status);
                     }
                 }
                 else
@@ -661,7 +663,9 @@ namespace DevProxyApp
                 {
                     if (tunnelEstablished) throw new IOException("Tunnel already established; do not inject HTTP into TLS.");
                     byte[] body = Encoding.UTF8.GetBytes("DevProxy: " + ex.GetType().Name + ". Смотрите журнал диагностики.");
-                    byte[] header = Encoding.ASCII.GetBytes("HTTP/1.1 502 Bad Gateway\r\nContent-Type: text/plain; charset=utf-8\r\nContent-Length: " + body.Length + "\r\nConnection: close\r\n\r\n");
+                    var refused = ex as UpstreamConnectException;
+                    string reason = refused == null ? "" : "X-Dagami-Upstream-Status: " + refused.Status + "\r\n";
+                    byte[] header = Encoding.ASCII.GetBytes("HTTP/1.1 502 Bad Gateway\r\nX-Dagami-Failure-Phase: " + phase + "\r\n" + reason + "Content-Type: text/plain; charset=utf-8\r\nContent-Length: " + body.Length + "\r\nConnection: close\r\n\r\n");
                     Stream output = client.GetStream(); output.Write(header, 0, header.Length); output.Write(body, 0, body.Length);
                 }
                 catch { }
@@ -686,8 +690,7 @@ namespace DevProxyApp
                 }
                 stream = tcp.GetStream(); stream.ReadTimeout = 15000; stream.WriteTimeout = 15000;
                 if (endpoint == null && _isHttps) {
-                    var tls = new SslStream(stream, false);
-                    tls.AuthenticateAsClient(_upstreamHost, null, System.Security.Authentication.SslProtocols.Tls12, true);
+                    var tls = TlsDiagnostics.Connect(stream, _upstreamHost, "https-proxy", 15000);
                     stream = tls;
                 }
                 TrackConnection(tcp); return tcp;
@@ -755,8 +758,7 @@ namespace DevProxyApp
                 }
                 stream = tcp.GetStream(); stream.ReadTimeout = 15000; stream.WriteTimeout = 15000;
                 if (!opaqueTunnel && endpoint.Scheme == "https") {
-                    var tls = new SslStream(stream, false);
-                    tls.AuthenticateAsClient(host, null, System.Security.Authentication.SslProtocols.Tls12, true); stream = tls;
+                    var tls = TlsDiagnostics.Connect(stream, host, "loopback-backend", 15000); stream = tls;
                 }
                 TrackConnection(tcp); return tcp;
             } catch { tcp.Close(); throw; }
@@ -795,6 +797,7 @@ namespace DevProxyApp
             var socket = error as SocketException;
             string result = error.GetType().Name;
             if (socket != null) result += " socket=" + socket.SocketErrorCode;
+            if (error is System.Security.Authentication.AuthenticationException && error.Message.StartsWith("TLS host=", StringComparison.Ordinal)) result += " " + error.Message;
             // Messages may contain untrusted response text. Only generated status
             // and phase information are logged; headers and payloads stay opaque.
             if (error.InnerException != null) result += " inner=" + ErrorKind(error.InnerException);
@@ -2341,12 +2344,6 @@ namespace DevProxyApp
                 for (int i = 0; i < 8; i++) sb.Append(hash[i].ToString("x2"));
                 return sb.ToString();
             }
-        }
-
-        private static List<string> CreateManagedShortcuts(AppTarget target)
-        {
-            return NativeShortcuts.Current.EnablePrepared(target, Process.GetCurrentProcess().MainModule.FileName,
-                NativeShortcuts.UserFolders(), () => {}, () => {}, true);
         }
 
         private bool CheckProxyConnection(string proxyUrl)

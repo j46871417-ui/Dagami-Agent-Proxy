@@ -52,7 +52,11 @@ class Ide26Checks {
    string extension=Path.Combine(install,@"resources\app\extensions\agy"),backend=Path.Combine(extension,@"bin\language_server_windows_x64.exe");Directory.CreateDirectory(Path.GetDirectoryName(backend));File.WriteAllBytes(backend,binary);
    string js=Path.Combine(extension,"extension.js");File.WriteAllText(js,"fixture: createConnectTransport; x-codeium-csrf-token; getUserStatus absent");
    Assert(AntigravityIntegration.BackendPaths(ide,local).Count==2&&AntigravityIntegration.BackendPaths(ide,local).Contains(backend),"New plugin or shared backend ignored");
-   Assert(AntigravityIntegration.PrepareClient(ide).Prepared,"New plugin binary preparation failed");AntigravityIntegration.RestoreClient(ide);
+   string home=Path.Combine(root,"home"),geminiBackend=Path.Combine(home,@".gemini\bin\agy.exe");Directory.CreateDirectory(Path.GetDirectoryName(geminiBackend));File.WriteAllBytes(geminiBackend,binary);
+   var actualLayout=AntigravityIntegration.BackendPaths(ide,local,home);
+   Assert(actualLayout.Count==3&&actualLayout.Contains(geminiBackend),"IDE-downloaded .gemini backend not discovered");
+   Assert(AntigravityIntegration.PrepareClient(ide,local,home).Prepared,"New plugin binary preparation failed");AntigravityIntegration.RestoreClient(ide,local,home);
+   Assert(Convert.ToBase64String(File.ReadAllBytes(geminiBackend))==Convert.ToBase64String(binary),"IDE-downloaded backend restore failed");
    Assert(File.ReadAllText(js).Contains("getUserStatus absent"),"Extension/auth rewritten");
    target.ConfigPath=Path.Combine(root,"settings.json");string settings="{\"antigravity.serverUrl\":\"http://127.0.0.1:52101\",\"custom\":true}";File.WriteAllText(target.ConfigPath,settings);string message;
    Assert(ProxyEngine.ApplyProxyToTarget(target,"http://127.0.0.1:52102",out message),"Valid serverUrl blocked");

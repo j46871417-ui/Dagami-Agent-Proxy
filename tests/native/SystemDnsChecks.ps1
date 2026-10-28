@@ -41,7 +41,7 @@ function Test-FixtureManagedDns {
     @($script:Families.Values | Where-Object {$_.IPv4.Static -contains '185.149.145.6'}).Count -gt 0
 }
 function Test-DnsProbe {param($HostName,$Server='')
-    if($Server){return $script:TargetDnsReachable}
+    if($Server){return $script:TargetDnsReachable -and $Server -notin @($script:UnavailableServers)}
     if($script:NoNetworkBaseline){return $false}
     if((Test-FixtureManagedDns) -and $script:BreakDnsAfterApply){$script:PostApplyFailed=$true;return $false}
     if(-not (Test-FixtureManagedDns) -and $script:PostApplyFailed -and $script:RecoveryNetworkBroken){return $false}
@@ -68,6 +68,7 @@ function Get-DnsClientServerAddress { [CmdletBinding()]param([int]$InterfaceInde
 function Set-DnsClientServerAddress { [CmdletBinding()]param([int]$InterfaceIndex,$InputObject,[string[]]$ServerAddresses,[switch]$ResetServerAddresses)
     $script:Mutations++
     $index=if($InputObject){$InputObject.InterfaceIndex}else{$InterfaceIndex}
+    if($InputObject -and $InputObject.Family -eq 'IPv6' -and $script:FailIpv6Once){$script:FailIpv6Once=$false;throw 'injected IPv6 write failure'}
     if($index -eq 2 -and $script:FailOnce){$script:FailOnce=$false;throw 'injected second adapter failure'}
     if($script:IgnoreDnsWrite){return}
     $adapter=@($script:Adapters | Where-Object InterfaceIndex -eq $index)[0]
@@ -109,6 +110,8 @@ function Reset-Fixture {
     foreach($adapter in $script:Adapters){$script:Families[$adapter.InterfaceGuid]=@{IPv4=@{Static=@();Servers=@('10.0.0.1')};IPv6=@{Static=@('2001:db8::53');Servers=@('2001:db8::53')}}}
     $script:Rules=@();$script:Mutations=0;$script:Flushed=0;$script:FailOnce=$false;$script:FailRemove=$false;$script:IgnoreDnsWrite=$false;$script:RecoveryDomains=$null
     $script:TargetDnsReachable=$true;$script:TargetHttpsReachable=$true;$script:NoNetworkBaseline=$false;$script:BreakDnsAfterApply=$false;$script:BreakHttpsAfterApply=$false;$script:PostApplyFailed=$false;$script:RecoveryNetworkBroken=$false
+    $script:UnavailableServers=@()
+    $script:FailIpv6Once=$false
     $script:FailResetBackup=$false;$script:PolicyPresent=$false;$script:ReapplyPolicy=$false;$script:SavedResetRules=@()
     Add-DnsClientNrptRule -Namespace 'aistudio.google.com' -NameServers '1.1.1.1' -DisplayName 'Previous provider' -Comment 'USER_PREVIOUS'
     Add-DnsClientNrptRule -Namespace 'intranet.example' -NameServers '10.0.0.2' -DisplayName 'Company' -Comment 'UNRELATED'
@@ -224,6 +227,57 @@ try {
     Reset-Fixture;$script:TargetHttpsReachable=$false
     Reject {Invoke-SystemDns (Request)} 'DNS answers that break HTTPS were applied'
     Assert ($script:Mutations -eq 0) 'HTTPS preflight failure changed DNS or NRPT'
+
+    Reset-Fixture;$request=Request;$request.Server='45.147.31.32';$script:UnavailableServers=@('45.147.31.32')
+    $message=Invoke-SystemDns $request;$state=Read-State
+    Assert (($state.Servers -join ',') -eq '46.29.165.108,89.125.103.139,109.120.132.43,94.249.177.102,2.56.175.196') 'Healthy backup servers not selected'
+    Assert ($state.Server -eq '46.29.165.108') 'Unavailable primary still selected'
+    Assert ($message -match 'Unavailable servers skipped: 45.147.31.32') 'Skipped primary not reported'
+    foreach($adapter in $script:Adapters){Assert (($script:Families[$adapter.InterfaceGuid].IPv4.Static -join ',') -eq '46.29.165.108,89.125.103.139,109.120.132.43,94.249.177.102,2.56.175.196') 'Adapter backup list lost'}
+    foreach($rule in @($script:Rules | Where-Object Comment -eq $state.Tag)){Assert (($rule.NameServers -join ',') -eq '46.29.165.108,89.125.103.139,109.120.132.43,94.249.177.102,2.56.175.196') 'NRPT backup list lost'}
+    $null=Invoke-SystemDns (Request Restore)
+    Assert ((Read-State).Status -eq 'Restored') 'Multi-server restore failed'
+    Assert ($script:Families[$script:Adapters[0].InterfaceGuid].IPv4.Static.Count -eq 0) 'Multi-server restore lost DHCP'
+    Assert (@($script:Rules | Where-Object Comment -eq 'UNRELATED').Count -eq 1) 'Multi-server restore lost unrelated rules'
+
+    # Encrypted service requests, with every mutator still mocked above.
+    Reset-Fixture;$request=Request;$request.Server='127.0.0.1';$request.ChangeAdapters=$false;$request.Adapters=@();$request | Add-Member EncryptedStub $true
+    $null=Invoke-SystemDns $request;$state=Read-State
+    Assert ($state.EncryptedStub -and $state.Status -eq 'Applied') 'Targeted encrypted DNS not recorded'
+    Assert ($script:Families[$script:Adapters[0].InterfaceGuid].IPv4.Servers[0] -eq '10.0.0.1') 'Targeted encrypted DNS changed adapter settings'
+    Assert (-not (Test-NoLocalDnsReferences)) 'Active NRPT loopback route was not detected'
+    $null=Invoke-SystemDns (Request Restore)
+    Assert (Test-NoLocalDnsReferences) 'Restored targeted mode left loopback references'
+    Add-DnsClientNrptRule -Namespace 'external.example' -NameServers '::1' -Comment 'EXTERNAL_LOCAL'
+    Assert (-not (Test-NoLocalDnsReferences)) 'External local resolver reference ignored when deciding to stop service'
+
+    Reset-Fixture;$request=Request;$request.Server='127.0.0.1';$request | Add-Member EncryptedStub $true
+    Reject {Invoke-SystemDns $request} 'Whole-network mode accepted without verified IPv6 listener'
+    Assert ($script:Mutations -eq 0) 'Missing IPv6 service changed network settings'
+    $request | Add-Member StubIpv6 $true;$null=Invoke-SystemDns $request;$state=Read-State
+    Assert (($state.ManagedFamilies -join ',') -eq 'IPv4,IPv6') 'Encrypted whole-network mode did not manage both families'
+    foreach($adapter in $script:Adapters){Assert ($script:Families[$adapter.InterfaceGuid].IPv4.Static[0] -eq '127.0.0.1' -and $script:Families[$adapter.InterfaceGuid].IPv6.Static[0] -eq '::1') 'Whole-network mode leaked the other DNS family'}
+    $null=Invoke-SystemDns (Request Restore)
+    foreach($adapter in $script:Adapters){Assert ($script:Families[$adapter.InterfaceGuid].IPv4.Static.Count -eq 0 -and $script:Families[$adapter.InterfaceGuid].IPv6.Static[0] -eq '2001:db8::53') 'Encrypted restore lost DHCP or static IPv6'}
+    Assert (Test-NoLocalDnsReferences) 'Encrypted whole-network restore left loopback references'
+
+    Reset-Fixture;$request=Request;$request.Server='127.0.0.1';$request | Add-Member EncryptedStub $true;$request | Add-Member StubIpv6 $true;$script:FailIpv6Once=$true
+    Reject {Invoke-SystemDns $request} 'Partial encrypted IPv6 write failure reported success'
+    Assert ((Read-State).Status -eq 'Restored') 'Encrypted write failure did not roll back'
+    foreach($adapter in $script:Adapters){Assert ($script:Families[$adapter.InterfaceGuid].IPv4.Static.Count -eq 0 -and $script:Families[$adapter.InterfaceGuid].IPv6.Static[0] -eq '2001:db8::53') 'Partial encrypted write left a changed family'}
+
+    Reset-Fixture;$request=Request;$request.Server='45.147.31.32';$script:TargetDnsReachable=$false
+    Reject {Invoke-SystemDns $request} 'All failed DNS nodes were applied'
+    Assert ($script:Mutations -eq 0) 'All-node failure changed system settings'
+
+    Reset-Fixture;$request=Request;$request | Add-Member Servers @('185.149.145.6','2001:db8::53')
+    Reject {Invoke-SystemDns $request} 'Mixed address families accepted'
+    Assert ($script:Mutations -eq 0) 'Invalid server list changed system settings'
+
+    Reset-Fixture;$null=Invoke-SystemDns (Request);$state=Read-State
+    $state.PSObject.Properties.Remove('Servers');$state.Version=1;Save-State $state
+    $null=Invoke-SystemDns (Request Restore)
+    Assert ((Read-State).Status -eq 'Restored') 'Legacy single-server backup cannot be restored'
 
     Reset-Fixture;$script:NoNetworkBaseline=$true
     Reject {Invoke-SystemDns (Request)} 'Unverifiable initial network was modified'
@@ -364,14 +418,14 @@ try {
     Reset-Fixture;$null=Invoke-SystemDns (Request)
     $id=$script:Adapters[0].InterfaceGuid
     $script:Families[$id].IPv6=@{Static=@('2001:db8::99');Servers=@('2001:db8::99')}
-    Reject {Invoke-SystemDns (Request Restore)} 'External IPv6 change was overwritten'
+    $null=Invoke-SystemDns (Request Restore)
     Assert ($script:Families[$id].IPv4.Static.Count -eq 0) 'External IPv6 edit blocked owned IPv4 restore'
     Assert ($script:Families[$id].IPv6.Static[0] -eq '2001:db8::99') 'External IPv6 edit lost'
     $request=Request Restore;$request | Add-Member KeepExternalChanges $true
     $message=Invoke-SystemDns $request;$state=Read-State
-    Assert ($state.Status -eq 'Released') 'Explicit preserve mode did not release backup'
-    Assert (@($state.Warnings).Count -eq 1) 'Preserved IPv6 edit not reported'
-    Assert ($message -like 'DNS rollback completed with preserved external settings.*') 'Preserve mode claims full restore'
+    Assert ($state.Status -eq 'Restored') 'Unmanaged IPv6 edit blocked owned IPv4 restoration'
+    Assert (@($state.Warnings).Count -eq 0) 'Unmanaged address family incorrectly treated as owned'
+    Assert ($message -eq 'Previous DNS settings are already restored.') 'Completed family-scoped restore changed on retry'
     $null=Invoke-SystemDns $request
     Assert ($script:Families[$id].IPv6.Static[0] -eq '2001:db8::99') 'Repeated preserve rollback changed DNS'
     $null=Invoke-SystemDns (Request)

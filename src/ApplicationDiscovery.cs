@@ -80,6 +80,10 @@ namespace DevProxyApp {
    string home=Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),local=Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),roaming=Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData);
    foreach(string path in new[]{Path.Combine(home,@".local\bin",command+".exe"),Path.Combine(home,"."+command,"bin",command+".exe"),Path.Combine(local,command,"bin",command+".exe"),Path.Combine(roaming,"npm",command+".cmd")})
     if(File.Exists(path)&&NativeCliApps.IsCli(new AppTarget{ExePath=path}))return path;
+   if(command.Equals("agy",StringComparison.OrdinalIgnoreCase)) {
+    string path=Path.Combine(home,@".gemini\bin\agy.exe");
+    if(File.Exists(path)&&NativeCliApps.IsCli(new AppTarget{ExePath=path}))return path;
+   }
    return null;
   }
   public static string Desktop(string name,IEnumerable<string> candidates) {

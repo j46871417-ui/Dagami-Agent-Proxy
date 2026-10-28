@@ -1,14 +1,16 @@
 """Selected Windows fixture checks; never runs activation or live DNS mutation tests."""
 import argparse
 import os
+import re
 from pathlib import Path
 import shutil
 import subprocess
+import sys
 
 ROOT=Path(__file__).resolve().parents[1]
 SUITES=['BugReportChecks','ConsoleLaunchChecks','CliChecks','ApplicationSupportChecks',
         'ReviewRegressionChecks','CodexDiscoveryChecks','PatchChecks','ShortcutChecks','ShortcutRecoveryChecks',
-        'NativeLoginChecks','GoogleGeminiChecks','AntigravityPatchChecks','Ide26Checks','ProxyFailureChecks','LocalUiChecks']
+        'NativeLoginChecks','GoogleGeminiChecks','AntigravityPatchChecks','Ide26Checks','ProxyFailureChecks','DnsTransportChecks','DnsProviderChecks','DnsAgentChecks','TlsDiagnosticsChecks','SystemDnsUiChecks','UserInfoChecks','LocalUiChecks']
 
 def main():
     parser=argparse.ArgumentParser()
@@ -26,12 +28,12 @@ def main():
     if target!=assembly:shutil.copyfile(assembly,target)
     compiler=Path(os.environ.get('WINDIR',r'C:\Windows'))/'Microsoft.NET/Framework64/v4.0.30319/csc.exe'
     if not compiler.is_file():parser.error('Windows .NET Framework compiler not found.')
-    env=dict(os.environ,TEMP=str(output),TMP=str(output))
+    env=dict(os.environ,TEMP=str(output),TMP=str(output),DAGAMI_TEST_PYTHON=sys.executable)
     subprocess.run([str(compiler),'/nologo','/target:winexe','/out:'+str(output/'ConsoleFixture.exe'),str(ROOT/'tests/native/ConsoleFixture.cs')],check=True)
     for name in args.suite or SUITES:
         executable=output/(name+'.exe')
         command=[str(compiler),'/nologo','/target:exe','/out:'+str(executable),'/r:'+str(target)]
-        command+=['/r:'+reference for reference in ('System.Web.Extensions.dll','System.Drawing.dll','System.Windows.Forms.dll','System.Security.dll','System.Xml.dll')]
+        command+=['/r:'+reference for reference in ('System.Web.Extensions.dll','System.Drawing.dll','System.Windows.Forms.dll','System.Security.dll','System.Xml.dll','System.ServiceProcess.dll')]
         subprocess.run([*command,str(ROOT/'tests/native'/(name+'.cs'))],check=True)
         try:
             result=subprocess.run([str(executable)],cwd=output,env=env,capture_output=True,text=True,timeout=90)
@@ -46,5 +48,7 @@ def main():
         if result.returncode:
             print(result.stderr,flush=True)
             raise SystemExit(result.returncode)
+        if not re.search(r'(?m)^PASS(?:[:\s]|$)',result.stdout):
+            raise SystemExit(name+' returned no PASS report; execution was not verified.')
 
 if __name__=='__main__':main()

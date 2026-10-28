@@ -10,7 +10,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 SOURCES = [
-    "DevProxyApp.cs", "NativeUi.cs", "FluentUi.cs", "AntigravityIntegration.cs", "ProxyDiagnostics.cs",
+    "DevProxyApp.cs", "NativeUi.cs", "FluentUi.cs", "SimpleUi.cs", "AntigravityIntegration.cs", "CliRegionGate.cs", "ProxyDiagnostics.cs", "DnsProviders.cs", "DnsTransport.cs", "DnsAgent.cs",
     "AntigravityUi.cs", "AntigravityLogin.cs", "NativeShortcuts.cs",
     "NativeLaunchBroker.cs", "NativeSessions.cs", "SystemDnsManager.cs", "NativeCli.cs", "Brand.cs",
     "LicenseManager.cs", "AppProxyPolicy.cs", "ApplicationSupport.cs", "JetBrainsProxySettings.cs",
@@ -42,7 +42,7 @@ def main() -> None:
     references = [
         "System.dll", "System.Core.dll", "System.Drawing.dll",
         "System.Windows.Forms.dll", "System.Security.dll", "System.Web.Extensions.dll",
-        "System.IO.Compression.dll", "System.Xml.dll",
+        "System.IO.Compression.dll", "System.Xml.dll", "System.ServiceProcess.dll",
     ]
     command = [str(compiler), "/nologo", '/target:winexe', "/platform:anycpu", "/optimize+"]
     command.extend(f"/reference:{name}" for name in references)

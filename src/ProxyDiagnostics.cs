@@ -6,6 +6,32 @@ using System.Security.Authentication;
 using System.Text;
 
 namespace DevProxyApp {
+ public sealed class UpstreamConnectException : IOException {
+  public int Status {get;private set;}
+  public UpstreamConnectException(int status):base("Upstream proxy refused CONNECT; HTTP status="+status){Status=status;}
+ }
+ public static class TlsDiagnostics {
+  public static SslStream Connect(Stream stream,string host,string layer,int timeoutMilliseconds=10000,bool checkRevocation=true) {
+   SslPolicyErrors policy=SslPolicyErrors.None; string chainStatus="none"; bool checkedCertificate=false;
+   var tls=new SslStream(stream,false,(sender,certificate,chain,errors)=>{
+    checkedCertificate=true;policy=errors;
+    if(chain!=null) {
+     var codes=new System.Collections.Generic.List<string>();
+     foreach(var status in chain.ChainStatus)codes.Add(status.Status.ToString());
+     if(codes.Count>0)chainStatus=string.Join(",",codes.ToArray());
+    }
+    return errors==SslPolicyErrors.None;
+   });
+   try {
+    tls.ReadTimeout=timeoutMilliseconds;tls.WriteTimeout=timeoutMilliseconds;
+    tls.AuthenticateAsClient(host,null,SslProtocols.Tls12,checkRevocation);return tls;
+   } catch(AuthenticationException error) {
+    tls.Dispose();
+    throw new AuthenticationException("TLS host="+host+" layer="+layer+"; certificate_checked="+checkedCertificate+
+     "; policy="+policy+"; chain="+chainStatus+". Проверка TLS не пройдена.",error);
+   } catch {tls.Dispose();throw;}
+  }
+ }
  public sealed class ProxyProbeResult {
   public bool Available {get;set;}
   public int Status {get;set;}
@@ -35,7 +61,7 @@ namespace DevProxyApp {
      var pending=client.BeginConnect(proxy.Host,proxy.Port,null,null);
      using(pending.AsyncWaitHandle){if(!pending.AsyncWaitHandle.WaitOne(timeoutMilliseconds))throw new TimeoutException();client.EndConnect(pending);}
      Stream stream=client.GetStream();stream.ReadTimeout=timeoutMilliseconds;stream.WriteTimeout=timeoutMilliseconds;
-     if(proxy.Scheme=="https") {var tls=new SslStream(stream,false);tls.AuthenticateAsClient(proxy.Host,null,SslProtocols.Tls12,true);stream=tls;}
+     if(proxy.Scheme=="https")stream=TlsDiagnostics.Connect(stream,proxy.Host,"https-proxy",timeoutMilliseconds);
      using(stream) {
       string request="CONNECT www.googleapis.com:443 HTTP/1.1\r\nHost: www.googleapis.com:443\r\n";
       if(!string.IsNullOrEmpty(proxy.UserInfo))request+="Proxy-Authorization: Basic "+Convert.ToBase64String(Encoding.UTF8.GetBytes(Uri.UnescapeDataString(proxy.UserInfo)))+"\r\n";
@@ -45,7 +71,7 @@ namespace DevProxyApp {
       return new ProxyProbeResult{Available=status>=200&&status<300,Status=status,Message=StatusMessage(status)};
      }
     }
-   }catch(AuthenticationException){return new ProxyProbeResult{Message="TLS-соединение с HTTPS-прокси не прошло проверку. Проверьте адрес и сертификат; проверка сертификатов не отключалась."};}
+   }catch(AuthenticationException error){return new ProxyProbeResult{Message=error.Message};}
    catch(Exception error){return new ProxyProbeResult{Message="Прокси не прошёл проверку CONNECT ("+error.GetType().Name+"). Проверьте адрес, порт и доступность сервера."};}
   }
  }

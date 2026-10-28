@@ -151,15 +151,34 @@ function Get-ProviderDomains([string]$Preset) {
     if($Preset -ne 'Development'){throw 'Unknown DNS preset.'}
     @($all | Where-Object {$_ -notmatch '^(strava\.com|www\.strava\.com|cdn-1\.strava\.com|graphql\.strava\.com|twitch\.tv|gql\.twitch\.tv|ttvnw\.net|usher\.ttvnw\.net|xboxlive\.com|xbox\.com)$'} | Select-Object -Unique)
 }
+function Get-ConfiguredServers($Object) {
+    if($Object.PSObject.Properties['Servers'] -and @($Object.Servers).Count){return @($Object.Servers)}
+    @([string]$Object.Server)
+}
 function Validate-Request($Request) {
     $job=[guid]::Empty
     if(-not [guid]::TryParseExact([string]$Request.JobId,'N',[ref]$job)){throw 'Invalid DNS job ID.'}
     if($Request.Operation -notin @('Apply','Restore','ResetAll')){throw 'Invalid DNS operation.'}
     if($Request.Operation -eq 'ResetAll'){if($Request.ConfirmResetAll -ne $true){throw 'Full DNS reset requires explicit confirmation.'};return}
     if($Request.Operation -eq 'Restore'){return}
+    if($Request.EncryptedStub -and ([string]$Request.Server -ne '127.0.0.1' -or ($null -ne $Request.Servers -and (@($Request.Servers).Count -ne 1 -or [string]$Request.Servers[0] -ne '127.0.0.1')))){throw 'Encrypted DNS requires the local resolver 127.0.0.1.'}
     $ip=$null
     if(-not [Net.IPAddress]::TryParse([string]$Request.Server,[ref]$ip)){throw 'Use a literal DNS server IP address.'}
     $Request.Server=$ip.ToString()
+    $servers=@(Get-ConfiguredServers $Request)
+    if(-not $Request.PSObject.Properties['Servers'] -or $null -eq $Request.Servers){
+        $dagami=@('45.147.31.32','46.29.165.108','89.125.103.139');$magic=@('109.120.132.43','94.249.177.102','2.56.175.196')
+        $pool=if($Request.Server -in $magic){$magic}else{@($dagami)+@($magic)}
+        if($Request.Server -in $pool){$servers=@($Request.Server)+@($pool | Where-Object {$_ -ne $Request.Server})}
+    }
+    if($servers.Count -lt 1 -or $servers.Count -gt 16){throw 'Use one to sixteen DNS server IP addresses.'}
+    $normalized=@(@(foreach($server in $servers){
+        $address=$null
+        if(-not [Net.IPAddress]::TryParse([string]$server,[ref]$address) -or $address.AddressFamily -ne $ip.AddressFamily){throw 'DNS server addresses must use the same address family.'}
+        $address.ToString()
+    }) | Select-Object -Unique)
+    if($normalized[0] -ne $Request.Server){throw 'Primary DNS does not match the server list.'}
+    $Request | Add-Member -NotePropertyName Servers -NotePropertyValue $normalized -Force
     if(@($Request.Adapters).Count -gt 64){throw 'Too many network adapters.'}
     if(-not $Request.ChangeAdapters -and -not $Request.UseNrpt){throw 'No DNS changes selected.'}
     if($Request.ChangeAdapters -and @($Request.Adapters).Count -eq 0){throw 'Select at least one adapter.'}
@@ -299,7 +318,7 @@ function New-Plan($Request) {
         $domains=@(Get-ProviderDomains ([string]$Request.Preset));$existing=@(Get-DnsClientNrptRule)
         foreach($domain in $domains){
             $matches=@($existing | Where-Object {$_.Namespace -contains $domain})
-            if($matches.Count -eq 1 -and @($matches[0].NameServers).Count -eq 1 -and [string]$matches[0].NameServers -eq [string]$Request.Server){$reused++;continue}
+            if($matches.Count -eq 1 -and (@($matches[0].NameServers) -join ',') -eq (@(Get-ConfiguredServers $Request) -join ',')){$reused++;continue}
             if($matches.Count -and -not $Request.ReplaceExisting){throw "Conflicting NRPT rule for $domain. Enable replacement with backup or disable NRPT changes."}
             foreach($rule in $matches){
                 if(@($rule.Namespace | Where-Object {$_ -notin $domains}).Count){throw 'An overlapping rule also covers domains outside this preset. It will not be changed.'}
@@ -309,8 +328,9 @@ function New-Plan($Request) {
         }
     }
     $family=if(([Net.IPAddress]::Parse($Request.Server)).AddressFamily -eq [Net.Sockets.AddressFamily]::InterNetwork){'IPv4'}else{'IPv6'}
-    [pscustomobject]@{Version=1;Status='Prepared';Id=[string]$Request.JobId;Server=[string]$Request.Server;ServerFamily=$family;Preset=[string]$Request.Preset;
-        ChangeAdapters=[bool]$Request.ChangeAdapters;UseNrpt=[bool]$Request.UseNrpt;ReplaceExisting=[bool]$Request.ReplaceExisting;
+    $managedFamilies=if($Request.EncryptedStub -and $Request.ChangeAdapters){@('IPv4','IPv6')}else{@($family)}
+    [pscustomobject]@{Version=2;Status='Prepared';Id=[string]$Request.JobId;Server=[string]$Request.Server;Servers=@(Get-ConfiguredServers $Request);ServerFamily=$family;EncryptedStub=[bool]$Request.EncryptedStub;Preset=[string]$Request.Preset;
+        ChangeAdapters=[bool]$Request.ChangeAdapters;UseNrpt=[bool]$Request.UseNrpt;ReplaceExisting=[bool]$Request.ReplaceExisting;ManagedFamilies=@($managedFamilies);StubIpv6=[bool]$Request.StubIpv6;
         OriginalAdapters=$adapters;AppliedAdapters=@();PendingAdapter=$null;OriginalRules=$replace;
         RemovedRuleNames=@();PendingRemove=$null;NewNamespaces=$add;CreatedRules=@();ReusedRules=$reused;Tag=('DEVPROXY_SMARTDNS_V1:'+([string]$Request.JobId));Errors=@()}
 }
@@ -339,6 +359,7 @@ function Undo-State($State,[bool]$FailureRollback=$false,[bool]$KeepExternalChan
             $current=Read-Adapter (Find-Adapter $original.Guid)
             if((Adapter-Fingerprint $current) -eq (Adapter-Fingerprint $original)){continue}
             foreach($family in @($original.Families)){
+                if($State.PSObject.Properties['ManagedFamilies'] -and $family.Family -notin @($State.ManagedFamilies)){continue}
                 $now=@($current.Families | Where-Object Family -eq $family.Family)[0]
                 $before=[pscustomobject]@{Families=@($family)}
                 if((Adapter-Fingerprint ([pscustomobject]@{Families=@($now)})) -eq (Adapter-Fingerprint $before)){continue}
@@ -365,7 +386,7 @@ function Undo-State($State,[bool]$FailureRollback=$false,[bool]$KeepExternalChan
     foreach($rule in @($rules | Where-Object {$_.Comment -eq $State.Tag})){
         if([string]$rule.Name -in $blocked){continue}
         try {
-            if((@($rule.NameServers | ForEach-Object {[string]$_}) -join ',') -ne [string]$State.Server -or @($rule.Namespace | Where-Object {$_ -notin $State.NewNamespaces}).Count){throw 'An owned NRPT rule was changed outside DevProxy.'}
+            if((@($rule.NameServers | ForEach-Object {[string]$_}) -join ',') -ne (@(Get-ConfiguredServers $State) -join ',') -or @($rule.Namespace | Where-Object {$_ -notin $State.NewNamespaces}).Count){throw 'An owned NRPT rule was changed outside DevProxy.'}
             Remove-DnsClientNrptRule -Name $rule.Name -Force -ErrorAction Stop
         }catch{$errors.Add($_.Exception.Message)}
     }
@@ -520,7 +541,19 @@ function Invoke-Apply($Request) {
     # Network probes run before any DNS/NRPT change, even before undoing an
     # existing setup. A server that cannot answer ordinary queries is refused.
     $baseline=@(Read-NetworkBaseline)
-    Assert-TargetDns $Request.Server $baseline
+    if($Request.EncryptedStub -and $Request.ChangeAdapters){
+        if(-not $Request.StubIpv6){throw 'Encrypted DNS preflight failed: IPv6 loopback resolver is unavailable. Use the selected-services mode. DNS settings were not changed.'}
+        Assert-TargetDns '::1' $baseline
+        foreach($adapter in @(Read-SelectedAdapters $Request)){if(@(Get-DnsClientServerAddress -InterfaceIndex (Find-Adapter $adapter.Guid).InterfaceIndex -AddressFamily IPv6 -ErrorAction Stop).Count -ne 1){throw 'Encrypted DNS preflight failed: IPv6 DNS settings are unavailable for a selected adapter. DNS settings were not changed.'}}
+    }
+    $workingServers=@();$rejectedServers=@();$rejectedReasons=@()
+    foreach($server in @(Get-ConfiguredServers $Request)){
+        try{Assert-TargetDns $server $baseline;$workingServers+=@($server)}
+        catch{$rejectedServers+=@($server);$rejectedReasons+=@($_.Exception.Message)}
+    }
+    if(-not $workingServers.Count){throw ('DNS server preflight failed: none of the configured servers passed DNS and HTTPS checks: '+($rejectedServers -join ', ')+'. DNS settings were not changed. Details: '+($rejectedReasons -join '; '))}
+    $Request.Server=$workingServers[0]
+    $Request | Add-Member -NotePropertyName Servers -NotePropertyValue $workingServers -Force
     if($existing -and $existing.Kind -ne 'ResetAll' -and $existing.Status -notin @('Restored','Released')){
         if(-not $Request.ReplaceActiveSetup){throw 'A DNS backup is already active. Restore it before applying a new setup.'}
         # Reject a stale adapter selection before touching the active setup.
@@ -544,18 +577,21 @@ function Invoke-Apply($Request) {
             $state.RemovedRuleNames+=@($rule.OriginalName);$state.PendingRemove=$null;Save-State $state
         }
         foreach($domain in @($state.NewNamespaces)){
-            $created=Add-DnsClientNrptRule -Namespace $domain -NameServers @($state.Server) -DisplayName 'DevProxy SmartDNS' -Comment $state.Tag -PassThru -ErrorAction Stop
+            $created=Add-DnsClientNrptRule -Namespace $domain -NameServers @(Get-ConfiguredServers $state) -DisplayName 'DevProxy SmartDNS' -Comment $state.Tag -PassThru -ErrorAction Stop
             $state.CreatedRules+=@([pscustomobject]@{Name=[string]$created.Name;Namespace=$domain});Save-State $state
         }
         foreach($adapter in @($state.OriginalAdapters)){
             $current=Find-Adapter $adapter.Guid
-            $dnsInput=@(Get-DnsClientServerAddress -InterfaceIndex $current.InterfaceIndex -AddressFamily $state.ServerFamily -ErrorAction Stop)
-            if($dnsInput.Count -ne 1){throw ('DNS address family is unavailable for '+$adapter.Alias+': '+$state.ServerFamily)}
             $state.PendingAdapter=$adapter.Guid;Save-State $state
-            Set-DnsClientServerAddress -InputObject $dnsInput[0] -ServerAddresses @($state.Server) -ErrorAction Stop
+            foreach($family in @($state.ManagedFamilies)){
+                $expected=if($state.EncryptedStub -and $family -eq 'IPv6'){@('::1')}else{@(Get-ConfiguredServers $state)}
+                $dnsInput=@(Get-DnsClientServerAddress -InterfaceIndex $current.InterfaceIndex -AddressFamily $family -ErrorAction Stop)
+                if($dnsInput.Count -ne 1){throw ('DNS address family is unavailable for '+$adapter.Alias+': '+$family)}
+                Set-DnsClientServerAddress -InputObject $dnsInput[0] -ServerAddresses $expected -ErrorAction Stop
+                $servers=@(Get-DnsClientServerAddress -InterfaceIndex $current.InterfaceIndex -AddressFamily $family -ErrorAction Stop | ForEach-Object {$_.ServerAddresses} | Where-Object {$_} | Select-Object -Unique)
+                if(($servers -join ',') -ne ($expected -join ',')){throw ('DNS verification failed for '+$adapter.Alias+' ('+$family+'). Actual servers: '+($servers -join ', '))}
+            }
             $state.AppliedAdapters+=@(Read-Adapter $current);$state.PendingAdapter=$null;Save-State $state
-            $servers=@(Get-DnsClientServerAddress -InterfaceIndex $current.InterfaceIndex -AddressFamily $state.ServerFamily -ErrorAction Stop | ForEach-Object {$_.ServerAddresses} | Where-Object {$_} | Select-Object -Unique)
-            if($servers.Count -ne 1 -or $state.Server -notin $servers){throw ('DNS verification failed for '+$adapter.Alias+' ('+$state.ServerFamily+'). Actual servers: '+($servers -join ', '))}
         }
         foreach($domain in @($state.NewNamespaces)){
             if(-not @(Get-DnsClientNrptRule | Where-Object {$_.Comment -eq $state.Tag -and $_.Namespace -contains $domain}).Count){throw 'NRPT verification failed.'}
@@ -564,7 +600,9 @@ function Invoke-Apply($Request) {
         Assert-NetworkConnectivity $baseline
         $state.ConnectivityVerified=$true
         $state.Status='Applied';Save-State $state
-        $message='DNS applied. Family: '+$state.ServerFamily+'. DNS and HTTPS checks passed. Adapters: '+@($state.AppliedAdapters).Count+'; new NRPT rules: '+@($state.NewNamespaces).Count+'; reused rules: '+$state.ReusedRules+'. Backup saved.'
+        $resultFamily=if($state.EncryptedStub -and $state.ChangeAdapters){'IPv4+IPv6'}else{$state.ServerFamily}
+        $message='DNS applied. Family: '+$resultFamily+'. DNS and HTTPS checks passed. Servers: '+(@(Get-ConfiguredServers $state) -join ', ')+'. Adapters: '+@($state.AppliedAdapters).Count+'; new NRPT rules: '+@($state.NewNamespaces).Count+'; reused rules: '+$state.ReusedRules+'. Backup saved.'
+        if($rejectedServers.Count){$message+=' Unavailable servers skipped: '+($rejectedServers -join ', ')+'.'}
         if($previousWarnings.Count){$message+=' Previous setup closed with preserved external settings: '+($previousWarnings -join '; ')}
         return $message
     }catch{
@@ -597,6 +635,14 @@ function Invoke-SystemDns($Request) {
         'Previous DNS settings restored, including DHCP/static mode. DNS cache cleared.'
     }finally{if($owns){$mutex.ReleaseMutex()};$mutex.Dispose()}
 }
+function Test-NoLocalDnsReferences {
+    try {
+        $addresses=@(Get-DnsClientServerAddress -ErrorAction Stop | ForEach-Object {$_.ServerAddresses})
+        $addresses+=@(Get-DnsClientNrptRule -ErrorAction Stop | ForEach-Object {$_.NameServers})
+        foreach($address in $addresses){$ip=$null;if([Net.IPAddress]::TryParse([string]$address,[ref]$ip) -and [Net.IPAddress]::IsLoopback($ip)){return $false}}
+        return $true
+    }catch{return $false}
+}
 if($LibraryOnly){return}
 if($Operation -eq 'Status'){
     $state=Read-State
@@ -608,13 +654,15 @@ $request=$null
 try {
     $request=$RequestJson | ConvertFrom-Json;Validate-Request $request
     if($request.Operation -ne $Operation){throw 'DNS operation mismatch.'}
+    $before=Read-State
     $message=Invoke-SystemDns $request
-    Write-Json (Join-Path (Get-StoreRoot) ('jobs\'+$request.JobId+'.json')) ([pscustomobject]@{Success=$true;Message=$message})
+    $stopStub=($request.Operation -eq 'Restore' -or ($request.Operation -eq 'Apply' -and -not $request.EncryptedStub)) -and $before -and $before.EncryptedStub -and (Test-NoLocalDnsReferences)
+    Write-Json (Join-Path (Get-StoreRoot) ('jobs\'+$request.JobId+'.json')) ([pscustomobject]@{Success=$true;Message=$message;StopEncryptedStub=[bool]$stopStub})
     exit 0
 }catch{
     $message=$_.Exception.Message
     if($request -and [string]$request.JobId -match '^[0-9a-f]{32}$'){
-        try{Initialize-Store;Write-Json (Join-Path (Get-StoreRoot) ('jobs\'+$request.JobId+'.json')) ([pscustomobject]@{Success=$false;Message=$message})}catch{}
+        try{Initialize-Store;$stopStub=$request.Operation -eq 'Apply' -and $request.EncryptedStub -and (Test-NoLocalDnsReferences);Write-Json (Join-Path (Get-StoreRoot) ('jobs\'+$request.JobId+'.json')) ([pscustomobject]@{Success=$false;Message=$message;StopEncryptedStub=[bool]$stopStub})}catch{}
     }
     Write-Error $message;exit 1
 }

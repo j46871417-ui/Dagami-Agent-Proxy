@@ -33,7 +33,7 @@ class UserInfoChecks {
   }}catch(SocketException){}catch(ObjectDisposedException){}}
   public void Dispose(){listener.Stop();Assert(thread.Join(4000),"Fixture did not stop");}
  }
- static int Main(){try{
+ static int Main(){typeof(Logger).GetField("_logFilePath",BindingFlags.Static|BindingFlags.NonPublic).SetValue(null,Path.Combine(Path.GetTempPath(),"UserInfoChecks-proxy.log"));try{
   Assert(ScopedDnsResolver.IsScoped("www.googleapis.com"),"userinfo host missing from DNS route");
   Assert(Describe("/oauth2/v2/userinfo","HTTP/1.1 401 Unauthorized",false).Contains("ожидаем без токена"),"401 not identified as synthetic probe");
   Assert(Describe("/token","HTTP/1.1 400 Bad Request",true).Contains("вход не выполнен"),"OAuth 400 not explained");
@@ -55,6 +55,11 @@ class UserInfoChecks {
    Assert(!proxy.LastRequest.Contains("Bearer") && !proxy.LastRequest.Contains("code="),"Account material in diagnostic request");
    Assert(!report.Contains("userinfo доступен"),"Broken route reported healthy");
    Assert(bridge.BoundPort>0,"Running bridge was replaced");
+  }
+  using(var proxy=new RefusingProxy("HTTP/1.1 407 Proxy Authentication Required"))using(var bridge=new LocalProxyBridge()){
+   Assert(bridge.Start(0,"http://127.0.0.1:"+proxy.Port),"Auth fixture bridge failed");
+   bool explained=false;try{AntigravityDiagnostics.ProbeUserInfo(bridge.BoundPort);}catch(IOException error){explained=error.Message.Contains("407")&&error.Message.Contains("авторизац")&&error.Message.Contains("upstream-CONNECT");}
+   Assert(explained,"Proxy authentication failure hidden behind generic 502");
   }
   using(var proxy=new RefusingProxy("HTTP/1.1 2000 Malformed"))using(var bridge=new LocalProxyBridge()){
    Assert(bridge.Start(0,"http://127.0.0.1:"+proxy.Port),"Malformed fixture bridge failed");

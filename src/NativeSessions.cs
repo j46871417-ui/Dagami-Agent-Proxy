@@ -166,6 +166,7 @@ namespace DevProxyApp
                 }
                 string error;
                 if (!LaunchTarget(target, arguments, directory, out error)) return error;
+                if(_targetList.SelectedItems.Count>0&&((AppTarget)_targetList.SelectedItems[0].Tag).Id==target.Id)QueueClientStatus(true);
                 UpdateNativeStatus(); return null;
             } catch (Exception ex) { Logger.Log("[Shortcut] " + ex.GetType().Name); return ex.Message; }
         }
@@ -181,7 +182,7 @@ namespace DevProxyApp
             }
             var store = NativeShortcuts.Current;
             List<string> paths = restore ? NativeAppPatcher.RestoreWithLauncher(target,()=>store.Restore(target.Id)) : store.EnablePrepared(target, Process.GetCurrentProcess().MainModule.FileName, NativeShortcuts.UserFolders(), () => {}, () => {}, true);
-            if (paths.Count == 0) throw new InvalidOperationException(restore ? "Настроенных обычных ярлыков нет." : "Ярлыки не найдены. Используйте «Ещё → Найти или создать ярлык».");
+            if (paths.Count == 0) throw new InvalidOperationException(restore ? "Настроенных обычных ярлыков нет." : "Ярлык не найден или не создан. Проверьте права на рабочий стол и повторите настройку.");
             foreach (string path in paths) Logger.Log("[Shortcut] " + (restore ? "Восстановлен: " : "Прокси включён: ") + path);
             UpdateNativeDetails();
             System.Windows.Forms.MessageBox.Show(this, restore ? "Обычные ярлыки восстановлены. Запуск снова выполняется напрямую." :

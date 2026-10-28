@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Drawing;
 using System.IO;
 using System.Text;
@@ -14,7 +14,7 @@ namespace DevProxyApp
         {
             var page = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 3, BackColor = FluentTheme.Background };
             page.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
-            page.RowStyles.Add(new RowStyle(SizeType.Absolute, 190));
+            page.RowStyles.Add(new RowStyle(SizeType.Absolute, 106));
             page.RowStyles.Add(new RowStyle(SizeType.Absolute, 55));
             page.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
             var card = new FluentCard { Dock = DockStyle.Fill };
@@ -22,10 +22,10 @@ namespace DevProxyApp
             body.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
             body.Controls.Add(FluentLabel("Патчинг и проверка Antigravity / agy CLI", 15, true), 0, 0);
             _prepareAntigravity = new CheckBox { Text = "Автоматически подготавливать совместимые версии", AutoSize = true, Checked = ConfigManager.Instance.PrepareAntigravityClient };
-            body.Controls.Add(_prepareAntigravity, 0, 1);
+
             body.Controls.Add(new Label { Dock = DockStyle.Fill, ForeColor = FluentTheme.Muted,
-                Text = "Подготовка — «Пропатчить» в разделе «Приложения». Откат — «Ещё → Дополнительно».\nIDE 2.6 использует общий agy. Закройте IDE и CLI перед изменением.\nНеизвестные версии не меняются. Вход и ответы модели проверяйте в самом клиенте." }, 0, 2);
-            body.RowStyles.Add(new RowStyle(SizeType.Absolute, 32)); body.RowStyles.Add(new RowStyle(SizeType.Absolute, 30)); body.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+                Text = "Проверка разделяет ошибки прокси, DNS и сертификата. Она не входит в аккаунт и не отправляет запрос модели. Вход завершите в IDE." }, 0, 2);
+            body.RowStyles.Add(new RowStyle(SizeType.Absolute, 32)); body.RowStyles.Add(new RowStyle(SizeType.Absolute, 0)); body.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
             card.Controls.Add(body); page.Controls.Add(card, 0, 0);
             var actions = new FlowLayoutPanel { Dock = DockStyle.Fill, WrapContents = false, AutoScroll = true };
             AddNativeButton(actions, "Вход через прокси", OpenAntigravityLogin);
@@ -59,11 +59,11 @@ namespace DevProxyApp
             bool useDns = ConfigManager.Instance.UseDagamiDns;
             string proxy = ConfigManager.Instance.LastProxy;
             System.Threading.ThreadPool.QueueUserWorkItem(o => {
-                var report = new StringBuilder();
+                var report = new StringBuilder();bool successful=false;
                 try {
                     report.AppendLine("Выбран клиент: " + target.ExePath);
-                    if (operation == "prepare") report.AppendLine(AntigravityIntegration.PrepareClient(target.ExePath).Message);
-                    else if (operation == "restore") report.AppendLine(AntigravityIntegration.RestoreClient(target.ExePath));
+                    if (operation == "prepare") {var result=AntigravityIntegration.PrepareClient(target.ExePath);successful=result.Complete;report.AppendLine(result.Message);}
+                    else if (operation == "restore") {report.AppendLine(AntigravityIntegration.RestoreClient(target.ExePath));successful=true;}
                     else {
                         report.AppendLine(AntigravityDiagnostics.LoginRouteReport(bridgePort,useDns,dnsHost,proxy));
                         try { report.AppendLine(AntigravityIntegration.InspectClient(target.ExePath)); }
@@ -89,6 +89,7 @@ namespace DevProxyApp
                 try { BeginInvoke(new Action(() => {
                     _nativeBusy = false; SetNativeButtonsEnabled(true); _antigravityReport.Text = report.ToString();
                     Logger.Log("[Antigravity] " + report.ToString()); UpdateNativeStatus();
+                    if(operation!="diagnose"){QueueClientStatus(true);UpdateAppActionState();MessageBox.Show(this,report.ToString(),"Бинарная подготовка Antigravity",MessageBoxButtons.OK,successful?MessageBoxIcon.Information:MessageBoxIcon.Warning);}
                 })); } catch (InvalidOperationException) { }
             });
         }

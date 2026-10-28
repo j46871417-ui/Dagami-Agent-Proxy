@@ -29,6 +29,9 @@ namespace DevProxyApp
         public string JobId { get; set; }
         public string Operation { get; set; }
         public string Server { get; set; }
+        public string[] Servers { get; set; }
+        public bool EncryptedStub { get; set; }
+        public bool StubIpv6 { get; set; }
         public string Preset { get; set; }
         public bool ChangeAdapters { get; set; }
         public bool UseNrpt { get; set; }
@@ -62,9 +65,22 @@ namespace DevProxyApp
             if (request == null || !Guid.TryParseExact(request.JobId, "N", out id) || (request.Operation != "Apply" && request.Operation != "Restore" && request.Operation != "ResetAll")) throw new ArgumentException("Некорректная операция DNS.");
             if (request.Operation == "ResetAll") { if (!request.ConfirmResetAll) throw new ArgumentException("Для полного сброса нужны два подтверждения."); return; }
             if (request.Operation == "Restore") return;
+            if(request.EncryptedStub && (request.Server!="127.0.0.1" || (request.Servers!=null && (request.Servers.Length!=1 || request.Servers[0]!="127.0.0.1"))))throw new ArgumentException("Для шифрованного DNS нужен локальный резолвер 127.0.0.1.");
             IPAddress ip;
-            if (!IPAddress.TryParse(request.Server, out ip)) throw new ArgumentException("Укажите IP-адрес DNS-сервера, например 185.149.145.6.");
+            if (!IPAddress.TryParse(request.Server, out ip)) throw new ArgumentException("Укажите IP-адрес DNS-сервера, например 45.147.31.32.");
             request.Server = ip.ToString();
+            string[] candidates = request.Servers ?? ScopedDnsResolver.ServerCandidates(request.Server);
+            if (candidates.Length < 1 || candidates.Length > 16) throw new ArgumentException("Укажите от 1 до 16 DNS-серверов.");
+            var servers = new List<string>();
+            foreach (string candidate in candidates) {
+                IPAddress address;
+                if (!IPAddress.TryParse(candidate, out address) || address.AddressFamily != ip.AddressFamily)
+                    throw new ArgumentException("DNS-серверы должны быть IP-адресами одного семейства.");
+                if (!servers.Contains(address.ToString())) servers.Add(address.ToString());
+            }
+            if (request.Servers == null && DnsProviders.ForServer(request.Server)!=null) request.Server=servers[0];
+            if (servers[0] != request.Server) throw new ArgumentException("Основной DNS не совпадает со списком серверов.");
+            request.Servers = servers.ToArray();
             if (request.Preset != "Full" && request.Preset != "Development") throw new ArgumentException("Выберите набор доменов.");
             if (!request.ChangeAdapters && !request.UseNrpt) throw new ArgumentException("Выберите изменение DNS адаптеров или правила NRPT.");
             if (request.Adapters == null || request.Adapters.Length > 64 || (request.ChangeAdapters && request.Adapters.Length == 0)) throw new ArgumentException("Отметьте хотя бы один сетевой адаптер.");
@@ -89,6 +105,14 @@ namespace DevProxyApp
             return "$json=[Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('" + canonical + "')); & {\n" + Script() + "\n} -Operation " + operation + " -RequestJson $json";
         }
         public static int RunElevatedHelper(string operation, string payload) {
+            using(var mutex=new Mutex(false,@"Global\Dagami.EncryptedDns.Helper")){
+                bool owns=false;try{try{owns=mutex.WaitOne(0);}catch(AbandonedMutexException){owns=true;}
+                    if(!owns)return 170;
+                    return RunElevatedHelperCore(operation,payload);
+                }finally{if(owns)mutex.ReleaseMutex();}
+            }
+        }
+        static int RunElevatedHelperCore(string operation, string payload) {
             if (!new WindowsPrincipal(WindowsIdentity.GetCurrent()).IsInRole(WindowsBuiltInRole.Administrator)) return 5;
             byte[] data = Convert.FromBase64String(payload);
             if (data.Length > 12000) throw new ArgumentException("Invalid payload size.");
@@ -96,6 +120,10 @@ namespace DevProxyApp
             if (operation != request.Operation) throw new ArgumentException("Operation mismatch.");
             data = Encoding.UTF8.GetBytes(new JavaScriptSerializer().Serialize(request));
             ProtectStore();
+            if(request.Operation=="Apply"&&request.EncryptedStub)try{DnsServiceHost.EnsureInstalled();request.StubIpv6=request.ChangeAdapters&&DnsServiceHost.Probe(IPAddress.IPv6Loopback);data=Encoding.UTF8.GetBytes(new JavaScriptSerializer().Serialize(request));}catch(Exception error){
+                string jobs=Path.Combine(StoreRoot,"jobs");Directory.CreateDirectory(jobs);var permissions=new DirectorySecurity();AddStoreRules(permissions,true);Directory.SetAccessControl(jobs,permissions);
+                File.WriteAllText(Path.Combine(jobs,request.JobId+".json"),new JavaScriptSerializer().Serialize(new{Success=false,Message="Не удалось подготовить службу шифрованного DNS. Настройки сети не менялись. "+error.Message}),new UTF8Encoding(true));return 1;
+            }
             string script = Script(), scriptPath = Path.Combine(StoreRoot, "engine-" + Guid.NewGuid().ToString("N") + ".ps1");
             try {
                 File.WriteAllText(scriptPath, script, new UTF8Encoding(true));
@@ -106,6 +134,9 @@ namespace DevProxyApp
                     var stdout = Task.Factory.StartNew(() => process.StandardOutput.ReadToEnd());
                     var stderr = Task.Factory.StartNew(() => process.StandardError.ReadToEnd());
                     process.WaitForExit(); Task.WaitAll(stdout, stderr);
+                    string report=Path.Combine(StoreRoot,"jobs",request.JobId+".json");
+                    try{if(File.Exists(report)){var result=new JavaScriptSerializer().Deserialize<Dictionary<string,object>>(ReadStoredText(report));if(result.ContainsKey("StopEncryptedStub")&&Convert.ToBoolean(result["StopEncryptedStub"]))DnsServiceHost.StopOwned();}}
+                    catch(Exception error){Logger.Log("[Encrypted DNS service stop] "+error.GetType().Name);try{var result=new JavaScriptSerializer().Deserialize<Dictionary<string,object>>(ReadStoredText(report));result["Message"]=Convert.ToString(result["Message"])+"\r\nService stop failed: "+error.GetType().Name;File.WriteAllText(report,new JavaScriptSerializer().Serialize(result),new UTF8Encoding(true));}catch{}}
                     if (process.ExitCode != 0) Logger.Log("[System DNS] Helper failed; exit=" + process.ExitCode + ". See DNS operation result.");
                     return process.ExitCode;
                 }
@@ -140,6 +171,19 @@ namespace DevProxyApp
             foreach (var sid in new[] { admins, new SecurityIdentifier(WellKnownSidType.LocalSystemSid, null) })
                 security.AddAccessRule(new FileSystemAccessRule(sid, FileSystemRights.FullControl, inheritance, PropagationFlags.None, AccessControlType.Allow));
             security.AddAccessRule(new FileSystemAccessRule(new SecurityIdentifier(WellKnownSidType.BuiltinUsersSid, null), FileSystemRights.ReadAndExecute, inheritance, PropagationFlags.None, AccessControlType.Allow));
+        }
+        internal static void ProtectServiceDirectory(string path) {
+            if(Path.GetFullPath(path)!=Path.GetFullPath(Path.Combine(StoreRoot,"service")))throw new IOException("Invalid DNS service folder.");
+            if(!Directory.Exists(path))Directory.CreateDirectory(path);
+            if((File.GetAttributes(path)&FileAttributes.ReparsePoint)!=0)throw new IOException("Invalid DNS service folder.");
+            string owner=Directory.GetAccessControl(path).GetOwner(typeof(SecurityIdentifier)).Value;
+            if(owner!="S-1-5-32-544"&&owner!="S-1-5-18")throw new IOException("DNS service folder is not administrator-owned.");
+            var directory=new DirectorySecurity();AddStoreRules(directory,true);Directory.SetAccessControl(path,directory);
+            foreach(string name in new[]{"DagamiAgentProxy.exe","owner.json","dns-endpoints.json"}){
+                string file=Path.Combine(path,name);if(!File.Exists(file))continue;
+                if((File.GetAttributes(file)&FileAttributes.ReparsePoint)!=0)throw new IOException("Invalid DNS service file.");
+                var permissions=new FileSecurity();AddStoreRules(permissions,false);File.SetAccessControl(file,permissions);
+            }
         }
         static void ProtectStore() {
             if (Directory.Exists(StoreRoot)) {
@@ -184,28 +228,42 @@ namespace DevProxyApp
                 if(status=="Released")return "откат с пропусками; внешние настройки сохранены";
                 if(status!="Applied")return "нужна проверка: "+status;
                 string server=Convert.ToString(state["Server"]);
+                var configuredServers=new List<string>();
+                if(state.ContainsKey("Servers"))foreach(object item in (System.Collections.IEnumerable)state["Servers"])configuredServers.Add(Convert.ToString(item));
+                string[] servers=configuredServers.Count>0?configuredServers.ToArray():new[]{server};
                 var originals=state["OriginalAdapters"] as System.Collections.IEnumerable;
                 var adapters=Adapters();int verified=0;
                 if(originals!=null)foreach(object item in originals) {
                     var record=item as Dictionary<string,object>;if(record==null)continue;
                     var adapter=adapters.Find(a=>a.Guid.Equals(Convert.ToString(record["Guid"]),StringComparison.OrdinalIgnoreCase));
                     if(adapter==null)return "адаптер недоступен — проверьте";
-                    if(!MatchesServerFamily(adapter.CurrentServers,server))return "изменён вне приложения — проверьте";
+                    if(!MatchesServerFamily(adapter.CurrentServers,servers))return "изменён вне приложения — проверьте";
+                    if(state.ContainsKey("EncryptedStub")&&Convert.ToBoolean(state["EncryptedStub"])&&state.ContainsKey("StubIpv6")&&Convert.ToBoolean(state["StubIpv6"])&&!MatchesServerFamily(adapter.CurrentServers,"::1"))return "IPv6 DNS изменён вне приложения — проверьте";
                     verified++;
                 }
-                return verified>0?"записан "+(IPAddress.Parse(server).AddressFamily==System.Net.Sockets.AddressFamily.InterNetwork?"IPv4: ":"IPv6: ")+server:"последняя операция: правила NRPT";
+                return verified>0?"записан "+(IPAddress.Parse(server).AddressFamily==System.Net.Sockets.AddressFamily.InterNetwork?"IPv4: ":"IPv6: ")+string.Join(", ",servers):"последняя операция: правила NRPT";
             } catch {return "не удалось проверить";}
         }
+        public static bool EncryptedDnsActive(){try{string path=Path.Combine(StoreRoot,"state.json");if(!File.Exists(path))return false;var state=new JavaScriptSerializer().Deserialize<Dictionary<string,object>>(ReadStoredText(path));return state.ContainsKey("EncryptedStub")&&Convert.ToBoolean(state["EncryptedStub"])&&Convert.ToString(state["Status"])=="Applied";}catch{return false;}}
         public static bool MatchesServerFamily(string currentServers, string server) {
+            return MatchesServerFamily(currentServers,new[]{server});
+        }
+        public static bool MatchesServerFamily(string currentServers, string[] servers) {
             IPAddress expected;
-            if (!IPAddress.TryParse(server, out expected)) return false;
+            if (servers==null || servers.Length==0 || !IPAddress.TryParse(servers[0], out expected)) return false;
+            var wanted=new HashSet<string>();
+            foreach(string server in servers) {
+                IPAddress address;
+                if(!IPAddress.TryParse(server,out address)||address.AddressFamily!=expected.AddressFamily)return false;
+                wanted.Add(address.ToString());
+            }
             var matching = new HashSet<string>();
             foreach (string value in currentServers.Split(new[]{", "},StringSplitOptions.RemoveEmptyEntries)) {
                 IPAddress address;
                 if (!IPAddress.TryParse(value,out address)) return false;
                 if (address.AddressFamily==expected.AddressFamily) matching.Add(address.ToString());
             }
-            return matching.Count==1 && matching.Contains(expected.ToString());
+            return matching.SetEquals(wanted);
         }
         public static string Execute(SystemDnsRequest request) {
             bool elevated = new WindowsPrincipal(WindowsIdentity.GetCurrent()).IsInRole(WindowsBuiltInRole.Administrator);
@@ -227,16 +285,18 @@ namespace DevProxyApp
             if(text.StartsWith("Full DNS reset completed."))return "Полный сброс выполнен: DNS IPv4/IPv6 всех найденных адаптеров переведён в авто, правила NRPT удалены, кеш DNS очищен.\r\n"+text;
             if(text.StartsWith("Full DNS reset incomplete:"))return "Сброс выполнен частично. Проверьте детали ниже; исходная копия сохранена. Политики вашей организации могут вернуть правила NRPT.\r\n"+text;
             if(text.StartsWith("DNS server preflight failed:"))return "Новый DNS не прошёл проверку доступности. Настройки сети не менялись.\r\n"+text;
+            if(text.StartsWith("Encrypted DNS preflight failed:"))return "Не удалось проверить шифрованный DNS для IPv6. Используйте режим отдельных ИИ-сервисов. Настройки сети не менялись.\r\n"+text;
             if(text.StartsWith("Connectivity preflight failed:"))return "Не удалось проверить исходный доступ к DNS и HTTPS. Настройки сети не менялись.\r\n"+text;
             if(text.StartsWith("Apply failed:") && text.Contains("Previous settings restored, but connectivity could not be verified:"))return "Применение отменено, прежние настройки возвращены. Доступ к сети после отката не подтверждён.\r\n"+text;
             if(text.StartsWith("Apply failed:") && text.Contains("Rollback incomplete:"))return "Применение не удалось, откат не завершён. Исходная копия сохранена; повторите восстановление прежнего DNS.\r\n"+text;
             if(text.StartsWith("Apply failed:") && text.EndsWith("Previous settings restored."))return "Применение отменено: проверка или запись не прошла. Прежние настройки возвращены, доступ к DNS и HTTPS проверен.\r\n"+text;
             if (text.StartsWith("DNS rollback completed with preserved external settings.")) return "Откат завершён с пропусками: внешние настройки сохранены, отсутствующие адаптеры пропущены. Можно применить DNS заново. Исходная копия сохранена.\r\n" + text;
             if (text.StartsWith("DNS applied.")) {
+                if(text.Contains("Family: IPv4+IPv6."))return "Шифрованный DNS IPv4 и IPv6 применён к выбранным адаптерам. Проверки DNS и HTTPS пройдены. Резервная копия сохранена.\r\n"+text;
                 string family=text.Contains("Family: IPv4.")?"IPv4":(text.Contains("Family: IPv6.")?"IPv6":null);
                 return (family==null?"Системный DNS применён.":"DNS "+family+" применён. DNS "+(family=="IPv4"?"IPv6":"IPv4")+" сохранён без изменений.")+(text.Contains("DNS and HTTPS checks passed.")?" Проверки DNS и HTTPS пройдены.":"")+" Резервная копия сохранена.\r\n"+text;
             }
-            if (text.StartsWith("Previous DNS settings restored")) return "Прежние DNS восстановлены вместе с режимом DHCP/статики. Кэш DNS очищен.";
+            if (text.StartsWith("Previous DNS settings restored")) return "Прежние DNS восстановлены вместе с режимом DHCP/статики. Кэш DNS очищен."+(text.Contains("Service stop failed:")?" Службу шифрованного DNS остановить не удалось; проверьте журнал.":"");
             if (text.StartsWith("Previous DNS settings are already")) return "Прежние DNS уже восстановлены.";
             if (text.StartsWith("Conflicting NRPT rule")) return "Обнаружены конфликтующие правила NRPT. Для замены отметьте «Заменить конфликтующие NRPT-правила с резервной копией».\r\n" + text;
             if (text.StartsWith("A DNS backup is already")) return "Есть активная копия DNS. Включите замену прежней настройки в запросе либо выполните откат. В окне DNS замена уже включена.";
@@ -249,7 +309,7 @@ namespace DevProxyApp
 
     public sealed class SystemDnsForm : Form
     {
-        readonly TextBox _server = new TextBox { Text = "185.149.145.6", Dock = DockStyle.Fill };
+        readonly TextBox _server = new TextBox { Text = "45.147.31.32", Dock = DockStyle.Fill };
         readonly ComboBox _preset = new ComboBox { Dock = DockStyle.Fill, DropDownStyle = ComboBoxStyle.DropDownList };
         readonly CheckedListBox _adapters = new CheckedListBox { Dock = DockStyle.Fill, CheckOnClick = true, HorizontalScrollbar = true };
         readonly CheckBox _changeAdapters = new CheckBox { Text = "Дополнительно: изменить DNS отмеченных адаптеров для всей сети", AutoSize = true, Checked = false };

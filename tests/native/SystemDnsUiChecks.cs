@@ -30,6 +30,12 @@ class SystemDnsUiChecks {
    Assert(SystemDnsManager.EngineStart("ResetAll",SystemDnsManager.EncodeRequest(resetRequest),"fixture.ps1").CreateNoWindow,"Full reset engine opens a console");
    var request=new SystemDnsRequest{JobId=Guid.NewGuid().ToString("N"),Operation="Apply",Server="185.149.145.6",Preset="Full",ChangeAdapters=true,UseNrpt=true,Adapters=new[]{new SystemDnsAdapter{Index=1,Guid=Guid.NewGuid().ToString()}}};
    string payload=SystemDnsManager.EncodeRequest(request);
+   Assert(SystemDnsManager.MatchesServerFamily("46.29.165.108, 89.125.103.139, 2001:db8::53",new[]{"46.29.165.108","89.125.103.139"}),"Status rejects backup DNS list");
+   var poolRequest=new SystemDnsRequest{JobId=Guid.NewGuid().ToString("N"),Operation="Apply",Server="45.147.31.32",Preset="Full",UseNrpt=true,Adapters=new SystemDnsAdapter[0]};
+   SystemDnsManager.Validate(poolRequest);Assert(poolRequest.Servers.Length==6,"Dagami and MagicDNS backup pool not included in request");
+   var encrypted=new SystemDnsRequest{JobId=Guid.NewGuid().ToString("N"),Operation="Apply",Server="127.0.0.1",EncryptedStub=true,Preset="Development",UseNrpt=true,Adapters=new SystemDnsAdapter[0]};
+   SystemDnsManager.Validate(encrypted);Assert(encrypted.Servers.Length==1&&encrypted.Servers[0]=="127.0.0.1","Encrypted request escaped local resolver");
+   encrypted.Server="8.8.8.8";Reject(()=>SystemDnsManager.Validate(encrypted));
    Assert(Encoding.UTF8.GetString(Convert.FromBase64String(payload)).Contains("185.149.145.6"),"Payload lost server");
    request.Server="185.149.145.6; calc.exe";Reject(()=>SystemDnsManager.EncodeRequest(request));
    request.Server="dns.dagami.ru";Reject(()=>SystemDnsManager.EncodeRequest(request));request.Server="185.149.145.6";
@@ -51,6 +57,7 @@ class SystemDnsUiChecks {
    Assert(SystemDnsManager.MatchesServerFamily("192.0.2.53, 2001:db8::6","2001:db8::6"),"Status rejects unchanged IPv4 after an IPv6 DNS write");
    Assert(SystemDnsManager.Friendly("DNS applied. Family: IPv4.").Contains("DNS IPv6 сохранён без изменений"),"IPv4 result hides retained IPv6 DNS");
    Assert(SystemDnsManager.Friendly("DNS server preflight failed: no answer").Contains("Настройки сети не менялись"),"Server preflight error does not state that DNS stayed unchanged");
+   Assert(SystemDnsManager.Friendly("Previous DNS settings restored.\r\nService stop failed: IOException").Contains("остановить не удалось"),"Service stop failure was hidden after DNS restore");
    Assert(SystemDnsManager.Friendly("Connectivity preflight failed: offline").Contains("Настройки сети не менялись"),"Baseline error does not state that DNS stayed unchanged");
    Assert(SystemDnsManager.Friendly("Apply failed: HTTPS outage. Previous settings restored.").Contains("Прежние настройки возвращены"),"Automatic rollback result missing");
    Assert(SystemDnsManager.Friendly("Apply failed: HTTPS outage. Previous settings restored, but connectivity could not be verified: offline").Contains("Доступ к сети после отката не подтверждён"),"Unverified recovery falsely described as healthy");

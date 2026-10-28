@@ -15,6 +15,19 @@ included. SystemDnsChecks.ps1 resolves its default engine at `../../src/SystemDn
 read its fixture/mutation setup before running it. Never use the real activation,
 network settings or installed application files as writable test fixtures.
 
+`DnsTransportChecks` binds only loopback fixtures and checks UDP/TCP framing,
+truncation, backup selection, transport cooldown, TTL and malformed/unsafe replies.
+`TlsDiagnosticsChecks` creates a disposable certificate/key in fixture TEMP and
+uses Python/OpenSSL as the loopback TLS server; no Windows key or trust store is
+modified. It verifies rejection and diagnostic detail for an untrusted certificate.
+`SystemDnsUiChecks` and `UserInfoChecks` verify multi-server request/status handling
+and upstream status propagation without applying real settings or using account tokens.
+`DnsProviderChecks` and `DnsAgentChecks` exercise trusted profile parsing, DoH
+framing, local DNS forwarding and service transactions with a fake service controller.
+`AntigravityPatchChecks` covers recognized CLI branch shapes, unknown builds and
+exact rollback. `SystemDnsChecks.ps1` covers encrypted IPv4/IPv6 adapter rollback.
+The runner requires an explicit PASS report; a silent exit is not counted as success.
+
 `Ide26Checks` covers the separate IDE filename/profile, old/new plugin directories,
 external agy discovery, safe preparation/restore, local CONNECT and streamed RPC
 with CSRF/auth and chunked trailers, upstream credential isolation and bridge shutdown.

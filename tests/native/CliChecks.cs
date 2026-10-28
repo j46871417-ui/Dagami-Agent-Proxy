@@ -45,6 +45,12 @@ class CliChecks {
   }
   string root=Path.Combine(Path.GetTempPath(),"Dagami-cli-check-"+Guid.NewGuid().ToString("N"));Directory.CreateDirectory(root);
   try{
+   Assert(NativeCli.FailureHint("HTTP 400 User location is not supported for the API use.").Contains("регион выхода"),"Server region error confused with local CLI gate");
+   Assert(NativeCli.FailureHint("HTTP 403 SUBSCRIPTION_REQUIRED").Contains("подписку"),"Subscription misclassified as region");
+   Assert(NativeCli.FailureHint("HTTP 407").Contains("авторизацию"),"Proxy authentication misclassified");
+   Assert(NativeCli.FailureHint("AuthenticationException: certificate error").Contains("TLS"),"TLS error misclassified");
+   Assert(NativeCli.FailureHint("HTTP 429 RESOURCE_EXHAUSTED").Contains("квот"),"Quota error misclassified");
+   Assert(!NativeCli.FailureHint("fixture-secret opaque-token").Contains("fixture-secret"),"Error classifier echoed report contents");
    string originalDir=Path.Combine(root,"original space");Directory.CreateDirectory(originalDir);
    string original=Path.Combine(originalDir,"agy.exe");File.Copy(Self,original);string originalHash=Hash(original);
    Assert(NativeCliApps.IsCli(new AppTarget{ExePath=original}),"Console PE not recognized");
