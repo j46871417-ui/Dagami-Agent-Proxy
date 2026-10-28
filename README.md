@@ -117,8 +117,7 @@ dnsmasq. macOS: службы networksetup и файлы resolver. Свои сл�
 IDE в `resources/app/extensions/antigravity/bin` или `extensions/agy/bin` и непосредственно с `agy.exe`.
 В текущих исходниках распознаётся отдельный `Antigravity IDE.exe`; Manager и IDE
 могут присутствовать в списке одновременно. Для нового формата IDE ищется также
-общие `%LOCALAPPDATA%/agy/bin/agy.exe` и `%USERPROFILE%/.gemini/bin/agy.exe`. Отчёт проверки от 28.10.2026:
-[RECHECK_20261028.md](RECHECK_20261028.md). Эти изменения включены в
+общие `%LOCALAPPDATA%/agy/bin/agy.exe` и `%USERPROFILE%/.gemini/bin/agy.exe`. Эти изменения включены в
 `v0.3.6-alpha`; архивы прежних выпусков `v0.3.0-alpha` и `v0.2.0-alpha` не заменялись.
 Поддержанные protobuf-метаданные либо проверенная локальная ветка CLI меняются с сохранением длины файла; при наличии
 подходящего литерала `https_proxy` он заменяется на `AG_LS_PROXY`, который уже
@@ -168,9 +167,7 @@ Codex Desktop из Microsoft Store обнаруживается по пакет�
 манифесту: главный файл может называться `app/ChatGPT.exe`, а не `Codex.exe`.
 Обычный ChatGPT и CLI-помощники не считаются Codex Desktop. Запускать Desktop
 заранее для обнаружения не требуется; права на WindowsApps не меняются.
-Механизмы и ограничения: [MATRIX.md](MATRIX.md), структуры и источники:
-[APPS_RESEARCH.md](APPS_RESEARCH.md), повторная проверка и оставшиеся доработки:
-[RECHECK_20261022.md](RECHECK_20261022.md). Поддержка конкретной версии,
+Механизмы и ограничения: [MATRIX.md](MATRIX.md). Поддержка конкретной версии,
 вход в аккаунт и доступ к моделям проверяются в самом приложении.
 Неизвестный бинарный патч не применяется; у прокси и ярлыков свой путь.
 
