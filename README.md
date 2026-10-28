@@ -14,11 +14,12 @@
 Менеджер запуска IDE и CLI через свой прокси. Профили, запуск приложений,
 ярлыки, системный DNS с копией и откатом. Ранее — DevProxy.
 
-**[Скачать v0.2.0-alpha](https://github.com/j46871417-ui/Dagami-Agent-Proxy/releases/tag/v0.2.0-alpha)**
+**[Скачать v0.3.0-alpha](https://github.com/j46871417-ui/Dagami-Agent-Proxy/releases/tag/v0.3.0-alpha)**
 · **[Собрать Linux / macOS](BUILD_LINUX_MACOS.md)**
 
-Предварительная версия 0.2.0: исправления ярлыков и CLI-консоли, подготовка
-приложений и баг-репорты с журналом/картинкой. [Изменения и ограничения](RELEASE_NOTES.md).
+Предварительная версия 0.3.0: новая структура Antigravity IDE 2.6, обнаружение
+Codex Desktop из Microsoft Store, проверка авторизации прокси и упрощённый интерфейс.
+[Изменения и ограничения](RELEASE_NOTES.md).
 <p align="center">
   <a href="https://t.me/dagamvi">Группа Dagami</a> |
   <a href="https://t.me/dagamivibe">Канал Dagami</a> |
@@ -112,8 +113,8 @@ IDE в `resources/app/extensions/antigravity/bin` или `extensions/agy/bin` и
 В текущих исходниках распознаётся отдельный `Antigravity IDE.exe`; Manager и IDE
 могут присутствовать в списке одновременно. Для нового формата IDE ищется также
 общий `%LOCALAPPDATA%/agy/bin/agy.exe`. Отчёт проверки от 28.10.2026:
-[RECHECK_20261028.md](RECHECK_20261028.md). Эти изменения ещё не входят в архивы
-опубликованного `v0.2.0-alpha` от 22.10.2026.
+[RECHECK_20261028.md](RECHECK_20261028.md). Эти изменения включены в
+`v0.3.0-alpha`; архивы прежнего `v0.2.0-alpha` от 22.10.2026 не заменялись.
 Поддержанные protobuf-метаданные меняются с сохранением длины файла; при наличии
 подходящего литерала `https_proxy` он заменяется на `AG_LS_PROXY`, который уже
 передаётся управляемому процессу. Сохраняются оригинал, манифест SHA-256 и история

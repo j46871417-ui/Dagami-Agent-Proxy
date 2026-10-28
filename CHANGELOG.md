@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased — 2026-10-28
+## 0.3.0 alpha — 2026-10-28
 
 - Fixed Codex Desktop detection for Microsoft Store/MSIX installations whose main
   executable is `app/ChatGPT.exe`: query current-user package registration and
