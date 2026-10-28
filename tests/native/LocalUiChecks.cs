@@ -11,10 +11,14 @@ class LocalUiChecks {
  static void Call(MainForm form, string name, params object[] args) { typeof(MainForm).GetMethod(name, Private).Invoke(form, args); Application.DoEvents(); }
  static void Bounds(Control parent) { foreach (Control child in parent.Controls) if (child.Visible) { Assert(child.Left >= 0 && child.Top >= 0 && child.Right <= parent.ClientSize.Width + 2 && child.Bottom <= parent.ClientSize.Height + 2, "Clipped control: " + child.Text); Bounds(child); } }
  static void Picture(MainForm form, string name) { using (var bitmap = new Bitmap(form.Width, form.Height)) { form.DrawToBitmap(bitmap, new Rectangle(Point.Empty, form.Size)); bitmap.Save(name); } }
+ static int Buttons(Control parent,string text){int count=0;foreach(Control child in parent.Controls){if(child is Button&&child.Text==text)count++;count+=Buttons(child,text);}return count;}
  [STAThread] static int Main() {
   try {
    Application.EnableVisualStyles();
+   Application.SetUnhandledExceptionMode(UnhandledExceptionMode.ThrowException);
+   Console.WriteLine("UI fixture: constructing preview");Console.Out.Flush();
    using (var form = new MainForm(null, false, true)) {
+    Console.WriteLine("UI fixture: rendering pages");Console.Out.Flush();
     form.StartPosition = FormStartPosition.Manual; form.Location = new Point(-30000, -30000); form.Opacity = 1; form.Show(); Application.DoEvents();
     var menu = (ContextMenuStrip)Get(form, "_appActions");
     Assert(menu.Items[0].Text == "Найти или создать ярлык", "Shortcut action remains misleading");
@@ -24,13 +28,18 @@ class LocalUiChecks {
     Call(form, "UpdateAppActionState");
     var list = (ListView)Get(form, "_targetList");
     if (list.SelectedItems.Count > 0 && ((AppTarget)list.SelectedItems[0].Tag).IsInstalled)
-     Assert(((CheckBox)Get(form, "_shortcutToggle")).Enabled, "Repair disabled by stale shortcut issue");
+     Assert(((Button)Get(form, "_patchAppAction")).Enabled, "Repair disabled by stale shortcut issue");
+    Assert(form.Controls.Find("ShortcutStateLabel",true).Length==1,"Shortcut state missing");
+    Assert(typeof(MainForm).GetField("_shortcutToggle",Private)==null,"Duplicate partial-patch checkbox remains");
     Bounds(form); Picture(form, "local-apps.png");
     Assert(form.Controls.Find("BugReportNavigationButton",true).Length==1,"Global report button missing");
     Assert(form.Controls.Find("SaveJournalButton",true).Length==1,"Journal export button missing");
+    Assert(Buttons(form,"Баг-репорт")==1&&Buttons(form,"Сообщить об ошибке")==0,"Duplicate report action remains");
+    Assert(!((Timer)Get(form,"_nativeLogTimer")).Enabled,"Static preview starts background polling");
     Call(form,"ShowFluentPage",3);Bounds(form);Picture(form,"local-journal.png");
     Call(form, "ShowFluentPage", 2); Bounds(form); Picture(form, "local-antigravity.png");
     form.Size = form.MinimumSize; Application.DoEvents(); Bounds(form); Picture(form, "local-antigravity-min.png");
+    foreach(int index in new[]{0,1,3}){Call(form,"ShowFluentPage",index);Bounds(form);Picture(form,"local-page-"+index+"-min.png");}
    }
    string reportLog=Path.Combine(Environment.CurrentDirectory,"report-fixture.log");File.WriteAllText(reportLog,"[TEST] Interactive console regression fixture\nAuthorization: Bearer fixture-secret\n[TEST] HTTP bridge ready on loopback\n");
    using(var report=new BugReportDialog(reportLog)){

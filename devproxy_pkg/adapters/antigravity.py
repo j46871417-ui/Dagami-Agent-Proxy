@@ -41,6 +41,9 @@ class AntigravityAdapter(ApplicationAdapter):
                 os.path.join(local_appdata, "antigravity", "Antigravity.exe"),
                 os.path.join(program_files, "Antigravity", "Antigravity.exe"),
             ]
+            candidates += [os.path.join(root, folder, "Antigravity IDE.exe")
+                           for root in (os.path.join(local_appdata, "Programs"), local_appdata, program_files)
+                           for folder in ("Antigravity IDE", "antigravity-ide", "antigravity")]
         elif sys.platform == "darwin":
             candidates = [
                 "/Applications/Antigravity.app/Contents/MacOS/Antigravity",
@@ -64,7 +67,9 @@ class AntigravityAdapter(ApplicationAdapter):
     def detect_config_files(self) -> List[str]:
         if sys.platform == "win32":
             appdata = os.environ.get("APPDATA", "")
-            return [os.path.join(appdata, "Antigravity", "User", "settings.json")]
+            executable = self.detect_executable() or ""
+            folder = "Antigravity IDE" if os.path.basename(executable).lower() == "antigravity ide.exe" else "Antigravity"
+            return [os.path.join(appdata, folder, "User", "settings.json")]
         elif sys.platform == "darwin":
             home = os.path.expanduser("~")
             return [os.path.join(home, "Library", "Application Support", "Antigravity", "User", "settings.json")]

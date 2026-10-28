@@ -31,12 +31,12 @@ namespace DevProxyApp
         private Label _selectedAppHeading;
         private Label _shortcutExplanation;
         private Label _appFeedback;
-        private CheckBox _shortcutToggle;
+        private Label _shortcutState;
         private ContextMenuStrip _appActions;
-        private ToolStripMenuItem _stopAppItem, _removeAppItem, _restoreShortcutItem;
+        private ToolStripMenuItem _stopAppItem, _removeAppItem, _restoreShortcutItem, _clientPreparationItem;
         private Panel[] _pageControls;
         private string[] _pageNames, _pageDescriptions;
-        private bool _updatingShortcutToggle, _proxyCheckFailed;
+        private bool _proxyCheckFailed;
         private CheckBox _startWithWindows;
         private Label _startupStatus;
         private bool _updatingStartup;
@@ -85,8 +85,6 @@ namespace DevProxyApp
                 UpdateNativeDetails();
                 _appFeedback.Text = "Ярлыки найдены или созданы и проверены. Удалённые записи восстановлению не мешают.";
             }));
-            _appActions.Items.Add(AppMenuItem("Проверить прокси", CheckFluentProxy));
-            _appActions.Items.Add(AppMenuItem("Изменить прокси", () => ShowFluentPage(1)));
             _appActions.Items.Add(new ToolStripSeparator());
             _stopAppItem = AppMenuItem("Остановить", () => {
                 if (MessageBox.Show(this, "Завершить «" + SelectedNativeTarget().DisplayName + "»? Сохраните работу в приложении перед остановкой.",
@@ -96,10 +94,13 @@ namespace DevProxyApp
             _appActions.Items.Add(_stopAppItem);
             var advanced = new ToolStripMenuItem("Дополнительно");
             advanced.DropDownItems.Add(AppMenuItem("Записать настройки приложения", () => ApplySelectedNativeTarget(false)));
-            advanced.DropDownItems.Add(AppMenuItem("Восстановить исходные настройки (заменить ручные правки)", () => ApplySelectedNativeTarget(true)));
-            advanced.DropDownItems.Add(AppMenuItem("Проверить ярлыки", UpdateNativeDetails));
-            _restoreShortcutItem = AppMenuItem("Восстановить обычные ярлыки", () => ConfigureNativeShortcuts(true));
+            advanced.DropDownItems.Add(AppMenuItem("Восстановить исходные настройки (заменить ручные правки)", () => { if (ConfirmSettingsRestore()) ApplySelectedNativeTarget(true); }));
+            _restoreShortcutItem = AppMenuItem("Восстановить обычные ярлыки", () => { if (ConfirmSettingsRestore()) ConfigureNativeShortcuts(true); });
             advanced.DropDownItems.Add(_restoreShortcutItem);
+            _clientPreparationItem = new ToolStripMenuItem("Бинарная подготовка Antigravity");
+            _clientPreparationItem.DropDownItems.Add(AppMenuItem("Подготовить клиент", () => RunAntigravityOperation("prepare")));
+            _clientPreparationItem.DropDownItems.Add(AppMenuItem("Отменить подготовку", () => RunAntigravityOperation("restore")));
+            advanced.DropDownItems.Add(_clientPreparationItem);
             _appActions.Items.Add(advanced);
             _removeAppItem = AppMenuItem("Удалить из списка", () => {
                 if (_shortcutRecords > 0 || _shortcutIssue != null) throw new InvalidOperationException("Сначала восстановите обычные ярлыки через «Ещё → Дополнительно».");
@@ -126,12 +127,10 @@ namespace DevProxyApp
             _appFeedback.Text = target.DisplayName + ": " + message;
         }
 
-        private void ToggleNativeShortcuts()
-        {
-            if (_updatingShortcutToggle || _nativeBusy) return;
-            bool enable = _shortcutToggle.Checked;
-            ExecuteNativeAction(() => ConfigureNativeShortcuts(!enable));
-            UpdateNativeDetails();
+        private bool ConfirmSettingsRestore() {
+            return MessageBox.Show(this, "Восстановить исходные настройки «" + SelectedNativeTarget().DisplayName +
+                "»? Ручные правки управляемых proxy-полей будут заменены. Остальные настройки сохранятся.",
+                "Восстановление настроек", MessageBoxButtons.YesNo, MessageBoxIcon.Warning, MessageBoxDefaultButton.Button2) == DialogResult.Yes;
         }
 
         private void PatchSelectedNativeTarget()
@@ -193,10 +192,10 @@ namespace DevProxyApp
             _primaryAppAction.Enabled = !configured || (target != null && target.IsInstalled);
             _moreAppActions.Enabled = target != null;
             _patchAppAction.Enabled = target != null && target.IsInstalled;
-            _shortcutToggle.Enabled = target != null && target.IsInstalled;
             _stopAppItem.Enabled = running;
             _removeAppItem.Enabled = target != null && target.IsCustom;
             _restoreShortcutItem.Enabled = _shortcutRecords > 0 || _shortcutIssue != null;
+            _clientPreparationItem.Enabled = target != null && target.IsInstalled && AntigravityIntegration.Supports(target.ExePath);
             string state = target == null ? "Выберите приложение" : !target.IsInstalled ? "Не установлено" :
                 running ? "Работает через Dagami Agent Proxy" : "Сессия Dagami Agent Proxy не запущена";
             _targetDetails.Text = _proxyCheckFailed ? "Ошибка подключения к прокси" : state;
@@ -205,8 +204,9 @@ namespace DevProxyApp
                 (_shortcutRecords > 0 ? "Включено · ярлыков: " + _shortcutRecords + ". Dagami Agent Proxy запускается в фоне до выключения режима." :
                 "Выключено. Для запуска привычным ярлыком нажмите «Пропатчить».");
             bool cli=NativeCliApps.IsCommandTarget(target);
-            _shortcutToggle.Text=cli?"Запускать обычную команду через прокси":"Запускать через прокси из обычного ярлыка";
-            if(target!=null&&ApplicationSupport.Kind(target)=="git")_shortcutToggle.Text="Команда dagami-git через прокси";
+            _shortcutState.Text=(_shortcutRecords > 0 && _shortcutIssue == null ? "Настроено: " : "Не настроено: ") +
+                (cli ? "обычная команда через прокси" : "обычные ярлыки через прокси");
+            if(target!=null&&ApplicationSupport.Kind(target)=="git")_shortcutState.Text="Команда dagami-git: " + (_shortcutRecords > 0 && _shortcutIssue == null ? "настроена" : "не настроена");
             if(cli&&_shortcutIssue==null)_shortcutExplanation.Text=_shortcutRecords>0?"Включено для команды. После изменения полностью перезапустите терминал. Явный путь к исходному EXE обходит запускатель.":"Выключено. «Пропатчить» настроит команду CLI в пользовательском PATH; ярлыки не нужны.";
             _restoreShortcutItem.Text=cli?"Восстановить прямой запуск команды":"Восстановить обычные ярлыки";
             if (_proxyCheckMessage != null) _appFeedback.Text = _proxyCheckMessage;
@@ -215,7 +215,7 @@ namespace DevProxyApp
 
         private void AddNativeButton(Control parent, string text, Action action)
         {
-            var button = new FluentButton { Text = text, AutoSize = true, Height = 34, Primary = true };
+            var button = new FluentButton { Text = text, AutoSize = true, Height = 34, Primary = false };
             button.Click += (s, e) => {
                 ExecuteNativeAction(action);
             };
@@ -226,7 +226,6 @@ namespace DevProxyApp
         private void SetNativeButtonsEnabled(bool enabled)
         {
             foreach (Button button in _nativeButtons) button.Enabled = enabled;
-            if (_shortcutToggle != null) _shortcutToggle.Enabled = enabled;
             if (_appActions != null) _appActions.Enabled = enabled;
             if (enabled) UpdateAppActionState();
         }
@@ -306,16 +305,12 @@ namespace DevProxyApp
         private void UpdateNativeDetails()
         {
             if (_refreshingTargets || _targetDetails == null) return;
-            _updatingShortcutToggle = true;
-            try {
-                _shortcutRecords = 0; _shortcutIssue = null;
-                if (_targetList.SelectedItems.Count > 0) {
-                    AppTarget target = (AppTarget)_targetList.SelectedItems[0].Tag;
-                    try { _shortcutRecords = NativeCliApps.IsCommandTarget(target)?NativeCliApps.Current.VerifiedCount(target.Id,out _shortcutIssue):NativeShortcuts.Current.VerifiedCount(target.Id, out _shortcutIssue); }
-                    catch (Exception) { _shortcutIssue = "Не удалось прочитать настройки ярлыков. Откройте журнал для проверки."; }
-                }
-                _shortcutToggle.Checked = _shortcutRecords > 0 && _shortcutIssue == null;
-            } finally { _updatingShortcutToggle = false; }
+            _shortcutRecords = 0; _shortcutIssue = null;
+            if (_targetList.SelectedItems.Count > 0) {
+                AppTarget target = (AppTarget)_targetList.SelectedItems[0].Tag;
+                try { _shortcutRecords = NativeCliApps.IsCommandTarget(target)?NativeCliApps.Current.VerifiedCount(target.Id,out _shortcutIssue):NativeShortcuts.Current.VerifiedCount(target.Id, out _shortcutIssue); }
+                catch (Exception) { _shortcutIssue = "Не удалось прочитать настройки ярлыков. Откройте журнал для проверки."; }
+            }
             UpdateAppActionState();
         }
 

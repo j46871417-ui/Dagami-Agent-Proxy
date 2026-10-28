@@ -85,9 +85,9 @@ namespace DevProxyApp
                 } catch { if (snapshot != null) AntigravityIntegration.Rollback(snapshot); throw; }
             }
             Dictionary<string,string> before = null;
-            bool binaryPrepared=false, binaryChanged=false;
+            bool binaryPrepared=false, binaryComplete=false, binaryChanged=false;
             string binaryMessage = null;
-            bool antigravity = string.Equals(Path.GetFileName(target.ExePath), "Antigravity.exe", StringComparison.OrdinalIgnoreCase);
+            bool antigravity = AntigravityIntegration.IsIde(target.ExePath);
 
             string configResult = null;
             var configBefore=new Dictionary<string,byte[]>();
@@ -112,6 +112,7 @@ namespace DevProxyApp
                     binaryChanged=true;
                     var result=AntigravityIntegration.PrepareClient(target.ExePath);
                     binaryPrepared=result.Prepared;
+                    binaryComplete=result.Complete;
                     binaryMessage=result.Message;
                     binaryChanged=false;
                     if (before != null) foreach (var pair in before) if (pair.Value != AntigravityIntegration.Hash(File.ReadAllBytes(pair.Key))) binaryChanged=true;
@@ -124,7 +125,7 @@ namespace DevProxyApp
                 parts.Add("ярлыков: " + paths.Count);
                 if(shortcuts.SkippedReadOnlyLinks>0)parts.Add("недоступных ярлыков пропущено: "+shortcuts.SkippedReadOnlyLinks+"; используйте настроенную пользовательскую копию");
                 if (!string.IsNullOrEmpty(configResult)) parts.Add(configResult);
-                if (antigravity && binaryPrepared) parts.Add("бинарная подготовка проверена");
+                if (antigravity && binaryPrepared) parts.Add(binaryComplete ? "бинарная подготовка проверена" : "бинарная подготовка частичная; проверьте отчёт");
                 if (AppProxyPolicy.IsGemini(target)) parts.Add("параметры Chromium/WebView2 при запуске; доступ к сервису проверяется отдельно");
                 summary = "Готово (" + string.Join(", ", parts.ToArray()) + "). Запускайте приложение привычным ярлыком.";
                 if(antigravity && !binaryPrepared)summary="Прокси и ярлыки настроены: "+paths.Count+". Бинарная подготовка пропущена — несовместимые сигнатуры, backend не изменялся. Проверьте вход и модели в Antigravity.";
@@ -201,7 +202,7 @@ namespace DevProxyApp
         Process AntigravitySession() {
             foreach (var target in _cachedTargets) {
                 NativeSession session;
-                if (Path.GetFileName(target.ExePath).Equals("Antigravity.exe", StringComparison.OrdinalIgnoreCase) &&
+                if (AntigravityIntegration.IsIde(target.ExePath) &&
                     _nativeSessions.TryGetValue(target.Id, out session) && session.RunningProcess != null) return session.RunningProcess;
             }
             return null;

@@ -362,6 +362,19 @@ namespace DevProxyApp
 
     public class LocalProxyBridge : IDisposable
     {
+        private readonly object _connectionLock = new object();
+        private readonly HashSet<TcpClient> _connections = new HashSet<TcpClient>();
+        private void TrackConnection(TcpClient client) {
+            lock (_connectionLock) {
+                if (!_running) { client.Close(); throw new ObjectDisposedException("LocalProxyBridge"); }
+                _connections.Add(client);
+            }
+        }
+        private void CloseConnection(TcpClient client) {
+            if (client == null) return;
+            lock (_connectionLock) _connections.Remove(client);
+            try { client.Close(); } catch { }
+        }
         private TcpListener _listener;
         private Thread _thread;
         private volatile bool _running;
@@ -436,6 +449,7 @@ namespace DevProxyApp
                 try
                 {
                     TcpClient client = _listener.AcceptTcpClient();
+                    TrackConnection(client);
                     ThreadPool.QueueUserWorkItem(HandleConnection, client);
                 }
                 catch
@@ -453,6 +467,7 @@ namespace DevProxyApp
             string connection = "[Bridge #" + Interlocked.Increment(ref _connectionSequence) + "]";
             string phase = "client-header";
             bool tunnelEstablished = false;
+            bool relaying = false;
             var elapsed = Stopwatch.StartNew();
             try
             {
@@ -484,6 +499,27 @@ namespace DevProxyApp
 
                 string method = parts[0];
                 string target = parts[1];
+                Uri localEndpoint = LoopbackDestination(method, target, headerText);
+                if (localEndpoint != null) {
+                    if (IsBridgeEndpoint(localEndpoint, BoundPort)) throw new InvalidDataException("Локальный backend указывает на сам прокси-мост. antigravity.serverUrl должен содержать адрес backend agy, а не адрес прокси.");
+                    phase = "loopback-connect";
+                    Stream localStream;
+                    upstream = ConnectLoopback(localEndpoint, method.Equals("CONNECT", StringComparison.OrdinalIgnoreCase), out localStream);
+                    connection += " loopback:" + localEndpoint.Port;
+                    Logger.Log(connection + " start route=loopback");
+                    if (method.Equals("CONNECT", StringComparison.OrdinalIgnoreCase)) {
+                        byte[] ok = Encoding.ASCII.GetBytes("HTTP/1.1 200 Connection established\r\n\r\n");
+                        clientStream.Write(ok, 0, ok.Length); clientStream.Flush();
+                    } else {
+                        byte[] header = Encoding.ASCII.GetBytes(LoopbackRequest(headerText, localEndpoint));
+                        localStream.Write(header, 0, header.Length);
+                    }
+                    if (bodyOffset < totalRead) localStream.Write(buffer, bodyOffset, totalRead - bodyOffset);
+                    localStream.Flush(); tunnelEstablished = true;
+                    Relay(clientStream, localStream, client, upstream, connection);
+                    relaying = true;
+                    return;
+                }
                 string routedHost = null;
                 IPAddress dnsEndpoint = null;
                 string destinationLabel = method.Equals("CONNECT", StringComparison.OrdinalIgnoreCase)
@@ -520,6 +556,7 @@ namespace DevProxyApp
                         _routeCounts[routedHost]++;
                     }
                     Relay(clientStream, upstreamStream, client, upstream, connection);
+                    relaying = true;
                     return;
                 }
                 if (method.Equals("CONNECT", StringComparison.OrdinalIgnoreCase))
@@ -543,7 +580,7 @@ namespace DevProxyApp
                             if (attempt == 3) throw;
                             // No tunnel/data has been acknowledged. Reconnect only;
                             // never replay application requests or OAuth codes.
-                            upstreamStream.Dispose(); upstream.Close();
+                            upstreamStream.Dispose(); CloseConnection(upstream);
                             Thread.Sleep(attempt * 150);
                             upstream = ConnectUpstream(null, out upstreamStream);
                         }
@@ -569,6 +606,7 @@ namespace DevProxyApp
                         if (bodyOffset < totalRead)
                             upstreamStream.Write(buffer, bodyOffset, totalRead - bodyOffset);
                         Relay(clientStream, upstreamStream, client, upstream, connection);
+                        relaying = true;
                     }
                     else
                     {
@@ -595,6 +633,7 @@ namespace DevProxyApp
                     upstreamStream.Write(sendBytes, 0, sendBytes.Length);
                     upstreamStream.Flush();
                     Relay(clientStream, upstreamStream, client, upstream, connection);
+                    relaying = true;
                 }
             }
             catch (Exception ex)
@@ -611,7 +650,10 @@ namespace DevProxyApp
                 try { client.Close(); } catch { }
                 try { if (upstream != null) upstream.Close(); } catch { }
             }
-            finally {Interlocked.Decrement(ref _activeConnections);}
+            finally {
+                if (!relaying) { CloseConnection(client); CloseConnection(upstream); }
+                Interlocked.Decrement(ref _activeConnections);
+            }
         }
 
         private TcpClient ConnectUpstream(IPAddress endpoint, out Stream stream)
@@ -630,7 +672,75 @@ namespace DevProxyApp
                     tls.AuthenticateAsClient(_upstreamHost, null, System.Security.Authentication.SslProtocols.Tls12, true);
                     stream = tls;
                 }
-                return tcp;
+                TrackConnection(tcp); return tcp;
+            } catch { tcp.Close(); throw; }
+        }
+
+        public static bool IsBridgeEndpoint(Uri endpoint, int port) {
+            if (endpoint.Port != port) return false;
+            string host = endpoint.Host.Trim('[', ']');
+            IPAddress address;
+            return host.Equals("localhost", StringComparison.OrdinalIgnoreCase) ||
+                (IPAddress.TryParse(host, out address) && (address.IsIPv4MappedToIPv6 ? address.MapToIPv4() : address).Equals(IPAddress.Loopback));
+        }
+        public static Uri LoopbackDestination(string method, string target, string headers) {
+            Uri endpoint;
+            if (method.Equals("CONNECT", StringComparison.OrdinalIgnoreCase)) {
+                SafeAuthority(target);
+                endpoint = new Uri("https://" + target);
+            } else if (target.StartsWith("/", StringComparison.Ordinal) && !target.StartsWith("//", StringComparison.Ordinal)) {
+                string host = null;
+                foreach (string line in headers.Split(new[] { "\r\n" }, StringSplitOptions.None)) {
+                    if (!line.StartsWith("Host:", StringComparison.OrdinalIgnoreCase)) continue;
+                    if (host != null) throw new InvalidDataException("Duplicate Host header.");
+                    host = line.Substring(5).Trim();
+                }
+                if (host == null || !Uri.TryCreate("http://" + host + target, UriKind.Absolute, out endpoint))
+                    throw new InvalidDataException("Invalid HTTP destination.");
+            } else if (!Uri.TryCreate(target, UriKind.Absolute, out endpoint) || (endpoint.Scheme != "http" && endpoint.Scheme != "https")) {
+                throw new InvalidDataException("Expected an HTTP proxy request.");
+            }
+            if (!string.IsNullOrEmpty(endpoint.UserInfo) || !string.IsNullOrEmpty(endpoint.Fragment)) throw new InvalidDataException("Invalid HTTP authority.");
+            IPAddress address;
+            string hostName = endpoint.Host.Trim('[', ']');
+            return hostName.Equals("localhost", StringComparison.OrdinalIgnoreCase) ||
+                (IPAddress.TryParse(hostName, out address) && IPAddress.IsLoopback(address.IsIPv4MappedToIPv6 ? address.MapToIPv4() : address)) ? endpoint : null;
+        }
+        private static string LoopbackRequest(string headers, Uri endpoint) {
+            string[] lines = headers.Split(new[] { "\r\n" }, StringSplitOptions.None);
+            string[] first = lines[0].Split(' ');
+            var result = new StringBuilder(first[0] + " " + endpoint.PathAndQuery + " " + first[2] + "\r\nHost: " + endpoint.Authority + "\r\n");
+            for (int i = 1; i < lines.Length; i++) {
+                if (lines[i].Length == 0) continue;
+                int colon = lines[i].IndexOf(':');
+                if (colon <= 0) throw new InvalidDataException("Invalid HTTP header.");
+                string name = lines[i].Substring(0, colon).Trim();
+                if (name.Equals("Host", StringComparison.OrdinalIgnoreCase) || name.Equals("Proxy-Authorization", StringComparison.OrdinalIgnoreCase) ||
+                    name.Equals("Proxy-Connection", StringComparison.OrdinalIgnoreCase) || name.Equals("Connection", StringComparison.OrdinalIgnoreCase)) continue;
+                result.Append(lines[i]).Append("\r\n");
+            }
+            // One origin per raw connection. Do not allow a later proxy request
+            // with a different destination to be pipelined into this backend.
+            return result.Append("Connection: close\r\n\r\n").ToString();
+        }
+        private TcpClient ConnectLoopback(Uri endpoint, bool opaqueTunnel, out Stream stream) {
+            string host = endpoint.Host.Trim('[', ']');
+            // Never resolve an arbitrary name into a direct/internal route.
+            IPAddress address = host.Equals("localhost", StringComparison.OrdinalIgnoreCase) ? IPAddress.Loopback : IPAddress.Parse(host);
+            var tcp = new TcpClient(address.AddressFamily);
+            try {
+                tcp.NoDelay = true;
+                var pending = tcp.BeginConnect(address, endpoint.Port, null, null);
+                using (pending.AsyncWaitHandle) {
+                    if (!pending.AsyncWaitHandle.WaitOne(8000)) throw new TimeoutException("Loopback connection timed out.");
+                    tcp.EndConnect(pending);
+                }
+                stream = tcp.GetStream(); stream.ReadTimeout = 15000; stream.WriteTimeout = 15000;
+                if (!opaqueTunnel && endpoint.Scheme == "https") {
+                    var tls = new SslStream(stream, false);
+                    tls.AuthenticateAsClient(host, null, System.Security.Authentication.SslProtocols.Tls12, true); stream = tls;
+                }
+                TrackConnection(tcp); return tcp;
             } catch { tcp.Close(); throw; }
         }
 
@@ -688,6 +798,7 @@ namespace DevProxyApp
                 {
                     try { d1.Dispose(); } catch { }
                     try { d2.Dispose(); } catch { }
+                    CloseConnection(d1 as TcpClient); CloseConnection(d2 as TcpClient);
                     Interlocked.Decrement(ref _activeConnections);
                 }
             };
@@ -737,6 +848,9 @@ namespace DevProxyApp
         {
             _running = false;
             try { if (_listener != null) _listener.Stop(); } catch { }
+            TcpClient[] connections;
+            lock (_connectionLock) { connections = new TcpClient[_connections.Count]; _connections.CopyTo(connections); _connections.Clear(); }
+            foreach (var client in connections) try { client.Close(); } catch { }
         }
 
         public string RouteReport()
@@ -1148,6 +1262,13 @@ namespace DevProxyApp
                 ConfigPath = Path.Combine(appData, @"Antigravity\User\settings.json")
             });
 
+            // IDE 2.6 is a separate application; keep Manager and IDE discoverable together.
+            list.Add(new AppTarget {
+                Id = "antigravity-ide", DisplayName = "Antigravity IDE",
+                ExePath = ApplicationDiscovery.AntigravityIde(new[] { Path.Combine(localAppData, "Programs"), localAppData, progFiles, progFilesX86 }),
+                ConfigPath = Path.Combine(appData, @"Antigravity IDE\User\settings.json")
+            });
+
             // 2. Cursor
             string cursorExe = FindFirstExisting(new string[] {
                 Path.Combine(localAppData, @"Programs\cursor\Cursor.exe"),
@@ -1303,6 +1424,13 @@ namespace DevProxyApp
                 }
 
                 var settings = ParseSettings(content);
+                object serverUrl;
+                Uri server, bridge;
+                if (AntigravityIntegration.IsIde(target.ExePath) && settings.TryGetValue("antigravity.serverUrl", out serverUrl) &&
+                    Uri.TryCreate(Convert.ToString(serverUrl), UriKind.Absolute, out server) && Uri.TryCreate(proxyUrl, UriKind.Absolute, out bridge) &&
+                    LocalProxyBridge.IsBridgeEndpoint(bridge, bridge.Port) && LocalProxyBridge.IsBridgeEndpoint(server, bridge.Port)) {
+                    throw new InvalidDataException("antigravity.serverUrl указывает на прокси-мост. Удалите это значение или укажите настоящий backend agy. Прокси задаётся в http.proxy; serverUrl и CSRF не изменены.");
+                }
                 string backup = target.ConfigPath + ".devproxy.bak";
                 if(!File.Exists(backup))WriteAtomic(backup,content);
                 settings["http.proxy"] = proxyUrl;
@@ -2087,7 +2215,7 @@ namespace DevProxyApp
             }
             try
             {
-                bool antigravity = Path.GetFileName(target.ExePath).Equals("Antigravity.exe", StringComparison.OrdinalIgnoreCase);
+                bool antigravity = AntigravityIntegration.IsIde(target.ExePath);
                 bool gemini = AppProxyPolicy.IsGemini(target);
                 string executable = AppProxyPolicy.Executable(target);
                 if (!reuse && (IsElectronTarget(target) || gemini || ApplicationSupport.Kind(target)=="jetbrains" || ApplicationSupport.Kind(target)=="opencode-desktop")) NativeLogin.RequireStopped(executable);
@@ -2095,10 +2223,16 @@ namespace DevProxyApp
                     NativeLogin.RequireStopped("opencode-cli.exe");
                     NativeLogin.RequireStopped("opencode-server.exe");
                 }
+                if (antigravity && !reuse) {
+                    try {
+                        foreach (string backend in AntigravityIntegration.BackendPaths(target.ExePath))
+                            if (Path.GetFileName(backend).Equals("agy.exe", StringComparison.OrdinalIgnoreCase)) NativeLogin.RequireStopped(backend);
+                    } catch (UnsupportedAntigravityBinaryException) { /* Missing backend is reported by preparation; ordinary proxy launch remains available. */ }
+                }
                 if (AntigravityIntegration.Supports(target.ExePath) && !reuse && ConfigManager.Instance.PrepareAntigravityClient)
                 {
                     var preparation=AntigravityIntegration.PrepareClient(target.ExePath);
-                    if(preparation.Prepared)_nativeClientNotices.Remove(target.Id);
+                    if(preparation.Complete)_nativeClientNotices.Remove(target.Id);
                     else _nativeClientNotices[target.Id]=preparation.Message;
                     Logger.Log("[Antigravity] " + preparation.Message);
                 }

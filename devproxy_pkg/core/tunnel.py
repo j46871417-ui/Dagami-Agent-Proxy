@@ -10,6 +10,7 @@ Ensures:
 """
 
 import socket
+import ipaddress
 import ssl
 import threading
 import base64
@@ -93,6 +94,7 @@ class LocalTunnel:
 
     def _handle_client(self, client_sock: socket.socket):
         upstream_sock = None
+        response_started = False
         self._track_socket(client_sock, True)
         try:
             client_sock.settimeout(15.0)
@@ -139,6 +141,40 @@ class LocalTunnel:
             if not dest_host:
                 client_sock.sendall(b"HTTP/1.1 400 Bad Request\r\n\r\n")
                 client_sock.close()
+                return
+
+            # Local RPC/OAuth/backend traffic must not leave the machine or
+            # receive upstream credentials. Only literal loopback/localhost;
+            # an arbitrary hostname resolving to a private address is not a bypass.
+            try:
+                address = ipaddress.ip_address('127.0.0.1' if dest_host.lower() == 'localhost' else dest_host)
+                address = getattr(address, 'ipv4_mapped', None) or address
+                local = address.is_loopback
+            except ValueError:
+                local = False
+            if local:
+                if dest_port == self.allocated_port and address == ipaddress.ip_address(self.bind_host):
+                    client_sock.sendall(b'HTTP/1.1 502 Bad Gateway\r\nConnection: close\r\nContent-Length: 0\r\n\r\n')
+                    return
+                address = '127.0.0.1' if dest_host.lower() == 'localhost' else dest_host
+                upstream_sock = socket.create_connection((address, dest_port), timeout=8.0)
+                tune_socket(upstream_sock)
+                if method != 'CONNECT' and target_uri.startswith('https://'):
+                    upstream_sock = ssl.create_default_context().wrap_socket(upstream_sock, server_hostname=dest_host)
+                self._track_socket(upstream_sock, True)
+                if method == 'CONNECT':
+                    client_sock.sendall(b'HTTP/1.1 200 Connection established\r\n\r\n')
+                    response_started = True
+                    upstream_sock.sendall(initial_payload)
+                else:
+                    local_header = self._origin_form_request(header_bytes, target_uri)
+                    safe = [line for line in local_header.split(b'\r\n') if line and
+                            line.split(b':', 1)[0].strip().lower() not in (b'proxy-authorization', b'proxy-connection', b'connection')]
+                    upstream_sock.sendall(b'\r\n'.join(safe) + b'\r\nConnection: close\r\n\r\n' + initial_payload)
+                client_sock.settimeout(None)
+                upstream_sock.settimeout(None)
+                response_started = True
+                FastDuplexRelay.pipe(client_sock, upstream_sock)
                 return
 
             # Establish connection to UPSTREAM proxy under AdaptiveTLSGate protection
@@ -220,10 +256,15 @@ class LocalTunnel:
             # Bidirectional streaming of raw bytes (end-to-end TLS preserved without decryption)
             client_sock.settimeout(None)
             upstream_sock.settimeout(None)
+            response_started = True
             FastDuplexRelay.pipe(client_sock, upstream_sock)
 
         except Exception:
-            pass
+            if not response_started:
+                try:
+                    client_sock.sendall(b'HTTP/1.1 502 Bad Gateway\r\nConnection: close\r\nContent-Length: 0\r\n\r\n')
+                except OSError:
+                    pass
         finally:
             for connection in (client_sock, upstream_sock):
                 if connection is None:

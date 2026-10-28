@@ -15,7 +15,7 @@ namespace DevProxyApp {
    if(id.StartsWith("jb_")||IsJetBrains(target.ExePath))return "jetbrains";
    if(id=="git"||Name(target,"git.exe"))return "git";
    if(Name(target,"cmd.exe","powershell.exe","pwsh.exe"))return "terminal";
-   if(Name(target,"Antigravity.exe","Code.exe","Code - Insiders.exe","Cursor.exe","Windsurf.exe","VSCodium.exe")||
+   if(Name(target,"Antigravity.exe","Antigravity IDE.exe","Code.exe","Code - Insiders.exe","Cursor.exe","Windsurf.exe","VSCodium.exe")||
       id=="antigravity"||id.StartsWith("vscode")||id=="cursor"||id=="windsurf"||id=="vscodium")return "vscode";
    if(AppProxyPolicy.IsGemini(target))return "webview";
    return NativeCliApps.IsCli(target)?"cli":"unknown";
@@ -38,7 +38,7 @@ namespace DevProxyApp {
    }
    if(kind!="vscode")return null;
    string file=Path.GetFileName(target.ExePath??"").ToLowerInvariant(),id=(target.Id??"").ToLowerInvariant();
-   string folder=file=="cursor.exe"||id=="cursor"?"Cursor":file=="windsurf.exe"||id=="windsurf"?"Windsurf":file=="vscodium.exe"||id=="vscodium"?"VSCodium":file=="antigravity.exe"||id=="antigravity"?"Antigravity":file=="code - insiders.exe"?"Code - Insiders":"Code";
+   string folder=file=="cursor.exe"||id=="cursor"?"Cursor":file=="windsurf.exe"||id=="windsurf"?"Windsurf":file=="vscodium.exe"||id=="vscodium"?"VSCodium":file=="antigravity ide.exe"||id=="antigravity-ide"?"Antigravity IDE":file=="antigravity.exe"||id=="antigravity"?"Antigravity":file=="code - insiders.exe"?"Code - Insiders":"Code";
    if(!string.IsNullOrEmpty(target.ExePath)) {
     string portable=Path.Combine(Path.GetDirectoryName(target.ExePath),"data");
     string portableSettings=Path.Combine(portable,"user-data","User","settings.json");

@@ -8,7 +8,7 @@ import subprocess
 ROOT=Path(__file__).resolve().parents[1]
 SUITES=['BugReportChecks','ConsoleLaunchChecks','CliChecks','ApplicationSupportChecks',
         'ReviewRegressionChecks','PatchChecks','ShortcutChecks','ShortcutRecoveryChecks',
-        'NativeLoginChecks','GoogleGeminiChecks','AntigravityPatchChecks','LocalUiChecks']
+        'NativeLoginChecks','GoogleGeminiChecks','AntigravityPatchChecks','Ide26Checks','LocalUiChecks']
 
 def main():
     parser=argparse.ArgumentParser()
@@ -33,7 +33,14 @@ def main():
         command=[str(compiler),'/nologo','/target:exe','/out:'+str(executable),'/r:'+str(target)]
         command+=['/r:'+reference for reference in ('System.Web.Extensions.dll','System.Drawing.dll','System.Windows.Forms.dll','System.Security.dll','System.Xml.dll')]
         subprocess.run([*command,str(ROOT/'tests/native'/(name+'.cs'))],check=True)
-        result=subprocess.run([str(executable)],cwd=output,env=env,capture_output=True,text=True,timeout=90)
+        try:
+            result=subprocess.run([str(executable)],cwd=output,env=env,capture_output=True,text=True,timeout=90)
+        except subprocess.TimeoutExpired as error:
+            captured=(error.stdout or b'')+(error.stderr or b'')
+            if isinstance(captured,bytes):captured=captured.decode('utf-8',errors='replace')
+            (output/(name+'.log')).write_text(captured+'\nFixture timed out after 90 seconds.\n',encoding='utf-8')
+            print(name+': '+captured,flush=True)
+            raise SystemExit(name+' timed out; captured output saved.') from None
         (output/(name+'.log')).write_text(result.stdout+result.stderr,encoding='utf-8')
         print(name+': '+result.stdout.strip(),flush=True)
         if result.returncode:

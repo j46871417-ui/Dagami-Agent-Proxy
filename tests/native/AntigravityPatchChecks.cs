@@ -46,7 +46,7 @@ class AntigravityPatchChecks {
    AntigravityIntegration.RestoreClient(app); Assert(Same(original, File.ReadAllBytes(a)) && Same(modern, File.ReadAllBytes(b)), "Multiple restore not exact");
    string unsupported = Path.Combine(Path.GetDirectoryName(b), "language_server_unknown.exe"); File.WriteAllText(unsupported, "unknown architecture fixture");
    var partial = AntigravityIntegration.PrepareClient(app);
-   Assert(partial.Prepared && partial.Message.Contains("Частичная"), "Skipped backend reported as complete preparation");
+   Assert(partial.Prepared && !partial.Complete && partial.Message.Contains("Частичная"), "Skipped backend reported as complete preparation");
    Assert(File.ReadAllText(unsupported) == "unknown architecture fixture", "Unsupported secondary backend changed");
    File.Delete(unsupported); AntigravityIntegration.RestoreClient(app);
    // Lock the second sorted target: an earlier successful write must roll back.

@@ -306,10 +306,9 @@ namespace DevProxyApp
             _moreAppActions = (FluentButton)_nativeButtons[_nativeButtons.Count - 1];
             _moreAppActions.Primary = false;
             actionRows.Controls.Add(launch, 0, 1);
-            _shortcutToggle = new CheckBox { Text = "Запускать через прокси из обычного ярлыка", AutoSize = true,
-                AccessibleName = "Запускать выбранное приложение через прокси из обычного ярлыка", Margin = new Padding(0, 2, 0, 0) };
-            _shortcutToggle.CheckedChanged += (sender, e) => ToggleNativeShortcuts();
-            actionRows.Controls.Add(_shortcutToggle, 0, 2);
+            _shortcutState = new Label { Name = "ShortcutStateLabel", Dock = DockStyle.Fill, ForeColor = FluentTheme.Text,
+                AccessibleName = "Состояние настройки ярлыков или команды", Margin = new Padding(0, 2, 0, 0) };
+            actionRows.Controls.Add(_shortcutState, 0, 2);
             _shortcutExplanation = new Label { Dock = DockStyle.Fill, ForeColor = FluentTheme.Muted, Font = new Font("Segoe UI", 9), Margin = Padding.Empty };
             actionRows.Controls.Add(_shortcutExplanation, 0, 3);
             _appFeedback = new Label { Dock = DockStyle.Fill, ForeColor = FluentTheme.Muted, Font = new Font("Segoe UI", 9), Margin = Padding.Empty,
@@ -377,11 +376,9 @@ namespace DevProxyApp
                 Font = new Font("Consolas", 10), AccessibleName = "Журнал Dagami Agent Proxy" };
             logCard.Controls.Add(_nativeLog);
             var reportActions = new FlowLayoutPanel { Dock = DockStyle.Bottom, Height = 48, Padding = new Padding(0, 6, 0, 0) };
-            var reportButton = new FluentButton { Text = "Сообщить об ошибке", Width = 200, Height = 36 };
-            reportButton.Click += (sender, e) => OpenBugReport();
             var saveLogButton = new FluentButton { Name = "SaveJournalButton", Text = "Сохранить в файл…", AccessibleName = "Сохранить журнал в выбранный файл", Width = 190, Height = 36 };
             saveLogButton.Click += (sender, e) => SaveJournalToFile();
-            reportActions.Controls.Add(reportButton); reportActions.Controls.Add(saveLogButton); logCard.Controls.Add(reportActions);
+            reportActions.Controls.Add(saveLogButton); logCard.Controls.Add(reportActions);
             Panel antigravityPage = BuildAntigravityPage();
             Panel[] pages = new Panel[] { apps, settingsPage, antigravityPage, logCard };
             string[] names = new string[] { "Приложения", "Подключение", "Antigravity", "Журнал" };
@@ -416,7 +413,8 @@ namespace DevProxyApp
             Resize += (sender, e) => {
                 if (WindowState != FormWindowState.Minimized) _nativeRestoreState = WindowState;
             };
-            _nativeLogTimer.Start(); RefreshNativeTargets();
+            if (!_preview) _nativeLogTimer.Start();
+            RefreshNativeTargets();
         }
 
         private void CheckFluentProxy()

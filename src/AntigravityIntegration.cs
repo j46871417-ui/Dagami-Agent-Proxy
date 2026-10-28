@@ -17,8 +17,9 @@ namespace DevProxyApp
     }
     public sealed class AntigravityPreparationResult {
         public bool Prepared { get; private set; }
+        public bool Complete { get; private set; }
         public string Message { get; private set; }
-        internal AntigravityPreparationResult(bool prepared, string message) { Prepared=prepared; Message=message; }
+        internal AntigravityPreparationResult(bool prepared, string message, bool complete = true) { Prepared=prepared; Complete=prepared && complete; Message=message; }
     }
     // Independent implementation. Only metadata and proxy-variable literals change;
     // executable instructions, TLS verification and server authentication are preserved.
@@ -40,33 +41,45 @@ namespace DevProxyApp
                 if (!File.Exists(executable)) throw new UnsupportedAntigravityBinaryException("Файл Antigravity не найден: " + name);
                 return Path.GetFullPath(executable);
             }
-            string candidate = Path.Combine(Path.GetDirectoryName(executable), "resources", "bin", "language_server.exe");
-            if (!File.Exists(candidate)) {
-                string directory = Path.Combine(Path.GetDirectoryName(executable), @"resources\app\extensions\antigravity\bin");
-                string[] matches = Directory.Exists(directory) ? Directory.GetFiles(directory, "language_server*.exe") : new string[0];
-                if (matches.Length != 1)
-                    throw new UnsupportedAntigravityBinaryException("Backend Antigravity не найден или найдено несколько файлов. Добавьте нужный language_server*.exe либо agy.exe отдельно.");
-                candidate = matches[0];
-            }
-            return candidate;
+            if (!IsIde(executable)) throw new UnsupportedAntigravityBinaryException("Неподдерживаемое приложение Antigravity.");
+            var paths = BackendPaths(executable);
+            if (paths.Count != 1) throw new UnsupportedAntigravityBinaryException("Найдено несколько backend. Используйте подготовку всего клиента или выберите backend отдельно.");
+            return paths[0];
         }
 
+        public static bool IsIde(string executable) {
+            string name = Path.GetFileName(executable ?? "");
+            return name.Equals("Antigravity.exe", StringComparison.OrdinalIgnoreCase) || name.Equals("Antigravity IDE.exe", StringComparison.OrdinalIgnoreCase);
+        }
         public static bool Supports(string executable) {
             string name = Path.GetFileName(executable ?? "");
-            return name.Equals("Antigravity.exe", StringComparison.OrdinalIgnoreCase) || name.Equals("agy.exe", StringComparison.OrdinalIgnoreCase) ||
+            return IsIde(executable) || name.Equals("agy.exe", StringComparison.OrdinalIgnoreCase) ||
                 (name.StartsWith("language_server", StringComparison.OrdinalIgnoreCase) && name.EndsWith(".exe", StringComparison.OrdinalIgnoreCase));
         }
 
         public static List<string> BackendPaths(string executable) {
-            if (!Path.GetFileName(executable).Equals("Antigravity.exe", StringComparison.OrdinalIgnoreCase))
+            return BackendPaths(executable, Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData));
+        }
+        public static List<string> BackendPaths(string executable, string localAppData) {
+            if (!File.Exists(executable)) throw new UnsupportedAntigravityBinaryException("Клиент Antigravity не найден.");
+            if (!IsIde(executable))
                 return new List<string> { BackendPath(executable) };
             var paths = new List<string>(); string root = Path.GetDirectoryName(executable);
-            foreach (string folder in new[] { Path.Combine(root, @"resources\bin"), Path.Combine(root, @"resources\app\extensions\antigravity\bin") }) {
+            foreach (string folder in new[] { Path.Combine(root, @"resources\bin"), Path.Combine(root, @"resources\app\extensions\antigravity\bin"), Path.Combine(root, @"resources\app\extensions\agy\bin") }) {
                 if (!Directory.Exists(folder)) continue;
-                foreach (string file in Directory.GetFiles(folder, "language_server*.exe"))
+                var files = new List<string>(Directory.GetFiles(folder, "language_server*.exe"));
+                string cli = Path.Combine(folder, "agy.exe"); if (File.Exists(cli)) files.Add(cli);
+                foreach (string file in files)
                     if (!paths.Exists(path => string.Equals(path, file, StringComparison.OrdinalIgnoreCase))) paths.Add(file);
             }
-            if (paths.Count == 0) throw new UnsupportedAntigravityBinaryException("В Antigravity не найден language_server*.exe. Прокси можно использовать отдельно от бинарной подготовки.");
+            bool externalLayout = Path.GetFileName(executable).Equals("Antigravity IDE.exe", StringComparison.OrdinalIgnoreCase) || Directory.Exists(Path.Combine(root, @"resources\app\extensions\agy"));
+            if (externalLayout && !string.IsNullOrEmpty(localAppData)) {
+                string cli = Path.Combine(localAppData, "agy", "bin", "agy.exe");
+                if (File.Exists(cli) && !paths.Exists(path => string.Equals(path, Path.GetFullPath(cli), StringComparison.OrdinalIgnoreCase))) paths.Add(Path.GetFullPath(cli));
+            }
+            if (paths.Count == 0) throw new UnsupportedAntigravityBinaryException(externalLayout ?
+                "IDE использует внешний agy.exe, но он не найден в %LOCALAPPDATA%\\agy\\bin. Установите Antigravity CLI для этого пользователя. Прокси и ярлыки можно настроить отдельно." :
+                "В Antigravity не найден language_server*.exe. Прокси можно использовать отдельно от бинарной подготовки.");
             paths.Sort(StringComparer.OrdinalIgnoreCase); return paths;
         }
 
@@ -95,7 +108,7 @@ namespace DevProxyApp
                     var result = PrepareForProxy(path); prepared |= result.Prepared; if (!result.Prepared) skipped++;
                     messages.Add(Path.GetFileName(path) + ": " + result.Message);
                 }
-                return new AntigravityPreparationResult(prepared, (prepared && skipped > 0 ? "Частичная подготовка: есть неподдержанные backend.\r\n" : "") + string.Join(Environment.NewLine, messages.ToArray()));
+                return new AntigravityPreparationResult(prepared, (prepared && skipped > 0 ? "Частичная подготовка: есть неподдержанные backend.\r\n" : "") + string.Join(Environment.NewLine, messages.ToArray()), skipped == 0);
             } catch (Exception error) {
                 try { Rollback(before); }
                 catch (Exception rollback) { throw new IOException(error.Message + " " + rollback.Message, error); }

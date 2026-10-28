@@ -14,3 +14,9 @@ check output there. `LicenseChecks` and live DNS/update-installation tests are n
 included. SystemDnsChecks.ps1 resolves its default engine at `../../src/SystemDns.ps1`;
 read its fixture/mutation setup before running it. Never use the real activation,
 network settings or installed application files as writable test fixtures.
+
+`Ide26Checks` covers the separate IDE filename/profile, old/new plugin directories,
+external agy discovery, safe preparation/restore, local CONNECT and streamed RPC
+with CSRF/auth and chunked trailers, upstream credential isolation and bridge shutdown.
+`LocalUiChecks` uses preview mode with no polling timer, checks default/minimum
+control bounds and saves screenshots; it does not verify every DPI/theme combination.

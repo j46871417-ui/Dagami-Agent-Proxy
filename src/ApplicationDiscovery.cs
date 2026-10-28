@@ -9,6 +9,12 @@ using Microsoft.Win32;
 
 namespace DevProxyApp {
  public static class ApplicationDiscovery {
+  public static string AntigravityIde(IEnumerable<string> roots) {
+   var candidates = new List<string>();
+   foreach(string root in roots) foreach(string folder in new[]{"Antigravity IDE","antigravity-ide","antigravity"})
+    candidates.Add(Path.Combine(root,folder,"Antigravity IDE.exe"));
+   return Desktop("Antigravity IDE",candidates);
+  }
   public static void IncludeRegistered(List<AppTarget> targets,IEnumerable<AppTarget> registrations) {
    foreach(var registration in registrations) {
     var existing=targets.Find(target=>target.Id==registration.Id);

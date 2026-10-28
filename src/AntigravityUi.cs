@@ -19,23 +19,18 @@ namespace DevProxyApp
             page.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
             var card = new FluentCard { Dock = DockStyle.Fill };
             var body = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 3, BackColor = FluentTheme.Surface };
+            body.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
             body.Controls.Add(FluentLabel("Патчинг и проверка Antigravity / agy CLI", 15, true), 0, 0);
-            _prepareAntigravity = new CheckBox { Text = "Дополнительная бинарная подготовка совместимых версий", AutoSize = true, Checked = ConfigManager.Instance.PrepareAntigravityClient };
+            _prepareAntigravity = new CheckBox { Text = "Автоматически подготавливать совместимые версии", AutoSize = true, Checked = ConfigManager.Instance.PrepareAntigravityClient };
             body.Controls.Add(_prepareAntigravity, 0, 1);
             body.Controls.Add(new Label { Dock = DockStyle.Fill, ForeColor = FluentTheme.Muted,
-                Text = "Поддерживаются Manager, backend IDE и agy.exe. Для agy выберите его в списке приложений. Патч проверяется при управляемом запуске, в том числе после обновления клиента.\nОригиналы и прежние версии копий сохраняются. Неизвестные сигнатуры пропускаются; результат входа и модели проверяется в самом клиенте." }, 0, 2);
+                Text = "Подготовка — «Пропатчить» в разделе «Приложения». Откат — «Ещё → Дополнительно».\nIDE 2.6 использует общий agy. Закройте IDE и CLI перед изменением.\nНеизвестные версии не меняются. Вход и ответы модели проверяйте в самом клиенте." }, 0, 2);
             body.RowStyles.Add(new RowStyle(SizeType.Absolute, 32)); body.RowStyles.Add(new RowStyle(SizeType.Absolute, 30)); body.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
             card.Controls.Add(body); page.Controls.Add(card, 0, 0);
             var actions = new FlowLayoutPanel { Dock = DockStyle.Fill, WrapContents = false, AutoScroll = true };
             AddNativeButton(actions, "Вход через прокси", OpenAntigravityLogin);
             AddNativeButton(actions, "Проверить", () => RunAntigravityOperation("diagnose"));
-            var advanced = new ContextMenuStrip();
-            advanced.Items.Add("Подготовить клиент", null, (sender, e) => ExecuteNativeAction(() => RunAntigravityOperation("prepare")));
-            advanced.Items.Add("Отменить подготовку", null, (sender, e) => ExecuteNativeAction(() => RunAntigravityOperation("restore")));
-            FluentButton advancedButton = null;
-            AddNativeButton(actions, "Дополнительно…", () => advanced.Show(advancedButton, new Point(0, advancedButton.Height)));
-            advancedButton = (FluentButton)_nativeButtons[_nativeButtons.Count - 1];
-            Disposed += (sender, e) => advanced.Dispose();
+            ((FluentButton)_nativeButtons[_nativeButtons.Count - 1]).Primary = true;
             page.Controls.Add(actions, 0, 1);
             var reportCard = new FluentCard { Dock = DockStyle.Fill };
             _antigravityReport = new TextBox { Dock = DockStyle.Fill, Multiline = true, ReadOnly = true, WordWrap = true,
@@ -49,9 +44,13 @@ namespace DevProxyApp
         private void RunAntigravityOperation(string operation)
         {
             AppTarget target = _targetList.SelectedItems.Count > 0 ? _targetList.SelectedItems[0].Tag as AppTarget : null;
+            if (operation != "diagnose" && (target == null || !target.IsInstalled || !AntigravityIntegration.Supports(target.ExePath)))
+                throw new InvalidOperationException("Выберите Antigravity или agy в списке приложений.");
             if (target == null || !target.IsInstalled || !AntigravityIntegration.Supports(target.ExePath))
                 target = _cachedTargets.Find(x => x.IsInstalled && AntigravityIntegration.Supports(x.ExePath));
-            if (target == null) throw new InvalidOperationException("Antigravity Manager не найден. Добавьте Antigravity.exe в список приложений.");
+            if (target == null) throw new InvalidOperationException("Antigravity не найден. Добавьте Antigravity.exe, Antigravity IDE.exe или agy.exe в список приложений.");
+            if (operation == "restore" && MessageBox.Show(this, "Вернуть оригинальный backend выбранного клиента из резервной копии? Если IDE использует общий agy, изменение затронет и CLI.",
+                "Отмена подготовки", MessageBoxButtons.YesNo, MessageBoxIcon.Warning, MessageBoxDefaultButton.Button2) != DialogResult.Yes) return;
             if (operation == "diagnose") SaveNativeSettings();
             _nativeBusy = true; SetNativeButtonsEnabled(false);
             _antigravityReport.Text = "Выполняется проверка…";
