@@ -38,6 +38,7 @@ class CliChecks {
   Console.Error.WriteLine("fixture-stderr");return 37;
  }
  static int Main(string[] args){
+  Console.InputEncoding = new UTF8Encoding(false);
   if(args.Length>0&&args[0]=="child")return Child(args);
   if(args.Length>0&&args[0]=="driver"){
    string[] forwarded=new string[args.Length-2];Array.Copy(args,2,forwarded,0,forwarded.Length);

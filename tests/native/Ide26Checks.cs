@@ -58,9 +58,11 @@ class Ide26Checks {
    Assert(AntigravityIntegration.PrepareClient(ide,local,home).Prepared,"New plugin binary preparation failed");AntigravityIntegration.RestoreClient(ide,local,home);
    Assert(Convert.ToBase64String(File.ReadAllBytes(geminiBackend))==Convert.ToBase64String(binary),"IDE-downloaded backend restore failed");
    Assert(File.ReadAllText(js).Contains("getUserStatus absent"),"Extension/auth rewritten");
-   target.ConfigPath=Path.Combine(root,"settings.json");string settings="{\"antigravity.serverUrl\":\"http://127.0.0.1:52101\",\"custom\":true}";File.WriteAllText(target.ConfigPath,settings);string message;
+   target.ConfigPath=Path.Combine(root,"settings.json");string settings="{\"antigravity.serverUrl\":\"http://127.0.0.1:52101\",\"custom\":true,\"update.mode\":\"manual\"}";File.WriteAllText(target.ConfigPath,settings);string message;
+   ConfigManager.Instance.BlockAntigravityUpdates=true;
    Assert(ProxyEngine.ApplyProxyToTarget(target,"http://127.0.0.1:52102",out message),"Valid serverUrl blocked");
    Assert(File.ReadAllText(target.ConfigPath).Contains("52101"),"serverUrl overwritten with bridge");
+   Assert(File.ReadAllText(target.ConfigPath).Contains("manual")&&!File.ReadAllText(target.ConfigPath).Contains("extensions.autoUpdate"),"Proxy setup changed IDE update preferences");
    Assert(ProxyEngine.RestoreTarget(target,out message),"Settings rollback failed");
    string bad=settings.Replace("52101","52102");File.WriteAllText(target.ConfigPath,bad);
    Assert(!ProxyEngine.ApplyProxyToTarget(target,"http://127.0.0.1:52102",out message)&&message.Contains("serverUrl"),"Proxy-as-serverUrl accepted");

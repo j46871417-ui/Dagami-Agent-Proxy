@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Drawing;
 using System.IO;
 using System.Text;
@@ -81,6 +81,11 @@ namespace DevProxyApp
                             } catch (Exception ex) { report.AppendLine(host + ": " + ex.Message); }
                         }
                         if (_rescueBridge != null) report.AppendLine(_rescueBridge.RouteReport());
+                        report.AppendLine("Защита от автообновлений Antigravity: " + (ConfigManager.Instance.BlockAntigravityUpdates ? "включена (обновления заблокированы)" : "выключена"));
+                        try { report.AppendLine(VpnDiagnostics.Inspect(proxy, bridgePort).DetailedReport); }
+                        catch (Exception ex) { report.AppendLine("Проверка VPN: " + ex.Message); }
+                        try { report.AppendLine(DpiEngineManager.ProbeStrategies().Summary); }
+                        catch (Exception ex) { report.AppendLine("Проверка обфускации DPI: " + ex.Message); }
                         report.AppendLine("Авторизация и ответ модели: не проверены. Завершите вход в Antigravity.");
                     }
                 } catch (UnauthorizedAccessException) {

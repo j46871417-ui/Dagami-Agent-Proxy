@@ -7,7 +7,9 @@ using System.Runtime.InteropServices;
 namespace DevProxyApp
 {
     public sealed class NativeSession : IDisposable {
-        public readonly JobObjectManager Job = new JobObjectManager();
+        // Keep GUI applications alive if the proxy process crashes. Explicit
+        // session disposal still terminates the job and its descendants.
+        public readonly JobObjectManager Job = new JobObjectManager(false);
         public readonly List<Process> Processes = new List<Process>();
         public Process RunningProcess {
             get {
@@ -24,6 +26,7 @@ namespace DevProxyApp
             }
         }
         public void Dispose() {
+            try { Job.Terminate(); } catch (System.ComponentModel.Win32Exception) { }
             Job.Dispose();
             foreach (var process in Processes) { try { if (!process.HasExited) process.Kill(); } catch { } process.Dispose(); }
             Processes.Clear();

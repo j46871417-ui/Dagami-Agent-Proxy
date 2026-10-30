@@ -348,7 +348,10 @@ namespace DevProxyApp
                 };
                 AtomicWrite(backend + ManifestSuffix, Encoding.UTF8.GetBytes(new JavaScriptSerializer().Serialize(manifest)));
                 if (Hash(File.ReadAllBytes(backend)) != originalHash) throw new InvalidOperationException("Клиент изменился во время подготовки. Повторите после завершения обновления.");
+                DateTime originalMtimeUtc = File.GetLastWriteTimeUtc(backend);
                 AtomicWrite(backend, patched);
+                try { File.SetLastWriteTimeUtc(backend, originalMtimeUtc); } catch { }
+                AntigravityUpdateGuard.SyncSidecarMetadata(backend);
                 if (Hash(File.ReadAllBytes(backend)) != Convert.ToString(manifest["patched_sha256"]))
                     throw new InvalidDataException("Проверка записанного клиента не пройдена; используйте восстановление.");
                 return "Клиент подготовлен: " + Path.GetFileName(backend) + ", изменений: " + changes + ". Оригинал сохранён и проверен по SHA-256.";
@@ -385,11 +388,82 @@ namespace DevProxyApp
                 if (currentHash == Convert.ToString(manifest["original_sha256"])) return "Оригинальный клиент уже восстановлен.";
                 if (currentHash != Convert.ToString(manifest["patched_sha256"]))
                     throw new InvalidOperationException("Клиент обновлён или изменён другим инструментом. Откат старой версии отменён.");
-                EnsureNotRunning(backend); AtomicWrite(backend, original);
+                EnsureNotRunning(backend);
+                DateTime currentMtimeUtc = File.GetLastWriteTimeUtc(backend);
+                AtomicWrite(backend, original);
+                try { File.SetLastWriteTimeUtc(backend, currentMtimeUtc); } catch { }
+                AntigravityUpdateGuard.SyncSidecarMetadata(backend);
                 if (Hash(File.ReadAllBytes(backend)) != Convert.ToString(manifest["original_sha256"])) throw new InvalidDataException("Проверка отката не пройдена.");
                 return "Оригинальный клиент восстановлен, SHA-256 совпадает.";
             }
         }
+    }
+
+    public static class AntigravityUpdateGuard
+    {
+        public static readonly string[] UpdaterHosts = new string[] {
+            "antigravity-auto-updater-974169037036.us-central1.run.app",
+            "antigravity-cli-auto-updater-974169037036.us-central1.run.app",
+            "antigravity-ide-auto-updater-974169037036.us-central1.run.app",
+            "antigravity-auto-updater-insider-974169037036.us-central1.run.app",
+            "antigravity-hub-auto-updater-974169037036.us-central1.run.app"
+        };
+
+        public static bool IsUpdaterHost(string host)
+        {
+            if (string.IsNullOrEmpty(host)) return false;
+            string clean = host.Trim().TrimEnd('.');
+            int colon = clean.IndexOf(':');
+            if (colon > 0) clean = clean.Substring(0, colon);
+            return Array.Exists(UpdaterHosts, x => x.Equals(clean, StringComparison.OrdinalIgnoreCase));
+        }
+
+        public static bool HasInstalledCli(string localAppData = null, string userProfile = null)
+        {
+            string local = localAppData ?? Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
+            string profile = userProfile ?? Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+            if (!string.IsNullOrEmpty(profile) && File.Exists(Path.Combine(profile, ".gemini", "bin", "agy.exe"))) return true;
+            if (!string.IsNullOrEmpty(local) && File.Exists(Path.Combine(local, "agy", "bin", "agy.exe"))) return true;
+            return false;
+        }
+
+        public static bool ShouldBlockUpdaterHost(string host, bool? blockEnabled = null, string localAppData = null, string userProfile = null)
+        {
+            bool enabled = blockEnabled.HasValue ? blockEnabled.Value : ConfigManager.Instance.BlockAntigravityUpdates;
+            if (!enabled || !IsUpdaterHost(host)) return false;
+            string clean = host.Trim().TrimEnd('.');
+            int colon = clean.IndexOf(':');
+            if (colon > 0) clean = clean.Substring(0, colon);
+            if (clean.Equals("antigravity-cli-auto-updater-974169037036.us-central1.run.app", StringComparison.OrdinalIgnoreCase) &&
+                !HasInstalledCli(localAppData, userProfile))
+                return false;
+            return true;
+        }
+
+        public static void SyncSidecarMetadata(string backendPath)
+        {
+            try {
+                if (string.IsNullOrEmpty(backendPath) || !File.Exists(backendPath)) return;
+                if (!Path.GetFileName(backendPath).Equals("agy.exe", StringComparison.OrdinalIgnoreCase)) return;
+                string sidecar = Path.Combine(Path.GetDirectoryName(backendPath), "agy.version.json");
+                if (!File.Exists(sidecar)) return;
+                var serializer = new JavaScriptSerializer();
+                var data = serializer.Deserialize<Dictionary<string, object>>(File.ReadAllText(sidecar, Encoding.UTF8));
+                if (data == null) return;
+                var info = new FileInfo(backendPath);
+                long mtimeMs = (long)Math.Round((info.LastWriteTimeUtc - new DateTime(1970, 1, 1, 0, 0, 0, DateTimeKind.Utc)).TotalMilliseconds);
+                data["size"] = info.Length;
+                data["mtimeMs"] = mtimeMs;
+                string temp = sidecar + "." + Guid.NewGuid().ToString("N") + ".tmp";
+                try {
+                    File.WriteAllText(temp, serializer.Serialize(data), new UTF8Encoding(false));
+                    File.Replace(temp, sidecar, null);
+                } finally {
+                    if (File.Exists(temp)) File.Delete(temp);
+                }
+            } catch { }
+        }
+
     }
 
     public sealed class ScopedDnsResolver
@@ -402,7 +476,11 @@ namespace DevProxyApp
             "www.gstatic.com", "ssl.gstatic.com", "geminiweb-pa.clients6.google.com",
             "apis.google.com", "alkalimakersuite-pa.clients6.google.com", "alkalicore-pa.clients6.google.com",
             "waa-pa.clients6.google.com", "generativelanguage.googleapis.com", "proactivebackend-pa.googleapis.com",
-            "robinfrontend-pa.googleapis.com", "aisandbox-pa.googleapis.com"
+            "robinfrontend-pa.googleapis.com", "aisandbox-pa.googleapis.com",
+            "play.googleapis.com", "antigravity-unleash.goog", "content-autofill.googleapis.com", "update.googleapis.com",
+            "aicode.googleapis.com", "cloudaicompanion.googleapis.com", "cloudresourcemanager.googleapis.com",
+            "developerconnect.googleapis.com", "gemini-api-docs-mcp.dev", "aiplatform.googleapis.com",
+            "firebaserules.googleapis.com", "firebase.googleapis.com"
         };
         public static string[] ServerCandidates(string server) {
             return DnsProviders.Addresses(server);
@@ -500,7 +578,8 @@ namespace DevProxyApp
                 if (addresses.TryGetValue(current, out address)) {
                     byte[] bytes = address.GetAddressBytes(); byte first = bytes[0], second = bytes[1];
                     if (first == 0 || first == 10 || first == 127 || first >= 224 || (first == 192 && second == 168) ||
-                        (first == 172 && second >= 16 && second <= 31) || (first == 169 && second == 254))
+                        (first == 172 && second >= 16 && second <= 31) || (first == 169 && second == 254) ||
+                        (first == 198 && (second == 18 || second == 19)) || (first == 100 && second >= 64 && second <= 127))
                         throw new InvalidDataException("DNS вернул локальный или зарезервированный адрес.");
                     return address;
                 }
@@ -523,19 +602,19 @@ namespace DevProxyApp
                 foreach (string label in host.Split('.')) { byte[] bytes = Encoding.ASCII.GetBytes(label); buffer.WriteByte((byte)bytes.Length); buffer.Write(bytes, 0, bytes.Length); }
                 buffer.Write(new byte[] { 0, 0, 1, 0, 1 }, 0, 5); query = buffer.ToArray();
             }
-            var managed = _testEndpoints == null ? DnsProviders.ForServer(_configuredServer) : null;
+            var managed = _testEndpoints == null ? DnsProviders.ExtendedPool(_configuredServer) : null;
             if(managed!=null){
                 var candidates=new List<DnsEndpoint>();var cooling=new List<DnsEndpoint>();
-                foreach(var endpoint in managed){bool delayed;lock(_sync){DateTime until;delayed=_cooldown.TryGetValue(endpoint.Address+"/DoH",out until)&&until>DateTime.UtcNow;}(delayed?cooling:candidates).Add(endpoint);}candidates.AddRange(cooling);
+                foreach(var endpoint in managed){bool delayed;lock(_sync){DateTime until;delayed=_cooldown.TryGetValue(endpoint.Address+"/"+(endpoint.Protocol??"HTTPS"),out until)&&until>DateTime.UtcNow;}(delayed?cooling:candidates).Add(endpoint);}candidates.AddRange(cooling);
                 var deadline=Stopwatch.StartNew();int remainingAttempts=candidates.Count;
                 foreach(var endpoint in candidates)try{
-                    int remaining=7000-(int)deadline.ElapsedMilliseconds;if(remaining<=0)break;
-                    int timeout=Math.Min(2400,Math.Max(250,remaining/Math.Max(1,remainingAttempts--)));
+                    int remaining=12000-(int)deadline.ElapsedMilliseconds;if(remaining<=0)break;
+                    int timeout=Math.Min(3500,Math.Max(2000,remaining/Math.Min(3,Math.Max(1,remainingAttempts--))));
                     int ttl;var address=ParseAnswer(DnsHttpsTransport.Exchange(endpoint,query,Math.Min(remaining,timeout)),transaction,host,out ttl);
-                    lock(_sync){_cooldown.Remove(endpoint.Address+"/DoH");if(ttl>0)_cache[host]=new KeyValuePair<DateTime,IPAddress>(DateTime.UtcNow.AddSeconds(ttl),address);}
-                    Logger.Log("[DNS] provider="+endpoint.Provider+" resolver="+endpoint.Address+"/DoH host="+host+" OK");return address;
-                }catch(Exception error){if(!(error is IOException)&&!(error is InvalidDataException)&&!(error is SocketException)&&!(error is TimeoutException)&&!(error is AuthenticationException))throw;lock(_sync)_cooldown[endpoint.Address+"/DoH"]=DateTime.UtcNow.AddSeconds(30);Logger.Log("[DNS] provider="+endpoint.Provider+" DoH failed="+error.GetType().Name);}
-                throw new IOException("Зашифрованный DNS Dagami и MagicDNS недоступен. Проверьте подключение и диагностику TLS.");
+                    lock(_sync){_cooldown.Remove(endpoint.Address+"/"+(endpoint.Protocol??"HTTPS"));if(ttl>0)_cache[host]=new KeyValuePair<DateTime,IPAddress>(DateTime.UtcNow.AddSeconds(ttl),address);}
+                    Logger.Log("[DNS] provider="+endpoint.Provider+" resolver="+endpoint.Address+"/"+(endpoint.Protocol??"HTTPS")+" host="+host+" OK");return address;
+                }catch(Exception error){if(!(error is IOException)&&!(error is InvalidDataException)&&!(error is SocketException)&&!(error is TimeoutException)&&!(error is AuthenticationException))throw;lock(_sync)_cooldown[endpoint.Address+"/"+(endpoint.Protocol??"HTTPS")]=DateTime.UtcNow.AddSeconds(30);Logger.Log("[DNS] provider="+endpoint.Provider+" ("+endpoint.Address+") DoH failed: "+error.GetType().Name+" - "+error.Message);}
+                throw new IOException("Зашифрованный Smart DNS (MagicDNS/Comss/GeoHide/Dagami) временно недоступен. Проверьте подключение.");
             }
             var endpoints = new List<IPEndPoint>();
             if (_testEndpoints != null) endpoints.AddRange(_testEndpoints);

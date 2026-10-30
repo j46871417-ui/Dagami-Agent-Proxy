@@ -5,6 +5,7 @@ using System.Net.Sockets;
 using System.Reflection;
 using System.Text;
 using System.Threading;
+using System.Collections.Generic;
 using DevProxyApp;
 
 class DnsTransportChecks {
@@ -47,6 +48,49 @@ class DnsTransportChecks {
   return (ScopedDnsResolver)Activator.CreateInstance(typeof(ScopedDnsResolver),BindingFlags.Instance|BindingFlags.NonPublic,null,new object[]{endpoints,200},null);
  }
  static void Reject(Server server){bool rejected=false;try{Resolver(server).Resolve("www.googleapis.com");}catch(IOException){rejected=true;}Assert(rejected,"Unsafe DNS reply accepted");Assert(server.UdpQueries==1&&server.TcpQueries==1,"Failed transport attempted more than once");}
+ static string Header(Stream stream){var bytes=new MemoryStream();int state=0;while(state<4){int b=stream.ReadByte();if(b<0)throw new EndOfStreamException();bytes.WriteByte((byte)b);state=(state==0||state==2)?(b==13?state+1:0):(b==10?state+1:0);if(bytes.Length>16384)throw new IOException();}return Encoding.ASCII.GetString(bytes.ToArray());}
+ static void SmartDnsFailureUsesConfiguredProxy(bool connectionFailure){
+  using(var dns=new Server("dead")){
+   // Keep the loopback port bound but not listening, so the Smart DNS connect
+   // fails locally without sending traffic to a real external server.
+   Socket unavailable=null;
+   if(connectionFailure){unavailable=new Socket(AddressFamily.InterNetwork,SocketType.Stream,ProtocolType.Tcp);unavailable.ExclusiveAddressUse=true;unavailable.Bind(new IPEndPoint(IPAddress.Parse("127.203.10.17"),443));}
+   var upstream=new TcpListener(IPAddress.Loopback,0);upstream.Start();Exception failure=null;string request=null;
+   var worker=new Thread(()=>{try{using(var peer=upstream.AcceptTcpClient()){peer.GetStream().ReadTimeout=5000;request=Header(peer.GetStream());byte[] reply=Encoding.ASCII.GetBytes("HTTP/1.1 200 OK\r\n\r\n");peer.GetStream().Write(reply,0,reply.Length);}}catch(Exception ex){failure=ex;}});worker.IsBackground=true;worker.Start();
+   try{using(var bridge=new LocalProxyBridge()){
+    Assert(bridge.Start(0,"http://127.0.0.1:"+((IPEndPoint)upstream.LocalEndpoint).Port),"Proxy fixture bridge failed");
+    var resolver=Resolver(dns);
+    if(connectionFailure){var cache=(Dictionary<string,KeyValuePair<DateTime,IPAddress>>)typeof(ScopedDnsResolver).GetField("_cache",BindingFlags.Instance|BindingFlags.NonPublic).GetValue(resolver);cache["www.googleapis.com"]=new KeyValuePair<DateTime,IPAddress>(DateTime.UtcNow.AddMinutes(1),IPAddress.Parse("127.203.10.17"));}
+    typeof(LocalProxyBridge).GetField("_scopedDns",BindingFlags.Instance|BindingFlags.NonPublic).SetValue(bridge,resolver);
+    using(var client=new TcpClient("127.0.0.1",bridge.BoundPort)){client.GetStream().ReadTimeout=5000;byte[] bytes=Encoding.ASCII.GetBytes("CONNECT www.googleapis.com:443 HTTP/1.1\r\nHost: www.googleapis.com:443\r\n\r\n");client.GetStream().Write(bytes,0,bytes.Length);Assert(Header(client.GetStream()).Contains(" 200 "),"Smart DNS failure did not recover through proxy");}
+    Assert(worker.Join(5000)&&failure==null&&request.StartsWith("CONNECT www.googleapis.com:443"),"Configured upstream did not receive fallback CONNECT");
+   }}finally{upstream.Stop();worker.Join(1000);if(unavailable!=null)unavailable.Close();}
+  }
+ }
+ static void CloudCodeUsesConfiguredProxy(string host){
+  using(var dns=new Server("dead")){
+   var upstream=new TcpListener(IPAddress.Loopback,0);upstream.Start();Exception failure=null;string request=null;
+   var worker=new Thread(()=>{try{using(var peer=upstream.AcceptTcpClient()){peer.GetStream().ReadTimeout=5000;request=Header(peer.GetStream());byte[] reply=Encoding.ASCII.GetBytes("HTTP/1.1 200 OK\r\n\r\n");peer.GetStream().Write(reply,0,reply.Length);}}catch(Exception ex){failure=ex;}});worker.IsBackground=true;worker.Start();
+   try{using(var bridge=new LocalProxyBridge()){
+    Assert(bridge.Start(0,"http://127.0.0.1:"+((IPEndPoint)upstream.LocalEndpoint).Port),"Cloud Code fixture bridge failed");
+    typeof(LocalProxyBridge).GetField("_scopedDns",BindingFlags.Instance|BindingFlags.NonPublic).SetValue(bridge,Resolver(dns));
+    using(var client=new TcpClient("127.0.0.1",bridge.BoundPort)){client.GetStream().ReadTimeout=5000;byte[] bytes=Encoding.ASCII.GetBytes("CONNECT "+host+":443 HTTP/1.1\r\nHost: "+host+":443\r\n\r\n");client.GetStream().Write(bytes,0,bytes.Length);Assert(Header(client.GetStream()).Contains(" 200 "),"Cloud Code did not use upstream proxy");}
+    Assert(worker.Join(5000)&&failure==null&&request.StartsWith("CONNECT "+host+":443"),"Cloud Code CONNECT not received by proxy");
+    Assert(dns.UdpQueries==0&&dns.TcpQueries==0,"Cloud Code incorrectly consulted Smart DNS before configured proxy");
+   }}finally{upstream.Stop();worker.Join(1000);}
+  }
+ }
+ static void CloudCodeDoesNotBypassFailedProxy(){
+  using(var dns=new Server("dead"))using(var bound=new Socket(AddressFamily.InterNetwork,SocketType.Stream,ProtocolType.Tcp)){
+   bound.ExclusiveAddressUse=true;bound.Bind(new IPEndPoint(IPAddress.Loopback,0));int port=((IPEndPoint)bound.LocalEndPoint).Port;
+   using(var bridge=new LocalProxyBridge()){
+    Assert(bridge.Start(0,"http://127.0.0.1:"+port),"Unavailable proxy fixture failed");
+    typeof(LocalProxyBridge).GetField("_scopedDns",BindingFlags.Instance|BindingFlags.NonPublic).SetValue(bridge,Resolver(dns));
+    using(var client=new TcpClient("127.0.0.1",bridge.BoundPort)){client.GetStream().ReadTimeout=5000;byte[] bytes=Encoding.ASCII.GetBytes("CONNECT daily-cloudcode-pa.googleapis.com:443 HTTP/1.1\r\nHost: daily-cloudcode-pa.googleapis.com:443\r\n\r\n");client.GetStream().Write(bytes,0,bytes.Length);Assert(Header(client.GetStream()).Contains(" 502 "),"Failed proxy was silently bypassed");}
+    Assert(dns.UdpQueries==0&&dns.TcpQueries==0,"Failed proxy silently switched to Smart DNS");
+   }
+  }
+ }
  static int Main(){typeof(Logger).GetField("_logFilePath",BindingFlags.Static|BindingFlags.NonPublic).SetValue(null,Path.Combine(Path.GetTempPath(),"DnsTransportChecks-proxy.log"));try {
   Assert(ScopedDnsResolver.ServerCandidates("DNS.DAGAMI.RU.").Length==6,"Dagami/MagicDNS default pool missing");
   Assert(ScopedDnsResolver.ServerCandidates("46.29.165.108")[0]=="46.29.165.108","Chosen node lost priority");
@@ -56,6 +100,10 @@ class DnsTransportChecks {
   using(var server=new Server("truncated")){Assert(Resolver(server).Resolve("www.googleapis.com").ToString()=="8.8.4.4","Truncated UDP not retried over TCP");Assert(server.TcpQueries==1,"TCP was not used");}
   using(var primary=new Server("dead"))using(var backup=new Server("valid")){var resolver=Resolver(primary,backup);Assert(resolver.Resolve("www.googleapis.com").ToString()=="8.8.4.4","Backup DNS not used");resolver.Resolve("oauth2.googleapis.com");Assert(primary.UdpQueries==1&&primary.TcpQueries==1&&backup.UdpQueries==2,"Dead primary repeatedly delayed requests");}
   foreach(string mode in new[]{"wrong-question","wrong-owner","local"})using(var server=new Server(mode))Reject(server);
+  SmartDnsFailureUsesConfiguredProxy(false);SmartDnsFailureUsesConfiguredProxy(true);
+  CloudCodeUsesConfiguredProxy("cloudcode-pa.googleapis.com");CloudCodeUsesConfiguredProxy("daily-cloudcode-pa.googleapis.com");
+  CloudCodeDoesNotBypassFailedProxy();
+  Assert(LocalProxyBridge.IsCloudCodeApiHost("DAILY-CLOUDCODE-PA.GOOGLEAPIS.COM.")&&!LocalProxyBridge.IsCloudCodeApiHost("daily-cloudcode-pa.googleapis.com.evil.invalid"),"Cloud Code host matching is not exact");
   using(var server=new Server("valid")){var resolver=Resolver(server);resolver.Resolve("www.googleapis.com");resolver.Resolve("www.googleapis.com");Assert(server.UdpQueries==2,"TTL zero answer was cached");bool rejected=false;try{resolver.Resolve("www.googleapis.com.attacker.invalid");}catch(InvalidOperationException){rejected=true;}Assert(rejected&&server.UdpQueries==2,"Unscoped host queried");}
   Console.WriteLine("PASS "+checks+" DNS pool, UDP/TCP framing, truncation, failover/cooldown, TTL and reply validation checks (loopback only)");return 0;
  }catch(Exception error){Console.Error.WriteLine(error);return 1;}}

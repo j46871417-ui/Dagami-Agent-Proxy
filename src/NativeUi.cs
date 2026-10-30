@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Drawing;
 using System.IO;
@@ -13,6 +13,8 @@ namespace DevProxyApp
         private CheckBox _dnsEnabled;
         private CheckBox _systemEnvironment;
         private CheckBox _prepareAntigravity;
+        private CheckBox _blockAntigravityUpdates;
+        private bool _updatingBlockUpdates;
         private ListView _targetList;
         private TextBox _nativeLog;
         private Label _nativeStatus;
@@ -144,10 +146,28 @@ namespace DevProxyApp
                 "Восстановление настроек", MessageBoxButtons.YesNo, MessageBoxIcon.Warning, MessageBoxDefaultButton.Button2) == DialogResult.Yes;
         }
 
+        internal static bool IsDirectProxyValue(string value)
+        {
+            if (string.IsNullOrWhiteSpace(value)) return false;
+            string v = value.Trim();
+            return v.Equals("direct", StringComparison.OrdinalIgnoreCase) ||
+                   v.Equals("none", StringComparison.OrdinalIgnoreCase) ||
+                   v.Equals("прямой", StringComparison.OrdinalIgnoreCase) ||
+                   v.Equals("прямое", StringComparison.OrdinalIgnoreCase);
+        }
+
+        internal static bool HasConfiguredConnection(string proxyValue, bool smartDnsEnabled)
+        {
+            Uri parsed;
+            if (TryParseSupportedProxy(proxyValue, out parsed)) return true;
+            if (IsDirectProxyValue(proxyValue)) return true;
+            if (string.IsNullOrWhiteSpace(proxyValue) && smartDnsEnabled) return true;
+            return false;
+        }
+
         private void PatchSelectedNativeTarget()
         {
-            Uri proxy;
-            if (!TryParseSupportedProxy(_proxyBox.Text.Trim(), out proxy)) { ShowFluentPage(1); return; }
+            if (!HasConfiguredConnection(_proxyBox.Text.Trim(), _dnsEnabled.Checked)) { ShowFluentPage(1); return; }
             var target = SelectedNativeTarget(); SaveNativeSettings();
             string manager = System.Diagnostics.Process.GetCurrentProcess().MainModule.FileName;
             _nativeBusy = true; _patchInProgress = true; SetNativeButtonsEnabled(false); _patchMenuItem.Text = "Подготовка…";
@@ -172,14 +192,12 @@ namespace DevProxyApp
 
         private void RunPrimaryNativeAction()
         {
-            Uri parsed;
-            if (!TryParseSupportedProxy(ConfigManager.Instance.LastProxy, out parsed)) { ShowFluentPage(1); return; }
+            if (!HasConfiguredConnection(ConfigManager.Instance.LastProxy, ConfigManager.Instance.UseDagamiDns)) { ShowFluentPage(1); return; }
             var target = SelectedNativeTarget(); NativeSession session;
             if (_nativeSessions.TryGetValue(target.Id, out session) && session.RunningProcess != null) {
                 FocusSession(session.RunningProcess); return;
             }
             if (_proxyCheckFailed) { CheckFluentProxy(); return; }
-            if (_shortcutRecords==0||_shortcutIssue!=null) {PatchSelectedNativeTarget();return;}
             SaveNativeSettings();
             _nativeBusy = true; SetNativeButtonsEnabled(false);
             _primaryAppAction.Text = "Запуск…"; _primaryAppAction.Refresh();
@@ -196,16 +214,16 @@ namespace DevProxyApp
         {
             if (_primaryAppAction == null || _nativeBusy) return;
             AppTarget target = _targetList.SelectedItems.Count == 0 ? null : (AppTarget)_targetList.SelectedItems[0].Tag;
-            Uri parsed; bool configured = TryParseSupportedProxy(ConfigManager.Instance.LastProxy, out parsed);
+            bool configured = HasConfiguredConnection(ConfigManager.Instance.LastProxy, ConfigManager.Instance.UseDagamiDns);
             NativeSession session = null;
             bool running = target != null && _nativeSessions.TryGetValue(target.Id, out session) && session.RunningProcess != null;
             _selectedAppHeading.Text = target == null ? "Выберите приложение" : target.DisplayName;
-            bool needsSetup=target!=null&&target.IsInstalled&&!running&&(_shortcutRecords==0||_shortcutIssue!=null);
-            _primaryAppAction.Text = !configured ? "Настроить подключение" : running ? "Открыть" : _proxyCheckFailed ? "Проверить подключение" : needsSetup ? "Настроить обычный запуск" : "Запустить через Dagami";
+            _primaryAppAction.Text = !configured ? "Настроить подключение" : running ? "Открыть" : _proxyCheckFailed ? "Проверить подключение" : "Запустить через Dagami";
             _primaryAppAction.Enabled = !configured || (target != null && target.IsInstalled);
             _moreAppActions.Enabled = target != null;
             _patchMenuItem.Enabled = target != null && target.IsInstalled;
-            _patchMenuItem.Visible=!needsSetup;
+            _patchMenuItem.Visible=true;
+            _patchMenuItem.Enabled=target!=null&&target.IsInstalled&&!running;
             _stopAppItem.Enabled = running;
             _removeAppItem.Enabled = target != null && target.IsCustom;
             _restoreShortcutItem.Enabled = _shortcutRecords > 0 || _shortcutIssue != null;
@@ -221,7 +239,8 @@ namespace DevProxyApp
             _shortcutState.Text=(_shortcutRecords > 0 && _shortcutIssue == null ? "Настроено: " : "Не настроено: ") +
                 (cli ? "обычная команда через прокси" : "обычные ярлыки через прокси");
             if(target!=null&&ApplicationSupport.Kind(target)=="git")_shortcutState.Text="Команда dagami-git: " + (_shortcutRecords > 0 && _shortcutIssue == null ? "настроена" : "не настроена");
-            if(_clientPreparationStatus!=null)_clientPreparationStatus.Text=_clientStatusText??"";
+            if(_blockAntigravityUpdates!=null){_updatingBlockUpdates=true;_blockAntigravityUpdates.Checked=ConfigManager.Instance.BlockAntigravityUpdates;_blockAntigravityUpdates.Visible=target==null||AntigravityIntegration.Supports(target.ExePath);_updatingBlockUpdates=false;}
+            if(_clientPreparationStatus!=null)_clientPreparationStatus.Text=_clientStatusText==null?"":(_clientStatusText+(ConfigManager.Instance.BlockAntigravityUpdates?" · Обновления через мост: блокируются":" · Обновления через мост: разрешены"));
             if(cli&&_shortcutIssue==null)_shortcutExplanation.Text=_shortcutRecords>0?"Команда настроена. Перезапустите терминал; прямой путь к EXE обходит запускатель.":"Настройте обычную команду CLI, затем перезапустите терминал.";
             _restoreShortcutItem.Text=cli?"Восстановить прямой запуск команды":"Восстановить обычные ярлыки";
             if (_proxyCheckMessage != null) _appFeedback.Text = _proxyCheckMessage;
@@ -249,12 +268,17 @@ namespace DevProxyApp
         {
             Uri parsed;
             string proxy = _proxyBox.Text.Trim();
-            if (!TryParseSupportedProxy(proxy, out parsed))
-                throw new InvalidOperationException("Укажите HTTP или HTTPS proxy URL, например http://host:8080.");
+            bool isDirect = IsDirectProxyValue(proxy) || (string.IsNullOrEmpty(proxy) && _dnsEnabled.Checked);
+            if (!isDirect && !TryParseSupportedProxy(proxy, out parsed))
+                throw new InvalidOperationException("Укажите HTTP или HTTPS proxy URL (например http://host:8080) или оставьте пустым для работы через Smart DNS.");
+            if (!isDirect && UpstreamProxyDiagnostics.IsDnsEndpointMistakenForProxy(proxy))
+                throw new InvalidOperationException("В поле прокси указан DNS-сервер. Укажите HTTP/HTTPS-прокси, а адрес DNS задайте отдельно.");
+            if (isDirect && !string.IsNullOrEmpty(proxy) && !proxy.Equals("direct", StringComparison.OrdinalIgnoreCase))
+                proxy = "direct";
             string dns = _dnsBox.Text.Trim().TrimEnd('.');
             if (string.IsNullOrEmpty(dns)) dns = "dns.dagami.ru";
-            if (Uri.CheckHostName(dns) == UriHostNameType.Unknown)
-                throw new InvalidOperationException("Укажите корректное имя DNS сервера.");
+            if (!DnsProviders.IsValidSpec(dns))
+                throw new InvalidOperationException("Укажите корректный DNS: домен, IP, IP:порт, https://.../dns-query или tls://...");
             bool proxyChanged = proxy != ConfigManager.Instance.LastProxy;
             bool routeChanged = dns != ConfigManager.Instance.DnsHost || _dnsEnabled.Checked != ConfigManager.Instance.UseDagamiDns;
             if ((proxyChanged || routeChanged) && HasRunningSessions())
@@ -262,12 +286,25 @@ namespace DevProxyApp
             ConfigManager.Instance.LastProxy = proxy;
             ConfigManager.Instance.DnsHost = dns;
             ConfigManager.Instance.UseDagamiDns = _dnsEnabled.Checked;
+            if (_dnsObfuscation != null) ConfigManager.Instance.DnsObfuscation = _dnsObfuscation.Checked;
+            if (_dpiModeBox != null) ConfigManager.Instance.DpiDesyncMode = DpiModeValue(_dpiModeBox.SelectedIndex);
+            if (_blockAntigravityUpdates != null) ConfigManager.Instance.BlockAntigravityUpdates = _blockAntigravityUpdates.Checked;
             ConfigManager.Instance.SetSystemEnv = _systemEnvironment.Checked;
             ConfigManager.Instance.PrepareAntigravityClient = _prepareAntigravity.Checked;
             ConfigManager.Instance.Save();
             if (proxyChanged || routeChanged || _bridgePort <= 0) RestartRescueBridge();
             if (_bridgePort <= 0) throw new InvalidOperationException("Не удалось запустить локальный прокси-мост.");
             UpdateNativeStatus();
+        }
+
+        private void SyncSelectedAntigravityUpdateBlock()
+        {
+            try {
+                // Update blocking applies only to requests through the bridge.
+                // A UI toggle must not delete pending installers.
+                if (_appFeedback != null) _appFeedback.Text = ConfigManager.Instance.BlockAntigravityUpdates ? "Запросы обновлений через мост блокируются; другие маршруты не изменены." : "Блокировка обновлений через мост выключена.";
+                UpdateAppActionState();
+            } catch (Exception ex) { Logger.Log("[UpdateGuard] " + ex.Message); }
         }
 
         private AppTarget SelectedNativeTarget()

@@ -41,9 +41,16 @@ class AntigravityPatchChecks {
    wrong=(byte[])cli.Clone();wrong[132]=0x64;wrong[133]=0xaa;Reject(()=>AntigravityIntegration.PatchData(wrong,out count));
    wrong=(byte[])cli.Clone();Number(wrong,172,1000);Reject(()=>AntigravityIntegration.PatchData(wrong,out count));
    string currentCli=Path.Combine(root,"cli","agy.exe");Directory.CreateDirectory(Path.GetDirectoryName(currentCli));File.WriteAllBytes(currentCli,cli);
+   DateTime expectedMtime = new DateTime(2026, 2, 15, 12, 0, 0, DateTimeKind.Utc);
+   File.SetLastWriteTimeUtc(currentCli, expectedMtime);
+   string sidecarJson = Path.Combine(Path.GetDirectoryName(currentCli), "agy.version.json");
+   File.WriteAllText(sidecarJson, "{\"version\":\"0.2.2\",\"size\":123,\"mtimeMs\":1000}");
    Assert(AntigravityIntegration.ClientPreparationStatus(currentCli).Contains("не применён"),"Unpatched CLI status is not clear");
    Assert(AntigravityIntegration.Inspect(currentCli).Contains("требуется подготовка"),"Inspect disagrees with the current CLI patcher");
    Assert(AntigravityIntegration.PrepareClient(currentCli).Complete,"Current CLI refused by preparation preflight");byte[] firstCli=File.ReadAllBytes(currentCli);
+   Assert(File.GetLastWriteTimeUtc(currentCli) == expectedMtime, "Preparation modified binary LastWriteTimeUtc");
+   Assert(File.ReadAllText(sidecarJson).Contains("\"size\":1024"), "Preparation did not sync agy.version.json size metadata");
+   Assert(AntigravityUpdateGuard.IsUpdaterHost("antigravity-auto-updater-974169037036.us-central1.run.app") && !AntigravityUpdateGuard.IsUpdaterHost("cloudcode-pa.googleapis.com"), "Updater host classification failed");
    Assert(AntigravityIntegration.ClientPreparationStatus(currentCli).Contains("применён, копия проверена"),"Prepared CLI status is not clear");
    string backup=currentCli+".devproxy-region.bak";File.WriteAllText(backup,"broken backup");Assert(AntigravityIntegration.ClientPreparationStatus(currentCli).Contains("не удалось проверить"),"Damaged backup was shown as verified");File.WriteAllBytes(backup,cli);
    Assert(AntigravityIntegration.PrepareClient(currentCli).Complete&&Same(firstCli,File.ReadAllBytes(currentCli)),"CLI repeat preparation not idempotent");AntigravityIntegration.RestoreClient(currentCli);Assert(Same(cli,File.ReadAllBytes(currentCli)),"CLI original not restored exactly");

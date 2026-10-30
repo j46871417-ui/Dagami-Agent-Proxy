@@ -97,10 +97,9 @@ class SystemDnsUiChecks {
     Assert(child.ExitCode==1 || child.ExitCode==5,"Invalid helper request did not fail safely before DNS access");
    }
    } else {
-    bool needsElevation=false;
-    try{using(var child=Process.Start(new ProcessStartInfo(realGui,"--brand-info"){UseShellExecute=false,CreateNoWindow=true})) { child.WaitForExit(5000); }}
-    catch(System.ComponentModel.Win32Exception ex){needsElevation=ex.NativeErrorCode==740;}
-    Assert(needsElevation,"Windows allows the app to start without the requested admin rights");
+    using(var child=Process.Start(new ProcessStartInfo(realGui,"--brand-info"){UseShellExecute=false,CreateNoWindow=true})) {
+     Assert(child.WaitForExit(5000)&&child.ExitCode==0,"Regular CLI should run without requesting administrator rights");
+    }
    }
    Application.EnableVisualStyles();
    using(var form=new SystemDnsForm()) {

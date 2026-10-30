@@ -1,5 +1,27 @@
 # Changelog
 
+## Unreleased
+
+- Launch normally without administrator privileges; system DNS changes still
+  request elevation separately. Detect legacy elevated autostart tasks and let
+  the user explicitly reconfigure them for normal privileges.
+- Let users launch a configured application directly from Dagami without first
+  changing or creating its shortcuts; shortcut setup remains optional.
+- Prevent DNS probe crashes and stale results after slow or overlapping checks.
+- Keep Dagami DNS ahead of MagicDNS and preserve reserve nodes in the pool.
+- If Smart DNS cannot connect before establishing a tunnel, retry via the
+  configured upstream proxy; never silently bypass a failed upstream proxy.
+- Keep launched GUI applications alive if Dagami crashes; explicit session
+  shutdown still terminates its processes.
+- Disable experimental DNS/TLS splitting and update blocking by default for new
+  settings; preserve existing choices and describe their actual scope in the UI.
+- Avoid deleting downloaded Antigravity installers when toggling update blocking.
+- Reject DNS hosts in the proxy field without logging proxy credentials.
+- Answer internal Google metadata requests locally, including HTTP through
+  CONNECT on port 80, instead of repeatedly sending them to an external proxy.
+- Route the two Cloud Code API hosts through the user's configured upstream
+  proxy when present, rather than silently choosing the Smart DNS exit.
+
 ## 0.3.6 alpha — 2026-10-28
 
 - Show whether the selected Antigravity backend is actually prepared and make

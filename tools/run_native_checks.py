@@ -10,7 +10,7 @@ import sys
 ROOT=Path(__file__).resolve().parents[1]
 SUITES=['BugReportChecks','ConsoleLaunchChecks','CliChecks','ApplicationSupportChecks',
         'ReviewRegressionChecks','CodexDiscoveryChecks','PatchChecks','ShortcutChecks','ShortcutRecoveryChecks',
-        'NativeLoginChecks','GoogleGeminiChecks','AntigravityPatchChecks','Ide26Checks','ProxyFailureChecks','DnsTransportChecks','DnsProviderChecks','DnsAgentChecks','TlsDiagnosticsChecks','SystemDnsUiChecks','UserInfoChecks','LocalUiChecks']
+        'NativeLoginChecks','GoogleGeminiChecks','AntigravityPatchChecks','Ide26Checks','ProxyFailureChecks','DnsTransportChecks','DnsProviderChecks','DnsAgentChecks','TlsDiagnosticsChecks','SystemDnsUiChecks','UserInfoChecks','LocalUiChecks','StartupChecks']
 
 def main():
     parser=argparse.ArgumentParser()

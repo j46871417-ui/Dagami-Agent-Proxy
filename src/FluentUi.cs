@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Drawing;
 using System.Drawing.Drawing2D;
@@ -307,6 +307,14 @@ namespace DevProxyApp
             AddNativeButton(launch, "Действия", () => _appActions.Show(_moreAppActions, new Point(0, _moreAppActions.Height)));
             _moreAppActions = (FluentButton)_nativeButtons[_nativeButtons.Count - 1];
             _moreAppActions.Primary = false;
+            _blockAntigravityUpdates = new CheckBox { Name = "BlockUpdatesCheckBox", Text = "Блокировать обновления через мост", AutoSize = true, Checked = ConfigManager.Instance.BlockAntigravityUpdates, Margin = new Padding(8, 6, 0, 0), AccessibleName = "Блокировать известные запросы обновлений Antigravity через мост" };
+            _blockAntigravityUpdates.CheckedChanged += (s, e) => {
+                if (_updatingBlockUpdates || _preview) return;
+                ConfigManager.Instance.BlockAntigravityUpdates = _blockAntigravityUpdates.Checked;
+                ConfigManager.Instance.Save();
+                SyncSelectedAntigravityUpdateBlock();
+            };
+            launch.Controls.Add(_blockAntigravityUpdates);
             actionRows.Controls.Add(launch, 0, 1);
             _shortcutState = new Label { Name = "ShortcutStateLabel", Dock = DockStyle.Fill, ForeColor = FluentTheme.Text,
                 AccessibleName = "Состояние обычного запуска и бинарного патча", AutoEllipsis=true, Margin = new Padding(0, 2, 0, 0) };
