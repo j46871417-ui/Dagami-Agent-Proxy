@@ -16,6 +16,10 @@ class AntigravityPatchChecks {
  static void Number(byte[] data,int at,int value){Array.Copy(BitConverter.GetBytes(value),0,data,at,4);}
  static void Gate(byte[] data,int at){byte[] gate={0x48,0x85,0xc0,0x0f,0x84,0,0,0,0,0x80,0x78,8,0,0x0f,0x85,0,0,0,0,0x48,0x8b,0x50,0x50,0x4c,0x8d,0x1d,0,0,0,0};Array.Copy(gate,0,data,at,gate.Length);Number(data,at+5,100-9);Number(data,at+15,100-19);}
  static byte[] Cli(){var data=new byte[1024];data[0]=0x4d;data[1]=0x5a;Number(data,0x3c,128);Number(data,128,0x4550);data[132]=0x64;data[133]=0x86;data[134]=1;Number(data,152+16,512);Number(data,152+20,512);Number(data,152+36,0x20000000);byte[] markers=Encoding.ASCII.GetBytes("Go build ID: fixture\0Eligibility check failed:\0prompt-interactive\0name=ineligible,proto3\0https_proxyZ\0");Array.Copy(markers,0,data,256,markers.Length);Gate(data,576);return data;}
+ static byte[] CliWithHub(){
+  byte[] cli=Cli();int tag=Encoding.ASCII.GetString(cli).IndexOf("name=ineligible,proto3",StringComparison.Ordinal);
+  Array.Clear(cli,tag,"name=ineligible,proto3".Length);Array.Resize(ref cli,2048);byte[] hub=Legacy("hub-fixture");Array.Copy(hub,0,cli,1100,hub.Length);return cli;
+ }
  static int Main() {
   string root = Path.Combine(Path.GetTempPath(), "Dagami-patch-recovery-" + Guid.NewGuid().ToString("N")); Directory.CreateDirectory(root);
   try {
@@ -30,6 +34,12 @@ class AntigravityPatchChecks {
    Reject(() => AntigravityIntegration.PatchData(Encoding.ASCII.GetBytes("Go build ID: unrelated ineligible https_proxy"), out count));
    Reject(() => AntigravityIntegration.PatchData(Encoding.ASCII.GetBytes("Go build ID: fixture\0\n\nineligible\x18\x09\0name=ineligible,proto3\0inexigible"), out count));
    byte[] cli=Cli(),cliPatched=AntigravityIntegration.PatchData(cli,out count);Assert(count==2&&cli.Length==cliPatched.Length,"CLI gate or proxy not prepared");
+   byte[] hybrid=CliWithHub(),hybridPatched=AntigravityIntegration.PatchData(hybrid,out count);
+   Assert(count==12&&hybridPatched.Length==hybrid.Length,"CLI early-return skipped IDE hub protobuf preparation");
+   string hybridText=Encoding.ASCII.GetString(hybridPatched);
+   Assert(!hybridText.Contains("ineligible")&&hybridText.Contains("dpeligible")&&hybridText.Contains("unrelated-tail")&&hybridText.Contains("Eligibility check failed:"),"Hub fields missing or unrelated CLI strings changed");
+   byte[] duplicateHybrid=(byte[])hybrid.Clone();byte[] duplicateTag=Encoding.ASCII.GetBytes("name=ineligible,proto3");Array.Copy(duplicateTag,0,duplicateHybrid,1800,duplicateTag.Length);
+   Reject(()=>AntigravityIntegration.PatchData(duplicateHybrid,out count));
    byte[] goBuildInfo=(byte[])cli.Clone();Array.Copy(Encoding.ASCII.GetBytes("Go buildinf:"),0,goBuildInfo,256,12);AntigravityIntegration.PatchData(goBuildInfo,out count);Assert(count==2,"Windows Go build-info marker not recognised");
    int proxy=Encoding.ASCII.GetString(cli).IndexOf("https_proxy",StringComparison.Ordinal);for(int index=0;index<cli.Length;index++)if(cli[index]!=cliPatched[index])Assert((index>=585&&index<=588)||(index>=proxy&&index<proxy+11),"CLI changed an unrelated byte at "+index);
    Assert(cliPatched[proxy+11]==(byte)'Z'&&Encoding.ASCII.GetString(cliPatched).Contains("name=ineligible,proto3"),"CLI proxy boundary or protobuf metadata damaged");
@@ -41,12 +51,32 @@ class AntigravityPatchChecks {
    wrong=(byte[])cli.Clone();wrong[132]=0x64;wrong[133]=0xaa;Reject(()=>AntigravityIntegration.PatchData(wrong,out count));
    wrong=(byte[])cli.Clone();Number(wrong,172,1000);Reject(()=>AntigravityIntegration.PatchData(wrong,out count));
    string currentCli=Path.Combine(root,"cli","agy.exe");Directory.CreateDirectory(Path.GetDirectoryName(currentCli));File.WriteAllBytes(currentCli,cli);
+   DateTime expectedMtime = new DateTime(2026, 2, 15, 12, 0, 0, DateTimeKind.Utc);
+   File.SetLastWriteTimeUtc(currentCli, expectedMtime);
+   string sidecarJson = Path.Combine(Path.GetDirectoryName(currentCli), "agy.version.json");
+   File.WriteAllText(sidecarJson, "{\"version\":\"0.2.2\",\"size\":123,\"mtimeMs\":1000}");
    Assert(AntigravityIntegration.ClientPreparationStatus(currentCli).Contains("не применён"),"Unpatched CLI status is not clear");
    Assert(AntigravityIntegration.Inspect(currentCli).Contains("требуется подготовка"),"Inspect disagrees with the current CLI patcher");
    Assert(AntigravityIntegration.PrepareClient(currentCli).Complete,"Current CLI refused by preparation preflight");byte[] firstCli=File.ReadAllBytes(currentCli);
+   Assert(File.GetLastWriteTimeUtc(currentCli) == expectedMtime, "Preparation modified binary LastWriteTimeUtc");
+   Assert(File.ReadAllText(sidecarJson).Contains("\"size\":1024"), "Preparation did not sync agy.version.json size metadata");
+   Assert(AntigravityUpdateGuard.IsUpdaterHost("antigravity-auto-updater-974169037036.us-central1.run.app") && !AntigravityUpdateGuard.IsUpdaterHost("cloudcode-pa.googleapis.com"), "Updater host classification failed");
    Assert(AntigravityIntegration.ClientPreparationStatus(currentCli).Contains("применён, копия проверена"),"Prepared CLI status is not clear");
    string backup=currentCli+".devproxy-region.bak";File.WriteAllText(backup,"broken backup");Assert(AntigravityIntegration.ClientPreparationStatus(currentCli).Contains("не удалось проверить"),"Damaged backup was shown as verified");File.WriteAllBytes(backup,cli);
    Assert(AntigravityIntegration.PrepareClient(currentCli).Complete&&Same(firstCli,File.ReadAllBytes(currentCli)),"CLI repeat preparation not idempotent");AntigravityIntegration.RestoreClient(currentCli);Assert(Same(cli,File.ReadAllBytes(currentCli)),"CLI original not restored exactly");
+   string oldHub=Path.Combine(root,"old-hub","agy.exe");Directory.CreateDirectory(Path.GetDirectoryName(oldHub));
+   byte[] oldHubBytes=(byte[])hybrid.Clone();Array.Copy(new byte[]{0x48,0x85,0xc0,0x90},0,oldHubBytes,585,4);
+   byte[] proxyNeedle=Encoding.ASCII.GetBytes("https_proxy"),proxyReplacement=Encoding.ASCII.GetBytes("AG_LS_PROXY");
+   for(int offset=0;offset<=oldHubBytes.Length-proxyNeedle.Length;offset++){bool match=true;for(int j=0;j<proxyNeedle.Length;j++)if(oldHubBytes[offset+j]!=proxyNeedle[j]){match=false;break;}if(match)Array.Copy(proxyReplacement,0,oldHubBytes,offset,proxyReplacement.Length);}
+   File.WriteAllBytes(oldHub,oldHubBytes);File.WriteAllBytes(oldHub+".devproxy-region.bak",hybrid);
+   File.WriteAllText(oldHub+".devproxy-region.json",new System.Web.Script.Serialization.JavaScriptSerializer().Serialize(new {schema=1,original_sha256=AntigravityIntegration.Hash(hybrid),patched_sha256=AntigravityIntegration.Hash(oldHubBytes),length=hybrid.Length,changes=4}));
+   Assert(AntigravityIntegration.Inspect(oldHub).StartsWith("Прежняя подготовка CLI"),"Partial old CLI patch falsely reported IDE-ready");
+   Assert(!AntigravityIntegration.PrepareClient(oldHub).Complete,"Old hub preparation reported complete");
+   AntigravityIntegration.Restore(oldHub);Assert(Same(File.ReadAllBytes(oldHub),hybrid),"Old hub restore did not preserve original");
+   Assert(AntigravityIntegration.PrepareClient(oldHub).Complete,"Restored hub could not be fully prepared");
+   Assert(Same(File.ReadAllBytes(oldHub),hybridPatched)&&Same(File.ReadAllBytes(oldHub+".devproxy-region.bak"),hybrid),"Hub repair mismatch or original backup changed");
+   Assert(AntigravityIntegration.Inspect(oldHub).StartsWith("Клиент подготовлен;"),"Full hub patch not recognised");
+   AntigravityIntegration.Restore(oldHub);Assert(Same(File.ReadAllBytes(oldHub),hybrid),"Full hub rollback not exact");
    string agy = Path.Combine(root, "agy.exe"); File.WriteAllBytes(agy, modern);
    Assert(AntigravityIntegration.BackendPath(agy) == agy && NativeCliApps.IsCli(new AppTarget { ExePath = agy }), "agy not treated as a direct CLI target");
    Assert(AntigravityIntegration.PrepareClient(agy).Prepared, "agy preparation failed"); byte[] first = File.ReadAllBytes(agy);
@@ -73,7 +103,7 @@ class AntigravityPatchChecks {
    // Lock the second sorted target: an earlier successful write must roll back.
    string[] ordered = AntigravityIntegration.BackendPaths(app).ToArray(); bool failed = false;
    using (var held = new FileStream(ordered[1], FileMode.Open, FileAccess.Read, FileShare.Read)) {
-    try { AntigravityIntegration.PrepareClient(app); } catch (IOException) { failed = true; }
+    var recovery = AntigravityIntegration.PrepareClient(app); failed = !recovery.Prepared && !recovery.Complete && recovery.Message.Contains("Обычный запуск");
    }
    Assert(failed && Same(original, File.ReadAllBytes(a)) && Same(modern, File.ReadAllBytes(b)), "Partial multi-file failure did not restore previous bytes");
    File.WriteAllText(agy, "unknown new binary"); byte[] unknown = File.ReadAllBytes(agy);

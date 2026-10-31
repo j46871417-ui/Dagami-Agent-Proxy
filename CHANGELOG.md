@@ -1,5 +1,79 @@
 # Changelog
 
+## 0.4.0 beta — 2026-10-31
+
+- Use a shared GUI/CLI binary restore path; report partial rollback explicitly
+  and distinguish restored ownership records from active patches.
+- Stop conflicting processes only by verified executable paths; wait for exit
+  before patch/launch. Remove leaking basename-only process enumeration.
+- Make unknown applications launcher/environment-only, honor actual console PE
+  type, explain capabilities on add, avoid duplicate EXE entries and reject
+  removing active/patched custom entries. Check custom-list save failures.
+- Bound bridge work to 128 concurrent connections, return 503 under saturation,
+  serialize expensive binary status checks, remove repeated verification from
+  the 300 ms status refresh, and use skip-based binary signature search.
+- Document per-application settings, CLI wrapper limits, Google-only scoped DNS,
+  remote/daemon boundaries and the manual-add workflow in APPLICATIONS.md.
+- Resolve Node entrypoints only from recognized invocation lines, skipping
+  quoted paths in echo/comments; retain native CLI argument/stdin handling.
+
+- Offer to force-close the listed active Dagami sessions before switching
+  proxy/DNS or saving a changed connection. Wait for managed processes to exit;
+  cancellation or stop failure leaves connection settings unchanged.
+
+- Keep proxy failures explicit instead of silently connecting directly when Smart
+  DNS is also enabled. Local backend/OAuth loopback routing remains available.
+- Fix the OAuth route/resolver allowlist mismatch for `accounts.google.com`;
+  direct connections use the Windows route without a second Smart DNS lookup.
+- Preserve disabled proxy settings on save, honor the proxy flag in diagnostic
+  and CLI patch routes, and retain DNS nodes in cooldown as final reserves.
+- Preserve configured DNS provider order for AI dependencies. Clarify that an
+  unauthenticated userinfo check does not verify Gemini model responses/region.
+- Distinguish server-side model/region refusals from local routing failures;
+  login success and fixture checks do not prove availability of every model.
+
+
+- Prioritize active Dagami (`89.22.224.205`) and MagicDNS (`2.56.175.196`) DoH
+  seeds, verify candidate nodes in parallel and prune unreachable fallback seeds
+  when official `.mobileconfig` downloads fail.
+- Require a two-target HTTPS preflight quorum in `SystemDns.ps1`, remove the
+  broad `microsoft.com` wildcard from NRPT rules and add the ten Antigravity /
+  Google Cloud Companion domains to NRPT and Unix split-DNS presets.
+- Support `direct` and Smart DNS-only routes in `NativeCliApps.Run`,
+  `diagnose login` and `patch`; support EDNS0 UDP payloads up to 1232 bytes and
+  cache `dns-custom.json` by timestamp in `LocalDnsAgent`.
+- Improve `ActivationForm` text contrast, add `<dpiAware>true</dpiAware>` to the
+  Windows manifest, rotate `devproxy.log` at 2 MB and prune stale staged updates
+  and DNS job history.
+- Prepare the eight verified regional protobuf metadata signatures in supported
+  combined CLI/IDE backends as well as the CLI gate; detect incomplete older
+  CLI preparation instead of reporting the IDE ready.
+- Normalize legacy UTF-8 BOM settings even when their JSON text is unchanged.
+
+- Refuse Low-integrity startup before opening the bridge or launching children;
+  explain how to use a normal user copy and add `--permissions-info` diagnostics.
+
+- Restore the selected Smart DNS route for Cloud Code. A configured upstream no
+  longer overrides it for the two core Antigravity API hosts.
+- Check TLS/userinfo through the actual Dagami bridge, including direct Windows/VPN
+  mode. A failed diagnostic no longer replaces or blocks the launch action.
+- Launch using saved connection settings without rewriting the configuration.
+- Keep Dagami → MagicDNS as the default chain. Other providers require explicit
+  selection; DNS attempt budgets leave time for reserve nodes.
+- Disable experimental TLS splitting and update blocking when loading older,
+  unversioned settings. Explicit choices saved with the new policy are retained.
+- Save settings atomically without changing ACLs/attributes or truncating the
+  destination after a replacement failure. Report save failures, keep the active
+  connection unchanged and avoid writing a second configuration that is not loaded.
+- Restore only managed proxy fields; preserve unrelated update/extension settings.
+- Do not adopt managed local proxy settings as an upstream during discovery.
+- After a failed optional client preparation, verify rollback and allow ordinary
+  proxy launch. A failed rollback still stops launch.
+- Remove recursive elevation/deletion fallback for legacy startup tasks.
+- CLI connection setup supports `direct` and reports failed persistence.
+- Preserve prior fixes for late DNS probe completion, metadata requests, normal
+  Windows privileges, optional shortcuts and GUI lifetime after a proxy crash.
+
 ## 0.3.6 alpha — 2026-10-28
 
 - Show whether the selected Antigravity backend is actually prepared and make

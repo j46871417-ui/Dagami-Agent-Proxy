@@ -8,9 +8,9 @@ import subprocess
 import sys
 
 ROOT=Path(__file__).resolve().parents[1]
-SUITES=['BugReportChecks','ConsoleLaunchChecks','CliChecks','ApplicationSupportChecks',
-        'ReviewRegressionChecks','CodexDiscoveryChecks','PatchChecks','ShortcutChecks','ShortcutRecoveryChecks',
-        'NativeLoginChecks','GoogleGeminiChecks','AntigravityPatchChecks','Ide26Checks','ProxyFailureChecks','DnsTransportChecks','DnsProviderChecks','DnsAgentChecks','TlsDiagnosticsChecks','SystemDnsUiChecks','UserInfoChecks','LocalUiChecks']
+SUITES=['BugReportChecks','ConsoleLaunchChecks','SessionStopChecks','HardReviewChecks','CliChecks','ApplicationSupportChecks',
+        'ReviewRegressionChecks','ConnectionRecoveryChecks','CodexDiscoveryChecks','PatchChecks','ShortcutChecks','ShortcutRecoveryChecks',
+        'NativeLoginChecks','GoogleGeminiChecks','AntigravityPatchChecks','Ide26Checks','ProxyFailureChecks','DnsTransportChecks','DnsProviderChecks','DnsAgentChecks','TlsDiagnosticsChecks','SystemDnsUiChecks','UserInfoChecks','LocalUiChecks','StartupChecks']
 
 def main():
     parser=argparse.ArgumentParser()
@@ -36,7 +36,7 @@ def main():
         command+=['/r:'+reference for reference in ('System.Web.Extensions.dll','System.Drawing.dll','System.Windows.Forms.dll','System.Security.dll','System.Xml.dll','System.ServiceProcess.dll')]
         subprocess.run([*command,str(ROOT/'tests/native'/(name+'.cs'))],check=True)
         try:
-            result=subprocess.run([str(executable)],cwd=output,env=env,capture_output=True,text=True,timeout=90)
+            result=subprocess.run([str(executable)],cwd=output,env=env,capture_output=True,text=True,encoding="utf-8",errors="replace",timeout=90)
         except subprocess.TimeoutExpired as error:
             captured=(error.stdout or b'')+(error.stderr or b'')
             if isinstance(captured,bytes):captured=captured.decode('utf-8',errors='replace')

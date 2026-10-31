@@ -23,7 +23,8 @@ namespace DevProxyApp
         public string Name { get; set; }
         public string CurrentServers { get; set; }
         public bool HasDefaultGateway { get; set; }
-        public override string ToString() { return Name + " [" + Index + "] — DNS: " + CurrentServers; }
+        public bool IsVirtualVpn { get; set; }
+        public override string ToString() { return Name + (IsVirtualVpn ? " [VPN/TUN]" : "") + " [" + Index + "] — DNS: " + CurrentServers; }
     }
     public sealed class SystemDnsRequest {
         public string JobId { get; set; }
@@ -32,6 +33,7 @@ namespace DevProxyApp
         public string[] Servers { get; set; }
         public bool EncryptedStub { get; set; }
         public bool StubIpv6 { get; set; }
+        public string CustomUpstreamSpec { get; set; }
         public string Preset { get; set; }
         public bool ChangeAdapters { get; set; }
         public bool UseNrpt { get; set; }
@@ -55,7 +57,8 @@ namespace DevProxyApp
                     var servers = new List<string>(); foreach (var ip in properties.DnsAddresses) servers.Add(ip.ToString());
                     bool gateway = false;
                     foreach (var address in properties.GatewayAddresses) if (!address.Address.Equals(IPAddress.Any) && !address.Address.Equals(IPAddress.IPv6Any)) gateway = true;
-                    result.Add(new SystemDnsAdapter { Index = ipv4.Index, Guid = id.ToString(), Name = adapter.Name, CurrentServers = string.Join(", ", servers.ToArray()), HasDefaultGateway = gateway });
+                    bool isVpn = VpnDiagnostics.IsVirtualVpnAdapter(adapter.Name, adapter.Description, adapter.NetworkInterfaceType);
+                    result.Add(new SystemDnsAdapter { Index = ipv4.Index, Guid = id.ToString(), Name = adapter.Name, CurrentServers = string.Join(", ", servers.ToArray()), HasDefaultGateway = gateway, IsVirtualVpn = isVpn });
                 } catch (NetworkInformationException) { }
             }
             return result;
@@ -120,7 +123,7 @@ namespace DevProxyApp
             if (operation != request.Operation) throw new ArgumentException("Operation mismatch.");
             data = Encoding.UTF8.GetBytes(new JavaScriptSerializer().Serialize(request));
             ProtectStore();
-            if(request.Operation=="Apply"&&request.EncryptedStub)try{DnsServiceHost.EnsureInstalled();request.StubIpv6=request.ChangeAdapters&&DnsServiceHost.Probe(IPAddress.IPv6Loopback);data=Encoding.UTF8.GetBytes(new JavaScriptSerializer().Serialize(request));}catch(Exception error){
+            if(request.Operation=="Apply"&&request.EncryptedStub)try{DnsServiceHost.SaveCustomUpstream(request.CustomUpstreamSpec);DnsServiceHost.EnsureInstalled();request.StubIpv6=request.ChangeAdapters&&DnsServiceHost.Probe(IPAddress.IPv6Loopback);data=Encoding.UTF8.GetBytes(new JavaScriptSerializer().Serialize(request));}catch(Exception error){
                 string jobs=Path.Combine(StoreRoot,"jobs");Directory.CreateDirectory(jobs);var permissions=new DirectorySecurity();AddStoreRules(permissions,true);Directory.SetAccessControl(jobs,permissions);
                 File.WriteAllText(Path.Combine(jobs,request.JobId+".json"),new JavaScriptSerializer().Serialize(new{Success=false,Message="Не удалось подготовить службу шифрованного DNS. Настройки сети не менялись. "+error.Message}),new UTF8Encoding(true));return 1;
             }
@@ -179,7 +182,7 @@ namespace DevProxyApp
             string owner=Directory.GetAccessControl(path).GetOwner(typeof(SecurityIdentifier)).Value;
             if(owner!="S-1-5-32-544"&&owner!="S-1-5-18")throw new IOException("DNS service folder is not administrator-owned.");
             var directory=new DirectorySecurity();AddStoreRules(directory,true);Directory.SetAccessControl(path,directory);
-            foreach(string name in new[]{"DagamiAgentProxy.exe","owner.json","dns-endpoints.json"}){
+            foreach(string name in new[]{"DagamiAgentProxy.exe","owner.json","dns-endpoints.json","dns-custom.json"}){
                 string file=Path.Combine(path,name);if(!File.Exists(file))continue;
                 if((File.GetAttributes(file)&FileAttributes.ReparsePoint)!=0)throw new IOException("Invalid DNS service file.");
                 var permissions=new FileSecurity();AddStoreRules(permissions,false);File.SetAccessControl(file,permissions);
@@ -366,19 +369,23 @@ namespace DevProxyApp
                 try {
                     adapters = SystemDnsManager.Adapters(); IPAddress ip;
                     if(IPAddress.TryParse(requestedServer,out ip))resolvedServer=ip.ToString();
+                    else if(DnsProviders.ParseCustomSpec(requestedServer)!=null)resolvedServer=requestedServer;
                     else {ip=Array.Find(Dns.GetHostAddresses(requestedServer),a=>a.AddressFamily==System.Net.Sockets.AddressFamily.InterNetwork);if(ip==null)throw new InvalidOperationException("Не найден IPv4 DNS-сервера. Введите его IP вручную.");resolvedServer=ip.ToString();}
                 } catch (Exception ex) { error = ex.Message; }
                 try { BeginInvoke(new Action(() => {
                     _loading = false; _apply.Enabled = _restore.Enabled = _refresh.Enabled = _resetAll.Enabled = true;
                     if(resolvedServer!=null && _server.Text.Trim()==requestedServer)_server.Text=resolvedServer;
-                    _adapters.Items.Clear(); if (adapters != null) foreach (var adapter in adapters) _adapters.Items.Add(adapter, first ? adapter.HasDefaultGateway : selected.Contains(adapter.Guid));
+                    _adapters.Items.Clear(); if (adapters != null) foreach (var adapter in adapters) _adapters.Items.Add(adapter, first ? (adapter.HasDefaultGateway && !adapter.IsVirtualVpn) : selected.Contains(adapter.Guid));
                     _report.Text = SystemDnsManager.LastStatus() + (error == null ? "" : "\r\nОшибка чтения адаптеров: " + error) + (operationMessage == null ? "" : "\r\n\r\n" + operationMessage);
                 })); } catch (InvalidOperationException) { }
             });
         }
         SystemDnsRequest CreateRequest(string operation) {
             var selected = new List<SystemDnsAdapter>(); foreach (SystemDnsAdapter adapter in _adapters.CheckedItems) selected.Add(adapter);
-            return new SystemDnsRequest { JobId = Guid.NewGuid().ToString("N"), Operation = operation, Server = _server.Text.Trim(),
+            string rawServer = _server.Text.Trim();
+            bool isCustomEndpoint = operation == "Apply" && DnsProviders.ParseCustomSpec(rawServer) != null;
+            return new SystemDnsRequest { JobId = Guid.NewGuid().ToString("N"), Operation = operation, Server = isCustomEndpoint ? "127.0.0.1" : rawServer,
+                EncryptedStub = isCustomEndpoint, CustomUpstreamSpec = isCustomEndpoint ? rawServer : null,
                 Preset = _preset.SelectedIndex == 0 ? "Full" : "Development", ChangeAdapters = _changeAdapters.Checked, UseNrpt = _nrpt.Checked, ReplaceExisting = _replace.Checked, KeepExternalChanges = true, ReplaceActiveSetup = true, ConfirmResetAll = operation == "ResetAll", Adapters = selected.ToArray() };
         }
         void Run(string operation) {

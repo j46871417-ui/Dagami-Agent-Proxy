@@ -55,7 +55,6 @@
     "msftidentity.com",
     "msftauth.net",
     "microsoftonline.com",
-    "microsoft.com",
     "perplexity.ai",
     "challenges.cloudflare.com",
     "cloudcode-pa.googleapis.com",
@@ -65,7 +64,17 @@
     "www.googleapis.com",
     "lh3.googleusercontent.com",
     "www.gstatic.com",
-    "ssl.gstatic.com"
+    "ssl.gstatic.com",
+    "antigravity-unleash.goog",
+    "aicode.googleapis.com",
+    "cloudaicompanion.googleapis.com",
+    "cloudresourcemanager.googleapis.com",
+    "developerconnect.googleapis.com",
+    "gemini-api-docs-mcp.dev",
+    "aiplatform.googleapis.com",
+    "play.googleapis.com",
+    "firebaserules.googleapis.com",
+    "firebase.googleapis.com"
   ],
   "Full": [
     "gemini.google.com",
@@ -125,7 +134,6 @@
     "msftidentity.com",
     "msftauth.net",
     "microsoftonline.com",
-    "microsoft.com",
     "perplexity.ai",
     "strava.com",
     "www.strava.com",
@@ -143,6 +151,16 @@
     "www.googleapis.com",
     "lh3.googleusercontent.com",
     "www.gstatic.com",
-    "ssl.gstatic.com"
+    "ssl.gstatic.com",
+    "antigravity-unleash.goog",
+    "aicode.googleapis.com",
+    "cloudaicompanion.googleapis.com",
+    "cloudresourcemanager.googleapis.com",
+    "developerconnect.googleapis.com",
+    "gemini-api-docs-mcp.dev",
+    "aiplatform.googleapis.com",
+    "play.googleapis.com",
+    "firebaserules.googleapis.com",
+    "firebase.googleapis.com"
   ]
 }

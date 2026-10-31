@@ -163,7 +163,7 @@ namespace DevProxyApp {
    if(Hash(File.ReadAllBytes(current))!=app.Hash)throw new InvalidOperationException("CLI-запускатель не соответствует сохранённой настройке.");
    if(!LicenseManager.IsActivated())throw new InvalidOperationException("Dagami не активирован. Откройте GUI для активации.");
    var config=ConfigManager.Instance;
-   Environment.ExitCode=Run(app.Original,args,config.LastProxy,config.UseDagamiDns?config.DnsHost:null);
+   Environment.ExitCode=Run(app.Original,args,config.EffectiveProxy,config.UseDagamiDns?config.DnsHost:null);
    return true;
   }
   static string Join(string[] args){return string.Join(" ",Array.ConvertAll(args,NativeShortcuts.Quote));}
@@ -174,13 +174,21 @@ namespace DevProxyApp {
     Match npm=Match.Empty;
     foreach(Match candidate in Regex.Matches(source,@"[""'](?:%dp0%[\\/]|\$basedir[\\/])([^""'\r\n]+)[""']",RegexOptions.IgnoreCase)) {
      string extension=Path.GetExtension(candidate.Groups[1].Value).ToLowerInvariant();
-     if(extension==""||extension==".js"||extension==".mjs"||extension==".cjs"){npm=candidate;break;}
+     if(extension!=""&&extension!=".js"&&extension!=".mjs"&&extension!=".cjs")continue;
+     int lineStart=source.LastIndexOf('\n',candidate.Index)+1,lineEnd=source.IndexOf('\n',candidate.Index);if(lineEnd<0)lineEnd=source.Length;
+     string prefix=source.Substring(lineStart,candidate.Index-lineStart),tail=source.Substring(candidate.Index+candidate.Length,lineEnd-candidate.Index-candidate.Length).Trim();
+     string trimmed=prefix.TrimStart();if(trimmed.StartsWith("#")||trimmed.StartsWith("::")||trimmed.StartsWith("REM ",StringComparison.OrdinalIgnoreCase))continue;
+     // A quoted JS path in echo/comments is not an executable npm entrypoint.
+     bool nodeCall=ext==".ps1" ? Regex.IsMatch(prefix,@"&\s*[""'](?:\$basedir[\\/]node\$exe|node\$exe|node(?:\.exe)?)[""']\s*$",RegexOptions.IgnoreCase) :
+      Regex.IsMatch(prefix,@"(?:^|[&|])\s*[""'](?:%_prog%|%dp0%[\\/]node\.exe|node(?:\.exe)?)[""']\s*$",RegexOptions.IgnoreCase);
+     if(nodeCall&&tail==(ext==".ps1"?"$args":"%*")){npm=candidate;break;}
     }
     if(npm.Success){string entry=Path.GetFullPath(Path.Combine(Path.GetDirectoryName(file),npm.Groups[1].Value.Replace('/',Path.DirectorySeparatorChar)));if(!Under(entry,Path.GetDirectoryName(file))||!File.Exists(entry))throw new FileNotFoundException("Не найден Node entrypoint CLI.");string node=Path.Combine(Path.GetDirectoryName(file),"node.exe");if(!File.Exists(node))node=FindCommand("node",Environment.GetEnvironmentVariable("PATH"),null,true,true);if(node==null)throw new FileNotFoundException("Не найден node.exe для CLI.");file=node;arguments=NativeShortcuts.Quote(entry)+" "+arguments;}
     else if(ext==".ps1"){file=Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.System),@"WindowsPowerShell\v1.0\powershell.exe");arguments="-NoLogo -NoProfile -File "+NativeShortcuts.Quote(executable)+" "+arguments;}
     else throw new InvalidOperationException("Эта CMD/BAT-обёртка не распознана. Выберите исходный EXE или стандартный npm CMD/PS1. Скрипт не изменён.");
    }
    var start=new ProcessStartInfo(file,arguments){UseShellExecute=false,CreateNoWindow=false,WorkingDirectory=directory};
+   try { start.EnvironmentVariables["PATH"] = Current.WithoutBin(start.EnvironmentVariables["PATH"] ?? Environment.GetEnvironmentVariable("PATH")); } catch { }
    foreach(string key in new[]{"HTTP_PROXY","HTTPS_PROXY","ALL_PROXY","http_proxy","https_proxy","all_proxy"})start.EnvironmentVariables[key]=proxy;
    start.EnvironmentVariables["NO_PROXY"]=start.EnvironmentVariables["no_proxy"]="localhost,127.0.0.1,::1";
    start.EnvironmentVariables["AGY_PROXY_URL"]=start.EnvironmentVariables["agy_proxy_url"]=start.EnvironmentVariables["AG_LS_PROXY"]=proxy;
@@ -189,7 +197,8 @@ namespace DevProxyApp {
    return start;
   }
   public static int Run(string executable,string[] args,string upstream,string dnsHost){
-   Uri uri;if(!Uri.TryCreate(upstream,UriKind.Absolute,out uri)||(uri.Scheme!="http"&&uri.Scheme!="https"))throw new ArgumentException("Для CLI сначала настройте HTTP/HTTPS прокси в Dagami.");
+   if(string.IsNullOrWhiteSpace(upstream)&&!string.IsNullOrWhiteSpace(dnsHost))upstream="direct";
+   Uri uri;if(!MainForm.IsDirectProxyValue(upstream)&&(!Uri.TryCreate(upstream,UriKind.Absolute,out uri)||(uri.Scheme!="http"&&uri.Scheme!="https")))throw new ArgumentException("Для CLI сначала настройте HTTP/HTTPS прокси или режим direct в Dagami.");
    if(AntigravityIntegration.Supports(executable) && ConfigManager.Instance.PrepareAntigravityClient)
     Console.Error.WriteLine(AntigravityIntegration.PrepareClient(executable).Message);
    using(var activity=NativeUpdates.AcquireActivity(true))using(var bridge=new LocalProxyBridge()){

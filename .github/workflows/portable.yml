@@ -20,6 +20,10 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y python3-tk xvfb libsecret-tools desktop-file-utils libayatana-appindicator3-1 gir1.2-ayatanaappindicator3-0.1
       - name: Build dependencies
         run: python -m pip install '.[build,desktop]'
+      - name: Source hygiene
+        run: |
+          python tools/check_source_hygiene.py
+          python -m unittest discover -s tools -p test_source_hygiene.py
       - name: Unit and real loopback/process tests
         run: python -m unittest discover -s tests -p 'test_*.py' -v
       - name: Build Linux artifacts with GUI smoke test
@@ -28,6 +32,9 @@ jobs:
       - name: Build Windows or macOS artifacts with GUI smoke test
         if: runner.os != 'Linux'
         run: python tools/build_portable.py
+      - name: Windows native fixture checks
+        if: runner.os == 'Windows'
+        run: python tools/run_native_checks.py --assembly dist-portable/windows/DagamiAgentProxy.exe --output-dir dist-portable/native-checks
       - uses: actions/upload-artifact@v4
         with:
           name: dagami-agent-proxy-${{ matrix.os }}

@@ -31,6 +31,9 @@ class StartupChecks {
   Environment.CurrentDirectory=Path.GetDirectoryName(Assembly.GetExecutingAssembly().Location);
   if(args.Length==1&&args[0]=="--log"){var writer=new StreamWriter("startup-checks.log",false,Encoding.UTF8){AutoFlush=true};Console.SetOut(writer);Console.SetError(writer);}
  try{
+  Assert(WindowsExecutionContext.IntegrityRid()>=8192,"Fixture must run with normal user integrity, outside a Low-labelled output directory");
+  Assert(WindowsExecutionContext.StartupProblem(4096)!=null&&WindowsExecutionContext.StartupProblem(0)!=null,"Low/untrusted process allowed to start child applications");
+  Assert(WindowsExecutionContext.StartupProblem(8192)==null&&WindowsExecutionContext.StartupProblem(12288)==null,"Normal user process incorrectly requires elevation");
   string exe=typeof(SystemDnsManager).Assembly.Location;
   Assert(new WindowsStartupTaskStore().Read("DagamiAgentProxy-ReadCheck-"+Guid.NewGuid().ToString("N"))==null,"Missing task cannot be read safely through the Windows backend");
   IntPtr module=LoadLibraryEx(exe,IntPtr.Zero,0x22);Assert(module!=IntPtr.Zero,"Cannot inspect executable manifest");
@@ -39,13 +42,14 @@ class StartupChecks {
    byte[] bytes=new byte[SizeofResource(module,resource)];Marshal.Copy(LockResource(LoadResource(module,resource)),bytes,0,bytes.Length);
    var manifest=new XmlDocument();manifest.LoadXml(Encoding.UTF8.GetString(bytes).TrimStart('\ufeff'));
    var request=manifest.SelectSingleNode("//*[local-name()='requestedExecutionLevel']");
-   Assert(request!=null&&request.Attributes["level"].Value=="requireAdministrator","App does not always request admin rights");
+   Assert(request!=null&&request.Attributes["level"].Value=="asInvoker","Application should normally run with the user's rights");
    Assert(request.Attributes["uiAccess"].Value=="false","Unexpected UIAccess privilege");
   }finally{FreeLibrary(module);}
   var tasks=new Tasks();string sid="S-1-5-21-111-222-333-1001";var startup=new NativeStartup(tasks,sid,exe);
   Assert(!startup.IsEnabled()&&tasks.Writes==0,"Startup was enabled without user choice");startup.SetEnabled(false);Assert(tasks.Deletes==0,"Disabling absent task creates or deletes unrelated tasks");
   string xml=startup.TaskXml();File.WriteAllText("startup-task-validation.xml",xml,new UTF8Encoding(false));
-  Assert(xml.Contains("HighestAvailable")&&xml.Contains("InteractiveToken")&&!xml.Contains("<Password>"),"Startup saves a password or lacks elevated interactive identity");
+  Assert(xml.Contains("LeastPrivilege")&&xml.Contains("InteractiveToken")&&!xml.Contains("<Password>"),"Startup saves a password or uses elevated rights");
+  tasks.Items[startup.TaskName]=xml.Replace("LeastPrivilege","HighestAvailable");Assert(startup.HasLegacyElevatedTask()&&!startup.IsEnabled(),"Legacy elevated task was not reported");startup.SetEnabled(true);Assert(startup.IsEnabled()&&!startup.HasLegacyElevatedTask(),"Legacy task was not safely migrated");startup.SetEnabled(false);tasks.Writes=0;tasks.Deletes=0;
   Assert(xml.Contains("--autostart")&&xml.Contains("IgnoreNew")&&xml.Contains("PT0S"),"Startup loses tray mode, duplicate guard or unlimited run time");
   startup.SetEnabled(true);Assert(startup.IsEnabled()&&tasks.Writes==1,"Startup enable/verify failed");
   startup.SetEnabled(false);Assert(!startup.IsEnabled()&&tasks.Deletes==1,"Startup disable failed");
@@ -69,6 +73,6 @@ class StartupChecks {
    tray.StartPosition=FormStartPosition.Manual;tray.Location=new Point(-20000,-20000);tray.Show();Application.DoEvents();Assert(!tray.Visible&&!tray.ShowInTaskbar,"Autostart opens a visible window instead of tray");
    typeof(MainForm).GetMethod("ShowNativeWindow",Private).Invoke(tray,null);Application.DoEvents();Assert(tray.Visible&&tray.Opacity==1,"Tray startup cannot reopen the main window");
   }
-  Console.WriteLine("PASS "+checks+" admin manifest, startup enable/disable/foreign-task guards, tray launch, blue actions and settings layout; no real startup task changed");return 0;
+  Console.WriteLine("PASS "+checks+" user-level manifest, startup migration/foreign-task guards, tray launch and settings layout; no real startup task changed");return 0;
  }catch(Exception ex){Console.Error.WriteLine(ex);return 1;}}
 }

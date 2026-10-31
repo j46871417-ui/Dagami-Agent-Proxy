@@ -79,7 +79,7 @@ def main():
     source=output/'dagami-agent-proxy-source.zip'
     names=['.gitignore','.gitattributes','.gitleaks.toml','.githooks/pre-commit',
            'devproxy_gui.py','pyproject.toml','PORTABLE.md','BUILD_LINUX_MACOS.md',
-           'README.md','MATRIX.md','BUG_REPORTS.md','RELEASE_NOTES.md','CHANGELOG.md','AGENTS.md',
+           'README.md','MATRIX.md','APPLICATIONS.md','BUG_REPORTS.md','RELEASE_NOTES.md','CHANGELOG.md','AGENTS.md',
            'SYSTEM_DNS.md','SOURCE_POLICY.md','STARTUP.md','LICENSE',
            'tools/build_portable.py','tools/build_native_app.py','tools/install_portable.py','install.sh',
            'src/SystemDns.ps1','src/app.manifest',*['src/'+name for name in NATIVE_SOURCES]]
@@ -109,7 +109,7 @@ def main():
         (native/'SHA256-native.json').write_text(json.dumps(hashes,indent=2)+'\n',encoding='utf-8')
         archive=output/f'dagami-agent-proxy-{host}-{arch}.zip'
         with zipfile.ZipFile(archive,'w',zipfile.ZIP_DEFLATED) as package:
-            for path in (exe,native/'SHA256-native.json',ROOT/'README.md',ROOT/'RELEASE_NOTES.md',ROOT/'BUG_REPORTS.md',ROOT/'MATRIX.md',ROOT/'SYSTEM_DNS.md',ROOT/'SOURCE_POLICY.md',ROOT/'STARTUP.md',ROOT/'PORTABLE.md',ROOT/'LICENSE'):
+            for path in (exe,native/'SHA256-native.json',ROOT/'README.md',ROOT/'RELEASE_NOTES.md',ROOT/'BUG_REPORTS.md',ROOT/'MATRIX.md',ROOT/'APPLICATIONS.md',ROOT/'SYSTEM_DNS.md',ROOT/'SOURCE_POLICY.md',ROOT/'STARTUP.md',ROOT/'PORTABLE.md',ROOT/'LICENSE'):
                 package.write(path,path.name)
         manifest={p.name:hashlib.sha256(p.read_bytes()).hexdigest() for p in (source,archive)}
         (output/f'SHA256-{host}-{arch}.json').write_text(json.dumps(manifest,indent=2)+'\n',encoding='utf-8')

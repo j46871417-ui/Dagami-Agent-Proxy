@@ -1,5 +1,8 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
+using System.Net;
+using System.Net.NetworkInformation;
 using System.Net.Security;
 using System.Net.Sockets;
 using System.Security.Authentication;
@@ -9,6 +12,18 @@ namespace DevProxyApp {
  public sealed class UpstreamConnectException : IOException {
   public int Status {get;private set;}
   public UpstreamConnectException(int status):base("Upstream proxy refused CONNECT; HTTP status="+status){Status=status;}
+ }
+ // Availability of the selected bridge route, not just a separate upstream.
+ public static class ConnectionDiagnostics {
+  public static ProxyProbeResult Check(int bridgePort,Func<int,string> probe=null){
+   if(bridgePort<=0)return new ProxyProbeResult{Message="Локальный мост не запущен."};
+   try {
+    string result=(probe??AntigravityDiagnostics.ProbeUserInfo)(bridgePort);
+    return new ProxyProbeResult{Available=true,Status=401,Message="Проверен только маршрут userinfo; ответ модели и регион API не проверены. "+result};
+   }catch(Exception error){
+    return new ProxyProbeResult{Message="Проверка маршрута через Dagami не прошла ("+error.GetType().Name+"). Проверьте журнал; доступ аккаунта не проверен."};
+   }
+  }
  }
  public static class TlsDiagnostics {
   public static SslStream Connect(Stream stream,string host,string layer,int timeoutMilliseconds=10000,bool checkRevocation=true) {
@@ -38,6 +53,13 @@ namespace DevProxyApp {
   public string Message {get;set;}
  }
  public static class UpstreamProxyDiagnostics {
+  public static bool IsDnsEndpointMistakenForProxy(string value) {
+   if (string.IsNullOrWhiteSpace(value)) return false;
+   Uri proxy;if(!Uri.TryCreate(value.Trim(),UriKind.Absolute,out proxy))return false;
+   string host=proxy.IdnHost.TrimEnd('.').ToLowerInvariant();
+   return host=="dns.dagami.ru" || host=="dns.magicdns.ru" || host=="dns.comss.one" || host=="dns.geohide.ru" || host=="dns.xbox-dns.ru" || host=="dns.malw.link";
+  }
+
   public static bool TryParse(string value,out Uri proxy) {
    proxy=null;
    return !string.IsNullOrWhiteSpace(value)&&Uri.TryCreate(value.Trim(),UriKind.Absolute,out proxy)&&
@@ -73,6 +95,99 @@ namespace DevProxyApp {
     }
    }catch(AuthenticationException error){return new ProxyProbeResult{Message=error.Message};}
    catch(Exception error){return new ProxyProbeResult{Message="Прокси не прошёл проверку CONNECT ("+error.GetType().Name+"). Проверьте адрес, порт и доступность сервера."};}
+  }
+ }
+
+ public sealed class VpnCompatibilityReport {
+  public bool HasActiveVpn {get;set;}
+  public bool HasFakeIpDns {get;set;}
+  public bool HasProxyLoop {get;set;}
+  public string[] ActiveVpnAdapters {get;set;}
+  public int[] LocalVpnPorts {get;set;}
+  public string StatusBadge {get;set;}
+  public string DetailedReport {get;set;}
+ }
+
+ public static class VpnDiagnostics {
+  static readonly string[] VpnMarkers=new[]{
+   "wintun","wireguard","amnezia","tap-windows","openvpn","sing-tun","nekoray","mihomo",
+   "clash","outline","tailscale","zerotier","radmin","hamachi","vpn","tun","tap","warp","v2ray","xray","hiddify"
+  };
+  static readonly int[] KnownLocalVpnPorts=new[]{10808,10809,2080,2081,7890,7891,1080};
+
+  public static bool IsVirtualVpnAdapter(string name,string description,NetworkInterfaceType type) {
+   if(type==NetworkInterfaceType.Ppp||type==NetworkInterfaceType.Tunnel)return true;
+   string combined=((name??"")+" "+(description??"")).ToLowerInvariant();
+   foreach(string marker in VpnMarkers)if(combined.Contains(marker))return true;
+   return false;
+  }
+
+  public static bool IsFakeIpAddress(IPAddress address) {
+   if(address==null||address.AddressFamily!=AddressFamily.InterNetwork)return false;
+   byte[] b=address.GetAddressBytes();
+   return (b[0]==198&&(b[1]==18||b[1]==19))||(b[0]==100&&(b[1]>=64&&b[1]<=127));
+  }
+
+  public static VpnCompatibilityReport Inspect(string configuredProxy,int bridgePort,bool checkDns=true) {
+   var vpnAdapters=new List<string>();
+   try {
+    foreach(var nic in NetworkInterface.GetAllNetworkInterfaces()) {
+     if(nic.OperationalStatus!=OperationalStatus.Up||nic.NetworkInterfaceType==NetworkInterfaceType.Loopback)continue;
+     if(IsVirtualVpnAdapter(nic.Name,nic.Description,nic.NetworkInterfaceType))
+      vpnAdapters.Add(nic.Name+(string.IsNullOrEmpty(nic.Description)?"":" ("+nic.Description+")"));
+    }
+   } catch {}
+
+   var localPorts=new List<int>();
+   try {
+    var listeners=IPGlobalProperties.GetIPGlobalProperties().GetActiveTcpListeners();
+    foreach(int port in KnownLocalVpnPorts) {
+     if(port==bridgePort)continue;
+     foreach(var ep in listeners)if(ep.Port==port){if(!localPorts.Contains(port))localPorts.Add(port);break;}
+    }
+   } catch {}
+
+   bool loop=false;
+   Uri parsed;
+   if(UpstreamProxyDiagnostics.TryParse(configuredProxy,out parsed)&&bridgePort>0&&LocalProxyBridge.IsBridgeEndpoint(parsed,bridgePort))
+    loop=true;
+
+   bool fakeIp=false;
+   string sampleResolved=null;
+   if(checkDns) {
+    try {
+     var addresses=Dns.GetHostAddresses("cloudcode-pa.googleapis.com");
+     foreach(var addr in addresses) {
+      if(sampleResolved==null)sampleResolved=addr.ToString();
+      if(IsFakeIpAddress(addr)){fakeIp=true;sampleResolved=addr.ToString();break;}
+     }
+    } catch {}
+   }
+
+   bool hasVpn=vpnAdapters.Count>0||localPorts.Count>0;
+   string badge=loop?"VPN/Прокси: петля портов":
+    fakeIp?"VPN активен (Fake-IP обходится через DoH)":
+    hasVpn?"VPN: совместим ("+(vpnAdapters.Count>0?vpnAdapters[0].Split('(')[0].Trim():"порт "+localPorts[0])+")":
+    "VPN: не обнаружен (прямой режим)";
+
+   var report=new StringBuilder();
+   report.AppendLine("[Проверка совместимости с VPN и внешними прокси]");
+   report.AppendLine("Активные TUN/VPN-интерфейсы: "+(vpnAdapters.Count==0?"не обнаружены":string.Join(", ",vpnAdapters.ToArray())));
+   report.AppendLine("Локальные порты VPN-клиентов (v2rayN/Nekoray/Clash): "+(localPorts.Count==0?"не обнаружены":string.Join(", ",localPorts.ConvertAll(p=>p.ToString()).ToArray())));
+   if(loop)report.AppendLine("ВНИМАНИЕ: Адрес прокси указывает на собственный локальный мост Dagami (порт "+bridgePort+"). Измените порт прокси.");
+   if(fakeIp)report.AppendLine("Обнаружен перехват системного DNS режимом Fake-IP ("+sampleResolved+"). Шифрованный DNS Dagami (DoH/DoT) обходит Fake-IP и возвращает реальные адреса Google/AI.");
+   else if(sampleResolved!=null)report.AppendLine("Системный DNS для cloudcode-pa.googleapis.com: "+sampleResolved+" (без Fake-IP).");
+   report.AppendLine("Защита адаптеров: виртуальные TUN-интерфейсы VPN исключены из автовыбора при смене DNS всей сети.");
+
+   return new VpnCompatibilityReport {
+    HasActiveVpn=hasVpn,
+    HasFakeIpDns=fakeIp,
+    HasProxyLoop=loop,
+    ActiveVpnAdapters=vpnAdapters.ToArray(),
+    LocalVpnPorts=localPorts.ToArray(),
+    StatusBadge=badge,
+    DetailedReport=report.ToString().TrimEnd()
+   };
   }
  }
 }

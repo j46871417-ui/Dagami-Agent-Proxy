@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Drawing;
 using System.IO;
 using System.Text;
@@ -14,8 +14,8 @@ namespace DevProxyApp
         {
             var page = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 3, BackColor = FluentTheme.Background };
             page.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
-            page.RowStyles.Add(new RowStyle(SizeType.Absolute, 106));
-            page.RowStyles.Add(new RowStyle(SizeType.Absolute, 55));
+            page.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+            page.RowStyles.Add(new RowStyle(SizeType.AutoSize));
             page.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
             var card = new FluentCard { Dock = DockStyle.Fill };
             var body = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 3, BackColor = FluentTheme.Surface };
@@ -25,7 +25,7 @@ namespace DevProxyApp
 
             body.Controls.Add(new Label { Dock = DockStyle.Fill, ForeColor = FluentTheme.Muted,
                 Text = "Проверка разделяет ошибки прокси, DNS и сертификата. Она не входит в аккаунт и не отправляет запрос модели. Вход завершите в IDE." }, 0, 2);
-            body.RowStyles.Add(new RowStyle(SizeType.Absolute, 32)); body.RowStyles.Add(new RowStyle(SizeType.Absolute, 0)); body.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+            body.RowStyles.Add(new RowStyle(SizeType.AutoSize)); body.RowStyles.Add(new RowStyle(SizeType.Absolute, 0)); body.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
             card.Controls.Add(body); page.Controls.Add(card, 0, 0);
             var actions = new FlowLayoutPanel { Dock = DockStyle.Fill, WrapContents = false, AutoScroll = true };
             AddNativeButton(actions, "Вход через прокси", OpenAntigravityLogin);
@@ -51,13 +51,13 @@ namespace DevProxyApp
             if (target == null) throw new InvalidOperationException("Antigravity не найден. Добавьте Antigravity.exe, Antigravity IDE.exe или agy.exe в список приложений.");
             if (operation == "restore" && MessageBox.Show(this, "Вернуть оригинальный backend выбранного клиента из резервной копии? Если IDE использует общий agy, изменение затронет и CLI.",
                 "Отмена подготовки", MessageBoxButtons.YesNo, MessageBoxIcon.Warning, MessageBoxDefaultButton.Button2) != DialogResult.Yes) return;
-            if (operation == "diagnose") SaveNativeSettings();
+            if (operation == "diagnose" && !SaveNativeSettings()) return;
             _nativeBusy = true; SetNativeButtonsEnabled(false);
             _antigravityReport.Text = "Выполняется проверка…";
             int bridgePort = _bridgePort;
             string dnsHost = ConfigManager.Instance.DnsHost;
             bool useDns = ConfigManager.Instance.UseDagamiDns;
-            string proxy = ConfigManager.Instance.LastProxy;
+            string proxy = ConfigManager.Instance.EffectiveProxy;
             System.Threading.ThreadPool.QueueUserWorkItem(o => {
                 var report = new StringBuilder();bool successful=false;
                 try {
@@ -81,6 +81,11 @@ namespace DevProxyApp
                             } catch (Exception ex) { report.AppendLine(host + ": " + ex.Message); }
                         }
                         if (_rescueBridge != null) report.AppendLine(_rescueBridge.RouteReport());
+                        report.AppendLine("Защита от автообновлений Antigravity: " + (ConfigManager.Instance.BlockAntigravityUpdates ? "включена (обновления заблокированы)" : "выключена"));
+                        try { report.AppendLine(VpnDiagnostics.Inspect(proxy, bridgePort).DetailedReport); }
+                        catch (Exception ex) { report.AppendLine("Проверка VPN: " + ex.Message); }
+                        try { report.AppendLine(DpiEngineManager.ProbeStrategies().Summary); }
+                        catch (Exception ex) { report.AppendLine("Проверка обфускации DPI: " + ex.Message); }
                         report.AppendLine("Авторизация и ответ модели: не проверены. Завершите вход в Antigravity.");
                     }
                 } catch (UnauthorizedAccessException) {

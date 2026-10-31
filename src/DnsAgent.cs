@@ -19,15 +19,85 @@ namespace DevProxyApp {
   readonly Dictionary<string,DateTime> cooldown=new Dictionary<string,DateTime>();
   public int Port {get;private set;}
   public LocalDnsAgent(Func<byte[],byte[]> resolver=null){exchange=resolver??Forward;}
+  static readonly object customSync=new object();
+  static DateTime customWriteUtc=DateTime.MinValue;
+  static DnsEndpoint[] cachedCustomPool;
+  static DnsEndpoint[] ActivePool(){
+   try{
+    string customPath=Path.Combine(DnsServiceHost.DirectoryPath,"dns-custom.json");
+    if(File.Exists(customPath)){
+     DateTime writeUtc=File.GetLastWriteTimeUtc(customPath);
+     lock(customSync){
+      if(writeUtc!=customWriteUtc&&new FileInfo(customPath).Length<16384){
+       customWriteUtc=writeUtc;cachedCustomPool=null;
+       var cfg=new JavaScriptSerializer().Deserialize<Dictionary<string,object>>(File.ReadAllText(customPath));
+       if(cfg!=null){
+        if(cfg.ContainsKey("DnsObfuscation")){bool obf=Convert.ToBoolean(cfg["DnsObfuscation"]);if(ConfigManager.Instance.DnsObfuscation!=obf)ConfigManager.Instance.DnsObfuscation=obf;}
+        if(cfg.ContainsKey("DpiDesyncMode")){string dpi=Convert.ToString(cfg["DpiDesyncMode"]);if(ConfigManager.Instance.DpiDesyncMode!=dpi)ConfigManager.Instance.DpiDesyncMode=dpi;}
+        if(cfg.ContainsKey("Spec")){
+         string spec=Convert.ToString(cfg["Spec"]);
+         if(!string.IsNullOrEmpty(spec)&&ConfigManager.Instance.DnsHost!=spec)ConfigManager.Instance.DnsHost=spec;
+         var customPool=DnsProviders.ExtendedPool(spec);
+         if(customPool!=null&&customPool.Length>0)cachedCustomPool=customPool;
+         else{IPAddress plainIp;if(IPAddress.TryParse(spec,out plainIp))cachedCustomPool=new[]{new DnsEndpoint("custom-udp",plainIp.ToString(),plainIp.ToString(),"","UDP",53)};}
+        }
+       }
+      }
+      if(cachedCustomPool!=null&&cachedCustomPool.Length>0)return cachedCustomPool;
+     }
+    }
+   }catch{}
+   var configured=DnsProviders.ExtendedPool(ConfigManager.Instance.DnsHost);
+   if(configured!=null&&configured.Length>0)return configured;
+   return DnsProviders.AllBuiltInEndpoints();
+  }
+  static int MaxUdpPayload(byte[] query){
+   try{
+    if(query==null||query.Length<12)return 512;
+    int arCount=(query[10]<<8)|query[11];if(arCount==0)return 512;
+    int offset=DnsHttpsTransport.QuestionLength(query);
+    int rrs=((query[6]<<8)|query[7])+((query[8]<<8)|query[9]);
+    for(int i=0;i<rrs&&offset<query.Length;i++){
+     while(offset<query.Length){int len=query[offset];if(len==0){offset++;break;}if((len&192)==192){offset+=2;break;}offset+=1+len;}
+     if(offset+10>query.Length)return 512;
+     int rdlen=(query[offset+8]<<8)|query[offset+9];offset+=10+rdlen;
+    }
+    for(int i=0;i<arCount&&offset<query.Length;i++){
+     if(query[offset]==0&&offset+11<=query.Length&&((query[offset+1]<<8)|query[offset+2])==41){
+      int size=(query[offset+3]<<8)|query[offset+4];
+      return Math.Max(512,Math.Min(size,1232));
+     }
+     while(offset<query.Length){int len=query[offset];if(len==0){offset++;break;}if((len&192)==192){offset+=2;break;}offset+=1+len;}
+     if(offset+10>query.Length)break;
+     int rdlen=(query[offset+8]<<8)|query[offset+9];offset+=10+rdlen;
+    }
+   }catch{}
+   return 512;
+  }
   byte[] Forward(byte[] query){
    var preferred=new List<DnsEndpoint>();var delayed=new List<DnsEndpoint>();
-   foreach(var endpoint in DnsProviders.Snapshot()){bool cooling;lock(sync){DateTime until;cooling=cooldown.TryGetValue(endpoint.Address,out until)&&until>DateTime.UtcNow;}(cooling?delayed:preferred).Add(endpoint);}preferred.AddRange(delayed);
+   foreach(var endpoint in ActivePool()){
+    string key=endpoint.Protocol+":"+endpoint.Address+":"+endpoint.Port;
+    bool cooling;lock(sync){DateTime until;cooling=cooldown.TryGetValue(key,out until)&&until>DateTime.UtcNow;}
+    (cooling?delayed:preferred).Add(endpoint);
+   }
+   preferred.AddRange(delayed);
    var elapsed=Stopwatch.StartNew();
    int remainingAttempts=preferred.Count;
-   foreach(var endpoint in preferred){int remaining=6500-(int)elapsed.ElapsedMilliseconds;if(remaining<=0)break;
-    int timeout=Math.Min(2400,Math.Max(250,remaining/Math.Max(1,remainingAttempts--)));
-    try{byte[] response=DnsHttpsTransport.Exchange(endpoint,query,Math.Min(timeout,remaining));if((response[3]&15)==2)throw new IOException("Resolver SERVFAIL.");lock(sync)cooldown.Remove(endpoint.Address);return response;}
-    catch(Exception error){if(!(error is IOException)&&!(error is InvalidDataException)&&!(error is SocketException)&&!(error is System.TimeoutException)&&!(error is System.Security.Authentication.AuthenticationException))throw;lock(sync)cooldown[endpoint.Address]=DateTime.UtcNow.AddSeconds(30);}
+   foreach(var endpoint in preferred){
+    int remaining=10000-(int)elapsed.ElapsedMilliseconds;if(remaining<=0)break;
+    string key=endpoint.Protocol+":"+endpoint.Address+":"+endpoint.Port;
+    int timeout=DnsProviders.AttemptTimeout(remaining,remainingAttempts--,2400);
+    try{
+     byte[] response=DnsHttpsTransport.Exchange(endpoint,query,Math.Min(timeout,remaining));
+     if((response[3]&15)==2)throw new IOException("Resolver SERVFAIL.");
+     lock(sync)cooldown.Remove(key);
+     return response;
+    }
+    catch(Exception error){
+     if(!(error is IOException)&&!(error is InvalidDataException)&&!(error is SocketException)&&!(error is System.TimeoutException)&&!(error is System.Security.Authentication.AuthenticationException))throw;
+     lock(sync)cooldown[key]=DateTime.UtcNow.AddSeconds(30);
+    }
    }
    throw new IOException("All encrypted DNS resolvers are unavailable.");
   }
@@ -43,15 +113,25 @@ namespace DevProxyApp {
    UdpClient datagrams=null;try{datagrams=new UdpClient(address.AddressFamily);datagrams.Client.ExclusiveAddressUse=true;if(address.AddressFamily==AddressFamily.InterNetworkV6)datagrams.Client.DualMode=false;datagrams.Client.Bind(new IPEndPoint(address,((IPEndPoint)stream.LocalEndpoint).Port));tcp.Add(stream);udp.Add(datagrams);}catch{stream.Stop();if(datagrams!=null)datagrams.Close();throw;}
   }
   static byte[] Failure(byte[] query){if(query==null||query.Length<12)return null;int length;try{length=DnsHttpsTransport.QuestionLength(query);}catch{length=12;}byte[] response=new byte[length];Array.Copy(query,response,length);response[2]=(byte)(128|(query[2]&1));response[3]=130;if(length==12)response[4]=response[5]=0;for(int i=6;i<12;i++)response[i]=0;return response;}
-  byte[] Answer(byte[] query){try{if(query.Length>65535||query.Length<12||(query[2]&248)!=0)throw new InvalidDataException();byte[] response=exchange(query);if(response.Length<12||response.Length>65535||response[0]!=query[0]||response[1]!=query[1]||!DnsHttpsTransport.SameQuestion(query,response))throw new InvalidDataException();return response;}catch{return Failure(query);}}
+  static byte[] NxDomain(byte[] query){byte[] response=Failure(query);if(response!=null)response[3]=131;return response;}
+  byte[] Answer(byte[] query){
+   try{
+    if(query.Length>65535||query.Length<12||(query[2]&248)!=0)throw new InvalidDataException();
+    string qname=DnsHttpsTransport.QuestionName(query);
+    if(qname!=null&&AntigravityUpdateGuard.ShouldBlockUpdaterHost(qname))return NxDomain(query);
+    byte[] response=exchange(query);
+    if(response.Length<12||response.Length>65535||response[0]!=query[0]||response[1]!=query[1]||!DnsHttpsTransport.SameQuestion(query,response))throw new InvalidDataException();
+    return response;
+   }catch{return Failure(query);}
+  }
   void ReceiveUdp(UdpClient listener){while(running)try{IPEndPoint peer=null;byte[] query=listener.Receive(ref peer);IPEndPoint destination=peer;if(!IPAddress.IsLoopback(peer.Address))continue;if(!slots.Wait(0)){byte[] busy=Failure(query);if(busy!=null)listener.Send(busy,busy.Length,destination);continue;}
-    ThreadPool.QueueUserWorkItem(state=>{try{byte[] response=Answer(query);if(response!=null){if(response.Length>512){byte code=(byte)(response[3]&143);response=Failure(query);response[2]|=2;response[3]=code;}listener.Send(response,response.Length,destination);}}catch{}finally{slots.Release();}});
+    ThreadPool.QueueUserWorkItem(state=>{try{byte[] response=Answer(query);if(response!=null){int maxUdp=MaxUdpPayload(query);if(response.Length>maxUdp){byte code=(byte)(response[3]&143);response=Failure(query);response[2]|=2;response[3]=code;}listener.Send(response,response.Length,destination);}}catch{}finally{slots.Release();}});
    }catch(SocketException){if(!running)return;}catch(ObjectDisposedException){return;}}
   static byte[] Read(Stream stream,int length){byte[] bytes=new byte[length];int offset=0;while(offset<length){int count=stream.Read(bytes,offset,length-offset);if(count==0)throw new EndOfStreamException();offset+=count;}return bytes;}
   void ReceiveTcp(TcpListener listener){while(running)try{var client=listener.AcceptTcpClient();if(!slots.Wait(0)){client.Close();continue;}lock(sync){if(!running){client.Close();slots.Release();return;}clients.Add(client);}
     ThreadPool.QueueUserWorkItem(state=>{try{using(client){var stream=client.GetStream();stream.ReadTimeout=8000;stream.WriteTimeout=8000;for(int queries=0;queries<16&&running;queries++){byte[] prefix=Read(stream,2);int length=(prefix[0]<<8)|prefix[1];if(length<12)break;byte[] response=Answer(Read(stream,length));if(response==null)break;stream.WriteByte((byte)(response.Length>>8));stream.WriteByte((byte)response.Length);stream.Write(response,0,response.Length);stream.Flush();}}}catch{}finally{lock(sync)clients.Remove(client);slots.Release();}});
    }catch(SocketException){if(!running)return;}catch(ObjectDisposedException){return;}}
-  public void Dispose(){running=false;foreach(var socket in udp)socket.Close();foreach(var socket in tcp)socket.Stop();lock(sync){foreach(var client in clients)client.Close();clients.Clear();}udp.Clear();tcp.Clear();}
+  public void Dispose(){running=false;foreach(var socket in udp)socket.Close();foreach(var socket in tcp)tcp.ForEach(s=>s.Stop());lock(sync){foreach(var client in clients)client.Close();clients.Clear();}udp.Clear();tcp.Clear();}
  }
  public sealed class DagamiDnsWindowsService : ServiceBase {
   LocalDnsAgent agent;
@@ -79,7 +159,16 @@ namespace DevProxyApp {
   public static bool Probe(){return Probe(IPAddress.Loopback);}
   public static bool IsRunning(){try{var control=new WindowsDnsServiceControl();string executable=Path.Combine(DirectoryPath,"DagamiAgentProxy.exe"),marker=Path.Combine(DirectoryPath,"owner.json"),image=NativeShortcuts.Quote(executable)+" --dns-service";if(!control.Exists()||!File.Exists(marker)||control.ImagePath()!=image)return false;using(var service=new ServiceController(ServiceName))return service.Status==ServiceControllerStatus.Running;}catch{return false;}}
   public static bool Probe(IPAddress address){try{byte[] question=DnsHttpsTransport.Question("example.com");using(var client=new UdpClient(address.AddressFamily)){client.Client.ReceiveTimeout=10000;client.Connect(address,53);client.Send(question,question.Length);IPEndPoint peer=null;byte[] answer=client.Receive(ref peer);int ttl;ScopedDnsResolver.ParseAnswer(answer,new byte[]{0,0},"example.com",out ttl);return true;}}catch{return false;}}
-  public static void EnsureInstalled(){SystemDnsManager.ProtectServiceDirectory(DirectoryPath);EnsureInstalled(DirectoryPath,Assembly.GetExecutingAssembly().Location,new WindowsDnsServiceControl(),Probe);}
+  public static void SaveCustomUpstream(string spec){
+   try{
+    Directory.CreateDirectory(DirectoryPath);
+    string customPath=Path.Combine(DirectoryPath,"dns-custom.json");
+    string targetSpec=(spec??"").Trim();
+    if(string.IsNullOrEmpty(targetSpec))targetSpec="dns.dagami.ru";
+    File.WriteAllText(customPath,new JavaScriptSerializer().Serialize(new{Spec=targetSpec,DnsObfuscation=ConfigManager.Instance.DnsObfuscation,DpiDesyncMode=ConfigManager.Instance.DpiDesyncMode}),new System.Text.UTF8Encoding(false));
+   }catch{}
+  }
+  public static void EnsureInstalled(){SystemDnsManager.ProtectServiceDirectory(DirectoryPath);SaveCustomUpstream(ConfigManager.Instance.DnsHost);EnsureInstalled(DirectoryPath,Assembly.GetExecutingAssembly().Location,new WindowsDnsServiceControl(),Probe);}
   public static void StopOwned(){var control=new WindowsDnsServiceControl();if(!control.Exists())return;string executable=Path.Combine(DirectoryPath,"DagamiAgentProxy.exe"),marker=Path.Combine(DirectoryPath,"owner.json"),image=NativeShortcuts.Quote(executable)+" --dns-service";if(!File.Exists(marker)||control.ImagePath()!=image)throw new IOException("Foreign DNS service was not stopped.");var owner=new JavaScriptSerializer().Deserialize<Dictionary<string,object>>(File.ReadAllText(marker));if(Convert.ToString(owner["ImagePath"])!=image)throw new IOException("DNS service ownership mismatch.");control.Stop();}
   internal static void EnsureInstalled(string directory,string source,IDnsServiceControl control,Func<bool> probe){
    directory=Path.GetFullPath(directory);Directory.CreateDirectory(directory);if((File.GetAttributes(directory)&FileAttributes.ReparsePoint)!=0)throw new IOException("DNS service directory is a reparse point.");

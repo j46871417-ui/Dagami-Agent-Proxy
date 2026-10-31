@@ -171,7 +171,7 @@ namespace DevProxyApp {
             var card = new Panel {
                 Location = new Point(32, 142),
                 Size = new Size(456, 126),
-                BackColor = Color.FromArgb(16, 29, 51)
+                BackColor = FluentTheme.Surface, BorderStyle = BorderStyle.FixedSingle
             };
             Controls.Add(card);
 
@@ -189,7 +189,7 @@ namespace DevProxyApp {
                 Size = new Size(424, 28),
                 Font = new Font("Consolas", 12.5f, FontStyle.Bold),
                 ForeColor = FluentTheme.Text,
-                BackColor = Color.FromArgb(10, 18, 32),
+                BackColor = Color.FromArgb(248, 250, 254),
                 BorderStyle = BorderStyle.FixedSingle,
                 CharacterCasing = CharacterCasing.Upper
             };
@@ -205,7 +205,7 @@ namespace DevProxyApp {
                 Location = new Point(16, 70),
                 AutoSize = true,
                 Font = new Font("Segoe UI", 8),
-                ForeColor = Color.FromArgb(80, 104, 138),
+                ForeColor = FluentTheme.Muted,
                 Text = "Формат: DAGAMI-XXXX-XXXX-XXXX"
             };
             card.Controls.Add(hintLabel);
@@ -223,13 +223,13 @@ namespace DevProxyApp {
                 Location = new Point(32, 288),
                 Size = new Size(244, 42),
                 FlatStyle = FlatStyle.Flat,
-                BackColor = Color.FromArgb(23, 41, 72),
+                BackColor = Color.FromArgb(235, 243, 255),
                 ForeColor = FluentTheme.Accent,
                 Font = new Font("Segoe UI", 9.5f, FontStyle.Bold),
                 Text = "Получить ключ в @bright26bot",
                 Cursor = Cursors.Hand
             };
-            _botBtn.FlatAppearance.BorderColor = Color.FromArgb(33, 67, 110);
+            _botBtn.FlatAppearance.BorderColor = Color.FromArgb(191, 219, 254);
             _botBtn.Click += (s, e) => {
                 try {
                     Process.Start(new ProcessStartInfo(LicenseManager.BotUrl) { UseShellExecute = true });

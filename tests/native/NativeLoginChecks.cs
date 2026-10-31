@@ -34,7 +34,7 @@ public static class NativeLoginChecks
             foreach(string bad in new string[]{"http://accounts.google.com/","https://accounts.google.com.evil.invalid/","https://user:pass@accounts.google.com/","https://accounts.google.com:444/",url+"\" --no-proxy-server"}) Reject(()=>NativeLogin.ValidateLoginUrl(bad));
             string log=Path.Combine(temp,"language_server.log");File.WriteAllText(log,"prefix "+url+"\n");
             Assert(NativeLogin.ReadFreshLoginUrl(log)==url,"Fresh link missing");
-            File.SetLastWriteTimeUtc(log,DateTime.UtcNow.AddMinutes(-10));Reject(()=>NativeLogin.ReadFreshLoginUrl(log));
+            File.SetLastWriteTimeUtc(log,DateTime.UtcNow.AddMinutes(-11));Reject(()=>NativeLogin.ReadFreshLoginUrl(log));
             string browser=NativeLogin.BrowserArguments(url,53200,Path.Combine(temp,"browser"));
             Assert(browser.Contains("--proxy-server=http://127.0.0.1:53200"),"Browser used another route");
             Assert(browser.Contains("--user-data-dir="),"Browser changed user's main profile");

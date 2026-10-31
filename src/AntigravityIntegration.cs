@@ -123,7 +123,7 @@ namespace DevProxyApp
             } catch (Exception error) {
                 try { Rollback(before); }
                 catch (Exception rollback) { throw new IOException(error.Message + " " + rollback.Message, error); }
-                throw;
+                return new AntigravityPreparationResult(false, "Подготовка не выполнена; исходные файлы сохранены. Обычный запуск через прокси доступен. Причина: " + error.GetType().Name);
             }
         }
         public static string InspectClient(string executable) {
@@ -140,14 +140,15 @@ namespace DevProxyApp
         }
         public static string ClientPreparationStatus(string executable) {
             try {
-                int prepared=0,unprepared=0,unsupported=0;
+                int prepared=0,unprepared=0,unsupported=0,upgrade=0;
                 foreach(string path in BackendPaths(executable))try{
                     string detail=Inspect(path);
                     if(detail.StartsWith("Клиент подготовлен;"))prepared++;
-                    else if(detail.StartsWith("Прежняя подготовка CLI"))unsupported++;
+                    else if(detail.StartsWith("Прежняя подготовка CLI"))upgrade++;
                     else unprepared++;
                 }catch(UnsupportedAntigravityBinaryException){unsupported++;}
-                if(prepared>0&&(unprepared>0||unsupported>0))return "Патч: частично применён";
+                if(prepared>0&&(unprepared>0||unsupported>0||upgrade>0))return "Патч: частично применён";
+                if(upgrade>0)return "Патч: требуется повторная подготовка CLI / IDE";
                 if(unsupported>0)return "Патч: версия или состояние не поддерживается";
                 if(unprepared>0)return "Патч: не применён";
                 return prepared>0?"Патч: применён, копия проверена":"Патч: backend не найден";
@@ -160,6 +161,7 @@ namespace DevProxyApp
         public static string RestoreClient(string executable, string localAppData, string userProfile) {
             var messages = new List<string>(); var errors = new List<string>();
             foreach (string path in BackendPaths(executable,localAppData,userProfile)) {
+                if(!File.Exists(path + ManifestSuffix)){messages.Add(Path.GetFileName(path)+": Dagami не изменял этот backend.");continue;}
                 try { messages.Add(Path.GetFileName(path) + ": " + Restore(path)); }
                 catch (Exception ex) { errors.Add(Path.GetFileName(path) + ": " + ex.Message); }
             }
@@ -175,11 +177,14 @@ namespace DevProxyApp
         private static List<int> FindAll(byte[] data, byte[] needle)
         {
             var result = new List<int>();
-            for (int i = 0; i <= data.Length - needle.Length; i++) {
-                if (data[i] != needle[0]) continue;
-                int j = 1;
-                while (j < needle.Length && data[i + j] == needle[j]) j++;
-                if (j == needle.Length) { result.Add(i); i += needle.Length - 1; }
+            if(needle.Length==0)throw new ArgumentException("Empty binary signature.");
+            var skip=new int[256];for(int i=0;i<skip.Length;i++)skip[i]=needle.Length;
+            for(int i=0;i<needle.Length-1;i++)skip[needle[i]]=needle.Length-1-i;
+            for(int offset=0;offset<=data.Length-needle.Length;) {
+                int last=data[offset+needle.Length-1],j=needle.Length-1;
+                while(j>=0&&data[offset+j]==needle[j])j--;
+                if(j<0){result.Add(offset);offset+=needle.Length;}
+                else offset+=skip[last];
             }
             return result;
         }
@@ -198,8 +203,19 @@ namespace DevProxyApp
                 // Unknown/partially modified files are never patched by guesswork.
                 bool go = FindAll(original, Encoding.ASCII.GetBytes("Go build ID:")).Count > 0 ||
                     FindAll(original, Encoding.ASCII.GetBytes("Go buildinf:")).Count > 0;
-                bool descriptor = FindAll(original, Encoding.ASCII.GetBytes("\n\nineligible\x18")).Count > 0;
-                bool tag = FindAll(original, Encoding.ASCII.GetBytes("name=ineligible,")).Count > 0;
+                bool descriptor = FindAll(original, Encoding.ASCII.GetBytes("\n\nineligible\x18")).Count > 0 || FindAll(original, Encoding.ASCII.GetBytes("\n\x10ineligible_tiers")).Count > 0 || FindAll(original, Encoding.ASCII.GetBytes("R\x0fineligibleTiers")).Count > 0;
+                bool tag = FindAll(original, Encoding.ASCII.GetBytes("name=ineligible,")).Count > 0 || FindAll(original, Encoding.ASCII.GetBytes("name=ineligible_tiers,")).Count > 0 || FindAll(original, Encoding.ASCII.GetBytes("json:\"ineligible_tiers,")).Count > 0;
+                if (go && !descriptor && !tag && FindAll(original, Encoding.ASCII.GetBytes("ineligible")).Count == 0 && FindAll(original, Encoding.ASCII.GetBytes("dpeligible")).Count == 0) {
+                    bool legacyInex = (FindAll(original, Encoding.ASCII.GetBytes("\n\ninexigible\x18")).Count > 0 || FindAll(original, Encoding.ASCII.GetBytes("\n\x10inexigible_tiers")).Count > 0) &&
+                        (FindAll(original, Encoding.ASCII.GetBytes("name=inexigible,")).Count > 0 || FindAll(original, Encoding.ASCII.GetBytes("name=inexigible_tiers,")).Count > 0);
+                    if (legacyInex) {
+                        var inexMatches = FindAll(original, Encoding.ASCII.GetBytes("inexigible"));
+                        if (inexMatches.Count >= 2 && inexMatches.Count <= 64) {
+                            foreach (int offset in inexMatches) { offsets.Add(offset); replacements.Add(Encoding.ASCII.GetBytes("dpeligible")); }
+                            return offsets;
+                        }
+                    }
+                }
                 if (!go || !descriptor || !tag || FindAll(original, Encoding.ASCII.GetBytes("dpeligible")).Count > 0 ||
                     FindAll(original, Encoding.ASCII.GetBytes("inexigible")).Count > 0)
                     throw new UnsupportedAntigravityBinaryException("Не найдена согласованная структура protobuf Antigravity. Файл не изменён; SHA-256: " + Hash(original) + ".");
@@ -219,16 +235,34 @@ namespace DevProxyApp
             return offsets;
         }
 
+        private static List<int> CliHubMetadataOffsets(byte[] data, out List<byte[]> replacements) {
+            // CLI and --hub share one executable. The command-line gate alone
+            // does not prepare the eight known protobuf metadata fields for IDE.
+            var matches = new List<int>[Patterns.Length]; bool hasHubMetadata = false;
+            for (int i=0;i<Patterns.Length;i++) {
+                matches[i] = FindAll(data, Encoding.ASCII.GetBytes(Patterns[i]));
+                if (i!=2 && i!=3 && i!=4 && matches[i].Count>0) hasHubMetadata = true;
+            }
+            replacements = new List<byte[]>(); var offsets = new List<int>();
+            if (!hasHubMetadata) return offsets; // CLI-only shape, no hub schema asserted.
+            for (int i=0;i<Patterns.Length;i++) {
+                if(matches[i].Count!=1) throw new UnsupportedAntigravityBinaryException("CLI/IDE: неполная или неоднозначная структура региональных protobuf-полей. Файл не изменён.");
+                offsets.Add(matches[i][0]); replacements.Add(Encoding.ASCII.GetBytes(Patterns[i].Replace("ineligible", "dpeligible")));
+            }
+            return offsets;
+        }
+
         private static int ValidatePatchData(byte[] original)
         {
             int? eligibility=CliRegionGate.Find(original);
             var proxySites=FindAll(original,Encoding.ASCII.GetBytes("https_proxy"));
             if(eligibility.HasValue){
-                if(proxySites.Count<1||proxySites.Count>8)throw new UnsupportedAntigravityBinaryException("CLI: неизвестная структура переменных прокси. Файл не изменён.");
-                return 1+proxySites.Count;
+                if((proxySites.Count<1||proxySites.Count>32)&&!(proxySites.Count==0&&FindAll(original,Encoding.ASCII.GetBytes("AG_LS_PROXY")).Count>=1))throw new UnsupportedAntigravityBinaryException("CLI: неизвестная структура переменных прокси. Файл не изменён.");
+                List<byte[]> hubReplacements;
+                return 1+proxySites.Count+CliHubMetadataOffsets(original,out hubReplacements).Count;
             }
             List<byte[]> replacements;int count=ValidatePatterns(original,out replacements).Count;
-            if(proxySites.Count>8)throw new UnsupportedAntigravityBinaryException("Неоднозначные переменные прокси Antigravity; файл не изменён.");
+            if(proxySites.Count>32)throw new UnsupportedAntigravityBinaryException("Неоднозначные переменные прокси Antigravity; файл не изменён.");
             return count+proxySites.Count;
         }
 
@@ -237,10 +271,12 @@ namespace DevProxyApp
             int? eligibility=CliRegionGate.Find(original);
             if(eligibility.HasValue){
                 var proxySites=FindAll(original,Encoding.ASCII.GetBytes("https_proxy"));
-                if(proxySites.Count<1||proxySites.Count>8)throw new UnsupportedAntigravityBinaryException("CLI: неизвестная структура переменных прокси. Файл не изменён.");
+                if((proxySites.Count<1||proxySites.Count>32)&&!(proxySites.Count==0&&FindAll(original,Encoding.ASCII.GetBytes("AG_LS_PROXY")).Count>=1))throw new UnsupportedAntigravityBinaryException("CLI: неизвестная структура переменных прокси. Файл не изменён.");
+                List<byte[]> hubReplacements;var hubOffsets=CliHubMetadataOffsets(original,out hubReplacements);
                 byte[] result=(byte[])original.Clone();byte[] gate={0x48,0x85,0xc0,0x90};Array.Copy(gate,0,result,eligibility.Value,gate.Length);
                 byte[] variable=Encoding.ASCII.GetBytes("AG_LS_PROXY");foreach(int site in proxySites)Array.Copy(variable,0,result,site,variable.Length);
-                changes=1+proxySites.Count;return result;
+                for(int i=0;i<hubOffsets.Count;i++)Array.Copy(hubReplacements[i],0,result,hubOffsets[i],hubReplacements[i].Length);
+                changes=1+proxySites.Count+hubOffsets.Count;return result;
             }
             List<byte[]> replacements;
             var offsets=ValidatePatterns(original,out replacements);
@@ -250,7 +286,7 @@ namespace DevProxyApp
             // A private process environment variable lets managed LS/agy traffic
             // use the existing bridge without changing Windows environment.
             var proxyOffsets = FindAll(original, Encoding.ASCII.GetBytes("https_proxy"));
-            if (proxyOffsets.Count > 8) throw new UnsupportedAntigravityBinaryException("Неоднозначные переменные прокси Antigravity; файл не изменён.");
+            if (proxyOffsets.Count > 32) throw new UnsupportedAntigravityBinaryException("Неоднозначные переменные прокси Antigravity; файл не изменён.");
             foreach (int offset in proxyOffsets) { Array.Copy(Encoding.ASCII.GetBytes("AG_LS_PROXY"), 0, patched, offset, 11); changes++; }
             return patched;
         }
@@ -264,6 +300,15 @@ namespace DevProxyApp
                 throw new InvalidDataException("Повреждён манифест резервной копии Antigravity.");
             return result;
         }
+        public static bool HasActivePatchRecord(string backend) {
+            if(!File.Exists(backend+ManifestSuffix))return false;
+            try{var manifest=Manifest(backend);object restored;return !manifest.TryGetValue("restored",out restored)||!object.Equals(restored,true);}
+            catch{return true;} // Damaged ownership data still needs a recovery action.
+        }
+        private static void RecordRestored(string backend,Dictionary<string,object> manifest) {
+            manifest["restored"]=true;
+            AtomicWrite(backend+ManifestSuffix,Encoding.UTF8.GetBytes(new JavaScriptSerializer().Serialize(manifest)));
+        }
 
         public static string Inspect(string executable)
         {
@@ -274,17 +319,32 @@ namespace DevProxyApp
             if (manifest != null && hash == Convert.ToString(manifest["patched_sha256"])) {
                 if (!File.Exists(backend + BackupSuffix) || Hash(File.ReadAllBytes(backend + BackupSuffix)) != Convert.ToString(manifest["original_sha256"]))
                     throw new InvalidDataException("Подготовленный клиент найден, но резервная копия повреждена или отсутствует.");
-                if(NeedsCliUpgrade(current))return "Прежняя подготовка CLI не отключает локальную проверку региона. Восстановите клиент, затем выполните подготовку снова. Резервная копия проверена.";
+                if(NeedsCliUpgrade(current))return "Прежняя подготовка CLI не включает все необходимые изменения для CLI/IDE. Восстановите клиент, затем выполните подготовку снова. Резервная копия проверена.";
                 bool legacyProxy = FindAll(current, Encoding.ASCII.GetBytes("https_proxy")).Count > 0 &&
                     FindAll(current, Encoding.ASCII.GetBytes("AG_LS_PROXY")).Count == 0;
                 return "Клиент подготовлен; резервная копия проверена. Файл: " + Path.GetFileName(backend) + "." +
                     (legacyProxy ? " Прежний патч использует HTTPS_PROXY управляемого процесса. Для отдельной AG_LS_PROXY выполните «Отменить подготовку», затем «Подготовить клиент»." : "");
             }
+            if (IsAlreadyPreparedBinary(current) && !NeedsCliUpgrade(current))
+                return "Клиент подготовлен; сигнатуры проверены. Файл: " + Path.GetFileName(backend) + ".";
             int count=ValidatePatchData(current);
             return "Antigravity " + FileVersionInfo.GetVersionInfo(executable).ProductVersion + ": найдено " + count + " сигнатур; требуется подготовка клиента.";
         }
 
+        static bool IsAlreadyPreparedBinary(byte[] current) {
+            if (current == null || current.Length < 128) return false;
+            bool go = FindAll(current, Encoding.ASCII.GetBytes("Go build ID:")).Count > 0 || FindAll(current, Encoding.ASCII.GetBytes("Go buildinf:")).Count > 0;
+            if (!go) return false;
+            int dpCount = FindAll(current, Encoding.ASCII.GetBytes("dpeligible")).Count;
+            int inelCount = FindAll(current, Encoding.ASCII.GetBytes("ineligible")).Count;
+            int inexCount = FindAll(current, Encoding.ASCII.GetBytes("inexigible")).Count;
+            if (dpCount >= 2 && inelCount == 0 && inexCount == 0) return true;
+            if (FindAll(current, Encoding.ASCII.GetBytes("AG_LS_PROXY")).Count >= 1 && FindAll(current, Encoding.ASCII.GetBytes("Eligibility check failed:")).Count > 0 && !NeedsCliUpgrade(current)) return true;
+            return false;
+        }
         static bool NeedsCliUpgrade(byte[] current) {
+            List<byte[]> replacements;
+            if(CliHubMetadataOffsets(current,out replacements).Count>0)return true;
             try{return CliRegionGate.Find(current).HasValue;}catch(UnsupportedAntigravityBinaryException){return false;}
         }
 
@@ -348,7 +408,10 @@ namespace DevProxyApp
                 };
                 AtomicWrite(backend + ManifestSuffix, Encoding.UTF8.GetBytes(new JavaScriptSerializer().Serialize(manifest)));
                 if (Hash(File.ReadAllBytes(backend)) != originalHash) throw new InvalidOperationException("Клиент изменился во время подготовки. Повторите после завершения обновления.");
+                DateTime originalMtimeUtc = File.GetLastWriteTimeUtc(backend);
                 AtomicWrite(backend, patched);
+                try { File.SetLastWriteTimeUtc(backend, originalMtimeUtc); } catch { }
+                AntigravityUpdateGuard.SyncSidecarMetadata(backend);
                 if (Hash(File.ReadAllBytes(backend)) != Convert.ToString(manifest["patched_sha256"]))
                     throw new InvalidDataException("Проверка записанного клиента не пройдена; используйте восстановление.");
                 return "Клиент подготовлен: " + Path.GetFileName(backend) + ", изменений: " + changes + ". Оригинал сохранён и проверен по SHA-256.";
@@ -364,6 +427,7 @@ namespace DevProxyApp
                 var manifest=Manifest(backend);
                 if(manifest!=null && Hash(current)==Convert.ToString(manifest["patched_sha256"]))
                     return new AntigravityPreparationResult(!NeedsCliUpgrade(current),Inspect(executable));
+                if(IsAlreadyPreparedBinary(current) && !NeedsCliUpgrade(current)) return new AntigravityPreparationResult(true,Inspect(executable));
                 ValidatePatchData(current);current=null;
                 return new AntigravityPreparationResult(true,Prepare(executable));
             }
@@ -382,14 +446,86 @@ namespace DevProxyApp
                 byte[] original = File.ReadAllBytes(backend + BackupSuffix);
                 if (Hash(original) != Convert.ToString(manifest["original_sha256"])) throw new InvalidDataException("Резервная копия повреждена.");
                 string currentHash = Hash(File.ReadAllBytes(backend));
-                if (currentHash == Convert.ToString(manifest["original_sha256"])) return "Оригинальный клиент уже восстановлен.";
+                if (currentHash == Convert.ToString(manifest["original_sha256"])) {RecordRestored(backend,manifest);return "Оригинальный клиент уже восстановлен.";}
                 if (currentHash != Convert.ToString(manifest["patched_sha256"]))
                     throw new InvalidOperationException("Клиент обновлён или изменён другим инструментом. Откат старой версии отменён.");
-                EnsureNotRunning(backend); AtomicWrite(backend, original);
+                EnsureNotRunning(backend);
+                DateTime currentMtimeUtc = File.GetLastWriteTimeUtc(backend);
+                AtomicWrite(backend, original);
+                try { File.SetLastWriteTimeUtc(backend, currentMtimeUtc); } catch { }
+                AntigravityUpdateGuard.SyncSidecarMetadata(backend);
                 if (Hash(File.ReadAllBytes(backend)) != Convert.ToString(manifest["original_sha256"])) throw new InvalidDataException("Проверка отката не пройдена.");
+                RecordRestored(backend,manifest);
                 return "Оригинальный клиент восстановлен, SHA-256 совпадает.";
             }
         }
+    }
+
+    public static class AntigravityUpdateGuard
+    {
+        public static readonly string[] UpdaterHosts = new string[] {
+            "antigravity-auto-updater-974169037036.us-central1.run.app",
+            "antigravity-cli-auto-updater-974169037036.us-central1.run.app",
+            "antigravity-ide-auto-updater-974169037036.us-central1.run.app",
+            "antigravity-auto-updater-insider-974169037036.us-central1.run.app",
+            "antigravity-hub-auto-updater-974169037036.us-central1.run.app"
+        };
+
+        public static bool IsUpdaterHost(string host)
+        {
+            if (string.IsNullOrEmpty(host)) return false;
+            string clean = host.Trim().TrimEnd('.');
+            int colon = clean.IndexOf(':');
+            if (colon > 0) clean = clean.Substring(0, colon);
+            return Array.Exists(UpdaterHosts, x => x.Equals(clean, StringComparison.OrdinalIgnoreCase));
+        }
+
+        public static bool HasInstalledCli(string localAppData = null, string userProfile = null)
+        {
+            string local = localAppData ?? Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
+            string profile = userProfile ?? Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+            if (!string.IsNullOrEmpty(profile) && File.Exists(Path.Combine(profile, ".gemini", "bin", "agy.exe"))) return true;
+            if (!string.IsNullOrEmpty(local) && File.Exists(Path.Combine(local, "agy", "bin", "agy.exe"))) return true;
+            return false;
+        }
+
+        public static bool ShouldBlockUpdaterHost(string host, bool? blockEnabled = null, string localAppData = null, string userProfile = null)
+        {
+            bool enabled = blockEnabled.HasValue ? blockEnabled.Value : ConfigManager.Instance.BlockAntigravityUpdates;
+            if (!enabled || !IsUpdaterHost(host)) return false;
+            string clean = host.Trim().TrimEnd('.');
+            int colon = clean.IndexOf(':');
+            if (colon > 0) clean = clean.Substring(0, colon);
+            if (clean.Equals("antigravity-cli-auto-updater-974169037036.us-central1.run.app", StringComparison.OrdinalIgnoreCase) &&
+                !HasInstalledCli(localAppData, userProfile))
+                return false;
+            return true;
+        }
+
+        public static void SyncSidecarMetadata(string backendPath)
+        {
+            try {
+                if (string.IsNullOrEmpty(backendPath) || !File.Exists(backendPath)) return;
+                if (!Path.GetFileName(backendPath).Equals("agy.exe", StringComparison.OrdinalIgnoreCase)) return;
+                string sidecar = Path.Combine(Path.GetDirectoryName(backendPath), "agy.version.json");
+                if (!File.Exists(sidecar)) return;
+                var serializer = new JavaScriptSerializer();
+                var data = serializer.Deserialize<Dictionary<string, object>>(File.ReadAllText(sidecar, Encoding.UTF8));
+                if (data == null) return;
+                var info = new FileInfo(backendPath);
+                long mtimeMs = (long)Math.Round((info.LastWriteTimeUtc - new DateTime(1970, 1, 1, 0, 0, 0, DateTimeKind.Utc)).TotalMilliseconds);
+                data["size"] = info.Length;
+                data["mtimeMs"] = mtimeMs;
+                string temp = sidecar + "." + Guid.NewGuid().ToString("N") + ".tmp";
+                try {
+                    File.WriteAllText(temp, serializer.Serialize(data), new UTF8Encoding(false));
+                    File.Replace(temp, sidecar, null);
+                } finally {
+                    if (File.Exists(temp)) File.Delete(temp);
+                }
+            } catch { }
+        }
+
     }
 
     public sealed class ScopedDnsResolver
@@ -402,7 +538,11 @@ namespace DevProxyApp
             "www.gstatic.com", "ssl.gstatic.com", "geminiweb-pa.clients6.google.com",
             "apis.google.com", "alkalimakersuite-pa.clients6.google.com", "alkalicore-pa.clients6.google.com",
             "waa-pa.clients6.google.com", "generativelanguage.googleapis.com", "proactivebackend-pa.googleapis.com",
-            "robinfrontend-pa.googleapis.com", "aisandbox-pa.googleapis.com"
+            "robinfrontend-pa.googleapis.com", "aisandbox-pa.googleapis.com",
+            "play.googleapis.com", "antigravity-unleash.goog", "content-autofill.googleapis.com", "update.googleapis.com"
+
+
+
         };
         public static string[] ServerCandidates(string server) {
             return DnsProviders.Addresses(server);
@@ -417,7 +557,20 @@ namespace DevProxyApp
         public ScopedDnsResolver(string server) { _configuredServer=server; _servers = ServerCandidates(server); }
         internal ScopedDnsResolver(IPEndPoint[] endpoints, int timeout) { _testEndpoints = endpoints; _servers = new string[0]; _timeout = timeout; }
 
+        public static readonly string[] DnsOnlyGoogleDependencies = new string[] { "aicode.googleapis.com", "cloudaicompanion.googleapis.com", "cloudresourcemanager.googleapis.com", "aiplatform.googleapis.com", "developerconnect.googleapis.com" };
         public static bool IsScoped(string host) { return host != null && (Array.Exists(Hosts, x => x.Equals(host, StringComparison.OrdinalIgnoreCase)) || Array.Exists(GoogleDependencies, x => x.Equals(host, StringComparison.OrdinalIgnoreCase))); }
+        public static bool IsScoped(string host, bool includeDnsOnly) { if (includeDnsOnly && host != null && host.Equals("accounts.google.com", StringComparison.OrdinalIgnoreCase)) return false; return IsScoped(host) || (includeDnsOnly && host != null && Array.Exists(DnsOnlyGoogleDependencies, x => x.Equals(host, StringComparison.OrdinalIgnoreCase))); }
+        internal DnsEndpoint[] PrioritizeEndpoints(DnsEndpoint[] pool) {
+            var ready = new List<DnsEndpoint>(); var cooling = new List<DnsEndpoint>();
+            lock (_sync) foreach (var endpoint in pool) {
+                DateTime until;
+                bool delayed = _cooldown.TryGetValue(endpoint.Address + "/" + (endpoint.Protocol ?? "HTTPS"), out until) && until > DateTime.UtcNow;
+                (delayed ? cooling : ready).Add(endpoint);
+            }
+            // A cooldown changes priority; it must not remove reserve nodes.
+            // Keep the configured provider order for every AI hostname.
+            ready.AddRange(cooling); return ready.ToArray();
+        }
         private static int Read16(byte[] data, int offset) { if (offset < 0 || offset + 2 > data.Length) throw new InvalidDataException("Обрезанный DNS ответ."); return (data[offset] << 8) | data[offset + 1]; }
         private static string ReadName(byte[] data, ref int offset) {
             int position = offset, end = -1; var labels = new List<string>(); var seen = new HashSet<int>();
@@ -500,7 +653,8 @@ namespace DevProxyApp
                 if (addresses.TryGetValue(current, out address)) {
                     byte[] bytes = address.GetAddressBytes(); byte first = bytes[0], second = bytes[1];
                     if (first == 0 || first == 10 || first == 127 || first >= 224 || (first == 192 && second == 168) ||
-                        (first == 172 && second >= 16 && second <= 31) || (first == 169 && second == 254))
+                        (first == 172 && second >= 16 && second <= 31) || (first == 169 && second == 254) ||
+                        (first == 198 && (second == 18 || second == 19)) || (first == 100 && second >= 64 && second <= 127))
                         throw new InvalidDataException("DNS вернул локальный или зарезервированный адрес.");
                     return address;
                 }
@@ -511,7 +665,9 @@ namespace DevProxyApp
 
         public IPAddress Resolve(string host)
         {
-            if (!IsScoped(host)) throw new InvalidOperationException("DNS-маршрут ограничен явным списком Google/Antigravity.");
+            // Route selection may exclude an OAuth host in DNS-only mode, but
+            // resolution must accept every host admitted by either route mode.
+            if (!IsScoped(host) && !IsScoped(host, true)) throw new InvalidOperationException("DNS-маршрут ограничен явным списком Google/Antigravity.");
             lock (_sync) {
                 KeyValuePair<DateTime, IPAddress> cached;
                 if (_cache.TryGetValue(host, out cached) && cached.Key > DateTime.UtcNow) return cached.Value;
@@ -523,19 +679,18 @@ namespace DevProxyApp
                 foreach (string label in host.Split('.')) { byte[] bytes = Encoding.ASCII.GetBytes(label); buffer.WriteByte((byte)bytes.Length); buffer.Write(bytes, 0, bytes.Length); }
                 buffer.Write(new byte[] { 0, 0, 1, 0, 1 }, 0, 5); query = buffer.ToArray();
             }
-            var managed = _testEndpoints == null ? DnsProviders.ForServer(_configuredServer) : null;
+            var managed = _testEndpoints == null ? DnsProviders.ExtendedPool(_configuredServer) : null;
             if(managed!=null){
-                var candidates=new List<DnsEndpoint>();var cooling=new List<DnsEndpoint>();
-                foreach(var endpoint in managed){bool delayed;lock(_sync){DateTime until;delayed=_cooldown.TryGetValue(endpoint.Address+"/DoH",out until)&&until>DateTime.UtcNow;}(delayed?cooling:candidates).Add(endpoint);}candidates.AddRange(cooling);
-                var deadline=Stopwatch.StartNew();int remainingAttempts=candidates.Count;
+                var candidates=PrioritizeEndpoints(managed);
+                var deadline=Stopwatch.StartNew();int remainingAttempts=candidates.Length;
                 foreach(var endpoint in candidates)try{
-                    int remaining=7000-(int)deadline.ElapsedMilliseconds;if(remaining<=0)break;
-                    int timeout=Math.Min(2400,Math.Max(250,remaining/Math.Max(1,remainingAttempts--)));
+                    int remaining=5000-(int)deadline.ElapsedMilliseconds;if(remaining<=0)break;
+                    int timeout=DnsProviders.AttemptTimeout(remaining,remainingAttempts--,1600);
                     int ttl;var address=ParseAnswer(DnsHttpsTransport.Exchange(endpoint,query,Math.Min(remaining,timeout)),transaction,host,out ttl);
-                    lock(_sync){_cooldown.Remove(endpoint.Address+"/DoH");if(ttl>0)_cache[host]=new KeyValuePair<DateTime,IPAddress>(DateTime.UtcNow.AddSeconds(ttl),address);}
-                    Logger.Log("[DNS] provider="+endpoint.Provider+" resolver="+endpoint.Address+"/DoH host="+host+" OK");return address;
-                }catch(Exception error){if(!(error is IOException)&&!(error is InvalidDataException)&&!(error is SocketException)&&!(error is TimeoutException)&&!(error is AuthenticationException))throw;lock(_sync)_cooldown[endpoint.Address+"/DoH"]=DateTime.UtcNow.AddSeconds(30);Logger.Log("[DNS] provider="+endpoint.Provider+" DoH failed="+error.GetType().Name);}
-                throw new IOException("Зашифрованный DNS Dagami и MagicDNS недоступен. Проверьте подключение и диагностику TLS.");
+                    lock(_sync){_cooldown.Remove(endpoint.Address+"/"+(endpoint.Protocol??"HTTPS"));if(ttl>0)_cache[host]=new KeyValuePair<DateTime,IPAddress>(DateTime.UtcNow.AddSeconds(ttl),address);}
+                    Logger.Log("[DNS] provider="+endpoint.Provider+" resolver="+endpoint.Address+"/"+(endpoint.Protocol??"HTTPS")+" host="+host+" OK");return address;
+                }catch(Exception error){if(!(error is IOException)&&!(error is InvalidDataException)&&!(error is SocketException)&&!(error is TimeoutException)&&!(error is AuthenticationException))throw;lock(_sync)_cooldown[endpoint.Address+"/"+(endpoint.Protocol??"HTTPS")]=DateTime.UtcNow.AddSeconds(30);Logger.Log("[DNS] provider="+endpoint.Provider+" ("+endpoint.Address+") DoH failed: "+error.GetType().Name+" - "+error.Message);}
+                throw new IOException("Зашифрованный Smart DNS (Dagami / MagicDNS) временно недоступен. Проверьте подключение.");
             }
             var endpoints = new List<IPEndPoint>();
             if (_testEndpoints != null) endpoints.AddRange(_testEndpoints);

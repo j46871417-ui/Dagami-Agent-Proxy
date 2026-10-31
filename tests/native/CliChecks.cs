@@ -38,6 +38,7 @@ class CliChecks {
   Console.Error.WriteLine("fixture-stderr");return 37;
  }
  static int Main(string[] args){
+  Console.InputEncoding = new UTF8Encoding(false);
   if(args.Length>0&&args[0]=="child")return Child(args);
   if(args.Length>0&&args[0]=="driver"){
    string[] forwarded=new string[args.Length-2];Array.Copy(args,2,forwarded,0,forwarded.Length);
@@ -80,7 +81,7 @@ class CliChecks {
    // Restore fixture bytes to test ordinary removal; never touch real installations.
    File.WriteAllBytes(shim,NativeCliApps.ConsoleRunnerBytes(manager));store.Restore(target.Id);
    paths.MachinePath=originalDir;Reject(()=>store.Enable(target,manager));paths.MachinePath="";
-   string cmd=Path.Combine(originalDir,"gemini.cmd");File.WriteAllText(cmd,"@echo off\r\n\"%dp0%\\node_modules\\fake\\cli.js\" %*\r\n");
+   string cmd=Path.Combine(originalDir,"gemini.cmd");File.WriteAllText(cmd,"@echo off\r\n\"%dp0%\\node.exe\" \"%dp0%\\node_modules\\fake\\cli.js\" %*\r\n");
    string nodeDir=Path.Combine(originalDir,"node_modules","fake");Directory.CreateDirectory(nodeDir);File.WriteAllText(Path.Combine(nodeDir,"cli.js"),"fixture");File.Copy(Self,Path.Combine(originalDir,"node.exe"));
    var start=NativeCliApps.CreateStart(cmd,new[]{"space value","","literal\"quote"},"http://127.0.0.1:1234",root);
    Assert(start.FileName==Path.Combine(originalDir,"node.exe"),"npm wrapper not resolved to Node");

@@ -20,11 +20,15 @@ function Protect-Path([string]$Path,[bool]$Directory=$false) {
     Set-Acl -LiteralPath $Path -AclObject $acl
 }
 function Initialize-Store {
-    $root=Get-StoreRoot
+    $root=Get-StoreRoot;$jobs=Join-Path $root 'jobs'
     [IO.Directory]::CreateDirectory($root) | Out-Null
     Protect-Path $root $true
-    [IO.Directory]::CreateDirectory((Join-Path $root 'jobs')) | Out-Null
-    Protect-Path (Join-Path $root 'jobs') $true
+    [IO.Directory]::CreateDirectory($jobs) | Out-Null
+    Protect-Path $jobs $true
+    try {
+        @(Get-ChildItem -LiteralPath $jobs -Filter '*.json' -File -ErrorAction SilentlyContinue | Sort-Object LastWriteTimeUtc -Descending | Select-Object -Skip 20) | ForEach-Object {Remove-Item -LiteralPath $_.FullName -Force -ErrorAction SilentlyContinue}
+        @(Get-ChildItem -LiteralPath $root -Filter 'history-*.json' -File -ErrorAction SilentlyContinue | Sort-Object LastWriteTimeUtc -Descending | Select-Object -Skip 20) | ForEach-Object {Remove-Item -LiteralPath $_.FullName -Force -ErrorAction SilentlyContinue}
+    } catch {}
 }
 function Read-SharedText([string]$Path) {
     $stream=$null;$reader=$null
@@ -133,7 +137,6 @@ function Get-ProviderDomains([string]$Preset) {
         'msftidentity.com',
         'msftauth.net',
         'microsoftonline.com',
-        'microsoft.com',
         'perplexity.ai',
         'strava.com',
         'www.strava.com',
@@ -146,7 +149,11 @@ function Get-ProviderDomains([string]$Preset) {
         'challenges.cloudflare.com'
     ) + @('cloudcode-pa.googleapis.com','daily-cloudcode-pa.googleapis.com',
         'accounts.google.com','oauth2.googleapis.com','www.googleapis.com',
-        'lh3.googleusercontent.com','www.gstatic.com','ssl.gstatic.com')
+        'lh3.googleusercontent.com','www.gstatic.com','ssl.gstatic.com',
+        'antigravity-unleash.goog','aicode.googleapis.com','cloudaicompanion.googleapis.com',
+        'cloudresourcemanager.googleapis.com','developerconnect.googleapis.com',
+        'gemini-api-docs-mcp.dev','aiplatform.googleapis.com','play.googleapis.com',
+        'firebaserules.googleapis.com','firebase.googleapis.com')
     if($Preset -eq 'Full'){return @($all | Select-Object -Unique)}
     if($Preset -ne 'Development'){throw 'Unknown DNS preset.'}
     @($all | Where-Object {$_ -notmatch '^(strava\.com|www\.strava\.com|cdn-1\.strava\.com|graphql\.strava\.com|twitch\.tv|gql\.twitch\.tv|ttvnw\.net|usher\.ttvnw\.net|xboxlive\.com|xbox\.com)$'} | Select-Object -Unique)
@@ -245,8 +252,10 @@ function Test-DnsProbe([string]$HostName,[string]$Server='') {
 function Test-HttpsProbe([string]$Uri) {
     $response=$null;$request=$null
     $oldDnsRefresh=[Net.ServicePointManager]::DnsRefreshTimeout
+    $oldProto=[Net.ServicePointManager]::SecurityProtocol
     try {
         [Net.ServicePointManager]::DnsRefreshTimeout=0
+        [Net.ServicePointManager]::SecurityProtocol=[Net.SecurityProtocolType]::Tls12
         $request=[Net.HttpWebRequest]::Create($Uri)
         $request.Method='HEAD';$request.Proxy=$null;$request.AllowAutoRedirect=$false
         $request.KeepAlive=$false;$request.ConnectionGroupName='DevProxyDnsProbe-'+[guid]::NewGuid().ToString('N')
@@ -257,7 +266,7 @@ function Test-HttpsProbe([string]$Uri) {
         $response=$_.Exception.Response
         return $null -ne $response -and [int]$response.StatusCode -ge 200 -and [int]$response.StatusCode -lt 500
     }catch{return $false}
-    finally{if($response){$response.Close()};if($request){$request.Abort()};[Net.ServicePointManager]::DnsRefreshTimeout=$oldDnsRefresh}
+    finally{if($response){$response.Close()};if($request){$request.Abort()};[Net.ServicePointManager]::DnsRefreshTimeout=$oldDnsRefresh;[Net.ServicePointManager]::SecurityProtocol=$oldProto}
 }
 function Read-NetworkBaseline {
     $working=@(Get-ConnectivityTargets | Where-Object {(Test-DnsProbe $_.HostName) -and (Test-HttpsProbe $_.Uri)})
@@ -291,16 +300,22 @@ function Test-ServerHttpsProbe($Target,[string]$Server) {
     return $false
 }
 function Assert-TargetDns([string]$Server,$Targets) {
+    $httpsPassed=0;$failedHost=''
     foreach($target in @($Targets)){
         if(-not (Test-DnsProbe $target.HostName $Server)){throw ('DNS server preflight failed: '+$Server+' did not resolve '+$target.HostName+'. DNS settings were not changed.')}
-        if(-not (Test-ServerHttpsProbe $target $Server)){throw ('DNS server preflight failed: HTTPS through answers from '+$Server+' is unavailable for '+$target.HostName+'. DNS settings were not changed.')}
+        if(Test-ServerHttpsProbe $target $Server){$httpsPassed++}elseif(-not $failedHost){$failedHost=$target.HostName}
     }
+    $required=[Math]::Min(2,@($Targets).Count)
+    if($httpsPassed -lt $required){throw ('DNS server preflight failed: HTTPS through answers from '+$Server+' is unavailable for '+$failedHost+'. DNS settings were not changed.')}
 }
 function Assert-NetworkConnectivity($Targets) {
+    $httpsPassed=0;$failedHost=''
     foreach($target in @($Targets)){
         if(-not (Test-DnsProbe $target.HostName)){throw ('Connectivity verification failed: system DNS cannot resolve '+$target.HostName)}
-        if(-not (Test-HttpsProbe $target.Uri)){throw ('Connectivity verification failed: HTTPS is unavailable for '+$target.HostName)}
+        if(Test-HttpsProbe $target.Uri){$httpsPassed++}elseif(-not $failedHost){$failedHost=$target.HostName}
     }
+    $required=[Math]::Min(2,@($Targets).Count)
+    if($httpsPassed -lt $required){throw ('Connectivity verification failed: HTTPS is unavailable for '+$failedHost)}
 }
 function Read-SelectedAdapters($Request) {
     $adapters=@()

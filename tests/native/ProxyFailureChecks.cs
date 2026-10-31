@@ -5,6 +5,7 @@ using System.Net;
 using System.Net.Sockets;
 using System.Text;
 using System.Threading;
+using System.Reflection;
 using DevProxyApp;
 
 class ProxyFailureChecks {
@@ -26,8 +27,28 @@ class ProxyFailureChecks {
    if(status==403||status==503)Assert(result.Message.Contains("CONNECT")&&result.Message.Contains(status.ToString()),"Upstream refusal confused with model/account response");
   }finally{server.Stop();worker.Join(1000);}
  }
+ static void MetadataHostIsExact(){
+  var server=new TcpListener(IPAddress.Loopback,0);server.Start();string received=null;Exception failure=null;
+  var worker=new Thread(()=>{try{using(var peer=server.AcceptTcpClient()){peer.GetStream().ReadTimeout=5000;received=Header(peer.GetStream());byte[] response=Encoding.ASCII.GetBytes("HTTP/1.1 204 No Content\r\nConnection: close\r\n\r\n");peer.GetStream().Write(response,0,response.Length);}}catch(Exception e){failure=e;}});worker.IsBackground=true;worker.Start();
+  try{using(var bridge=new LocalProxyBridge()){
+   Assert(bridge.Start(0,"http://127.0.0.1:"+((IPEndPoint)server.LocalEndpoint).Port),"Metadata fixture bridge failed");
+   using(var c=new TcpClient("127.0.0.1",bridge.BoundPort)){c.GetStream().ReadTimeout=5000;byte[] b=Encoding.ASCII.GetBytes("GET http://metadata.google.internal/computeMetadata/v1/ HTTP/1.1\r\nHost: metadata.google.internal\r\n\r\n");c.GetStream().Write(b,0,b.Length);Assert(Header(c.GetStream()).Contains(" 404 "),"Metadata endpoint not intercepted");}
+   using(var c=new TcpClient("127.0.0.1",bridge.BoundPort)){c.GetStream().ReadTimeout=5000;var stream=c.GetStream();byte[] b=Encoding.ASCII.GetBytes("CONNECT metadata.google.internal:80 HTTP/1.1\r\nHost: metadata.google.internal:80\r\n\r\n");stream.Write(b,0,b.Length);Assert(Header(stream).Contains(" 200 "),"Metadata CONNECT tunnel not established");b=Encoding.ASCII.GetBytes("GET /computeMetadata/v1/ HTTP/1.1\r\nHost: metadata.google.internal\r\nMetadata-Flavor: Google\r\n\r\n");stream.Write(b,0,b.Length);Assert(Header(stream).Contains(" 404 "),"Metadata CONNECT request did not receive 404");}
+   using(var c=new TcpClient("127.0.0.1",bridge.BoundPort)){c.GetStream().ReadTimeout=5000;var stream=c.GetStream();byte[] b=Encoding.ASCII.GetBytes("CONNECT metadata.google.internal:80 HTTP/1.1\r\nHost: metadata.google.internal:80\r\n\r\nGET / HTTP/1.1\r\nHost: metadata.google.internal\r\n\r\n");stream.Write(b,0,b.Length);Assert(Header(stream).Contains(" 200 ")&&Header(stream).Contains(" 404 "),"Pipelined metadata CONNECT request lost bytes");}
+   using(var c=new TcpClient("127.0.0.1",bridge.BoundPort)){c.GetStream().ReadTimeout=5000;byte[] b=Encoding.ASCII.GetBytes("GET http://example.test/metadata.google.internal HTTP/1.1\r\nHost: example.test\r\n\r\n");c.GetStream().Write(b,0,b.Length);Assert(Header(c.GetStream()).Contains(" 204 "),"Metadata substring intercepted unrelated request");}
+   Assert(worker.Join(5000)&&failure==null&&received.StartsWith("GET http://example.test/"),"Unrelated request did not reach configured proxy");
+  }}finally{server.Stop();worker.Join(1000);}
+ }
  static int Main(){try {
+  FailedProxyMustNotConnectDirectly();
   foreach(int status in new[]{200,407,403,503})Probe(status);
+  MetadataHostIsExact();
+  Assert(UpstreamProxyDiagnostics.IsDnsEndpointMistakenForProxy("http://dns.dagami.ru:50128"),"Known DNS endpoint not identified");
+  Assert(!UpstreamProxyDiagnostics.IsDnsEndpointMistakenForProxy("http://dns.dagami.ru:pw@proxy.example:8080"),"Username mistaken for DNS proxy host");
+  Assert(!UpstreamProxyDiagnostics.IsDnsEndpointMistakenForProxy("http://dns.dagami.ru.evil.example:8080"),"DNS hostname substring matched");
+  var destination=(Uri)typeof(LocalProxyBridge).GetMethod("HttpDestination",BindingFlags.Static|BindingFlags.NonPublic).Invoke(null,new object[]{"GET","http://example.test:8080/a?q=1","GET http://example.test:8080/a?q=1 HTTP/1.1\r\nHost: example.test\r\nProxy-Authorization: Basic secret\r\n\r\n"});
+  string direct=(string)typeof(LocalProxyBridge).GetMethod("LoopbackRequest",BindingFlags.Static|BindingFlags.NonPublic).Invoke(null,new object[]{"GET http://example.test:8080/a?q=1 HTTP/1.1\r\nHost: example.test\r\nProxy-Authorization: Basic secret\r\n\r\n",destination});
+  Assert(destination.Host=="example.test"&&destination.Port==8080&&direct.StartsWith("GET /a?q=1 HTTP/1.1")&&!direct.Contains("secret")&&!direct.Contains("Proxy-Authorization"),"Direct request leaked proxy credentials or used wrong target");
   foreach(string bad in new[]{"socks5://127.0.0.1:1","http://user:bad#password@127.0.0.1:1","http://127.0.0.1:1/path","http://127.0.0.1:1/?token=fixture"}) {
    var result=UpstreamProxyDiagnostics.Check(bad);Assert(!result.Available&&result.Status==0,"Malformed proxy URL accepted");
   }
@@ -52,4 +73,29 @@ class ProxyFailureChecks {
   Assert(calls==1&&report.Contains("Сравнение недоступно"),"Missing comparison settings not handled");
   Console.WriteLine("PASS "+checks+" CONNECT auth/status, URL validation, port fallback, self-upstream and synthetic OAuth comparison checks");return 0;
  }catch(Exception e){Console.Error.WriteLine(e);return 1;}}
+
+ sealed class NoDirectBridge:LocalProxyBridge {
+  public int DirectCalls;
+  protected override TcpClient ConnectDirect(string host,int port,out Stream stream){
+   Interlocked.Increment(ref DirectCalls);stream=null;throw new IOException("Fixture intercepted forbidden direct route before DNS/network");
+  }
+ }
+ static void FailedProxyMustNotConnectDirectly(){
+  using(var unavailable=new Socket(AddressFamily.InterNetwork,SocketType.Stream,ProtocolType.Tcp)){
+   unavailable.Bind(new IPEndPoint(IPAddress.Loopback,0));
+   using(var bridge=new NoDirectBridge()){
+    Assert(bridge.Start(0,"http://127.0.0.1:"+((IPEndPoint)unavailable.LocalEndPoint).Port),"Failure fixture bridge did not start");
+    // Resolver is enabled, but the unscoped host must never be resolved/dialled.
+    typeof(LocalProxyBridge).GetField("_scopedDns",BindingFlags.Instance|BindingFlags.NonPublic).SetValue(bridge,new ScopedDnsResolver("192.0.2.53"));
+    foreach(string method in new[]{"CONNECT","GET"})using(var client=new TcpClient("127.0.0.1",bridge.BoundPort)){
+     client.GetStream().ReadTimeout=5000;string authority="outside.fixture.invalid:443";
+     string request=method+" "+(method=="CONNECT"?authority:"http://outside.fixture.invalid/fixture")+" HTTP/1.1\r\nHost: "+authority+"\r\n\r\n";
+     byte[] bytes=Encoding.ASCII.GetBytes(request);client.GetStream().Write(bytes,0,bytes.Length);
+     string reply=Header(client.GetStream());
+     Assert(reply.Contains(" 502 ")&&reply.Contains("X-Dagami-Failure-Phase: upstream-connect"),"Proxy failure was not reported at the selected route");
+     Assert(bridge.DirectCalls==0,"Failed configured proxy silently attempted direct "+method);
+    }
+   }
+  }
+ }
 }

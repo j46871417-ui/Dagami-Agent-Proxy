@@ -114,3 +114,10 @@ desktop.ini
 /* (1).*
 /*_backup.*
 /*_copy.*
+
+# Local workstation review; not public release documentation
+/REGRESSION_REVIEW.md
+
+# Local review screenshots and fixture leftovers
+/local-*.png
+/temp-test/

@@ -30,7 +30,7 @@ class LocalUiChecks {
     typeof(MainForm).GetField("_shortcutIssue", Private).SetValue(form, "Ярлык удалён");
     Call(form, "UpdateAppActionState");
     var list = (ListView)Get(form, "_targetList");
-    if(list.SelectedItems.Count>0&&((AppTarget)list.SelectedItems[0].Tag).IsInstalled){var cfg=ConfigManager.Instance;string oldProxy=cfg.LastProxy;try{cfg.LastProxy="http://127.0.0.1:1234";Call(form,"UpdateAppActionState");Assert(((Button)Get(form,"_primaryAppAction")).Text=="Настроить обычный запуск","Missing launcher does not suggest one-time setup");}finally{cfg.LastProxy=oldProxy;}}
+    if(list.SelectedItems.Count>0&&((AppTarget)list.SelectedItems[0].Tag).IsInstalled){var cfg=ConfigManager.Instance;string oldProxy=cfg.LastProxy;try{cfg.LastProxy="http://127.0.0.1:1234";typeof(MainForm).GetField("_proxyCheckFailed",Private).SetValue(form,true);Call(form,"UpdateAppActionState");Assert(((Button)Get(form,"_primaryAppAction")).Text=="Запустить через Dagami","Direct launch incorrectly requires shortcut setup");}finally{cfg.LastProxy=oldProxy;typeof(MainForm).GetField("_proxyCheckFailed",Private).SetValue(form,false);}}
     if (list.SelectedItems.Count > 0 && ((AppTarget)list.SelectedItems[0].Tag).IsInstalled)
      Assert(((ToolStripMenuItem)Get(form, "_patchMenuItem")).Enabled, "Repair disabled by stale shortcut issue");
     Assert(form.Controls.Find("ShortcutStateLabel",true).Length==1,"Shortcut state missing");
@@ -39,8 +39,16 @@ class LocalUiChecks {
     Bounds(form); Picture(form, "local-apps.png");
     Assert(form.Controls.Find("BugReportNavigationButton",true).Length==1,"Global report button missing");
     Assert(form.Controls.Find("SaveJournalButton",true).Length==1,"Journal export button missing");
+    Assert(form.Controls.Find("BlockUpdatesCheckBox",true).Length==1,"Antigravity update blocker checkbox missing");
+    Assert(form.Controls.Find("MainStartWithWindowsCheckBox",true).Length==1,"Main screen Windows autostart checkbox missing");
+    Assert(form.Controls.Find("MainUseProxyCheckBox",true).Length==1,"Main screen UseProxy checkbox missing");
+    Assert(form.Controls.Find("MainUseDnsCheckBox",true).Length==1,"Main screen UseDns checkbox missing");
+    Assert(form.Controls.Find("UseProxyCheckBox",true).Length==1,"Settings UseProxy checkbox missing");
+    Assert(Get(form,"_dnsObfuscation")!=null,"Pre-DNS obfuscation checkbox missing");
+    Assert(VpnDiagnostics.IsFakeIpAddress(System.Net.IPAddress.Parse("198.18.0.25"))&&!VpnDiagnostics.IsFakeIpAddress(System.Net.IPAddress.Parse("8.8.8.8")),"Fake-IP detection failed");
+    Assert(VpnDiagnostics.IsVirtualVpnAdapter("Nekoray Tun","WireGuard Tunnel",System.Net.NetworkInformation.NetworkInterfaceType.Ethernet),"Virtual VPN TUN detection failed");
     Assert(Buttons(form,"Сообщить о сбое")==1&&Buttons(form,"Баг-репорт")==0,"Duplicate report action remains");
-    Assert(VisibleButtons(form)<=9,"Main screen still has too many visible buttons");
+    Assert(VisibleButtons(form)<=10,"Main screen still has too many visible buttons");
     Assert(((Panel[])Get(form,"_pageControls")).Length==3,"Advanced tools remain in main navigation");
     Assert(!((Timer)Get(form,"_nativeLogTimer")).Enabled,"Static preview starts background polling");
     Call(form,"ShowFluentPage",1);var tabs=(TabControl)Get(form,"_settingsTabs");

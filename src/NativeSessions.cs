@@ -7,11 +7,14 @@ using System.Runtime.InteropServices;
 namespace DevProxyApp
 {
     public sealed class NativeSession : IDisposable {
-        public readonly JobObjectManager Job = new JobObjectManager();
+        // Keep GUI applications alive if the proxy process crashes. Explicit
+        // session disposal still terminates the job and its descendants.
+        public readonly JobObjectManager Job = new JobObjectManager(false);
         public readonly List<Process> Processes = new List<Process>();
         public Process RunningProcess {
             get {
                 Process first=null;
+                for (int i = Processes.Count - 1; i >= 0; i--) try { if (Processes[i].HasExited) { Processes[i].Dispose(); Processes.RemoveAt(i); } } catch (InvalidOperationException) { Processes.RemoveAt(i); }
                 foreach (var process in Processes) try { if (!process.HasExited) { if(process.MainWindowHandle!=IntPtr.Zero)return process; if(first==null)first=process; } } catch (InvalidOperationException) { }
                 // Launchers often exit after starting the actual app. The Job owns
                 // its descendants, so do not lose proxy/session state with the parent.
@@ -24,9 +27,34 @@ namespace DevProxyApp
             }
         }
         public void Dispose() {
+            try { Job.Terminate(); } catch (System.ComponentModel.Win32Exception) { }
             Job.Dispose();
             foreach (var process in Processes) { try { if (!process.HasExited) process.Kill(); } catch { } process.Dispose(); }
             Processes.Clear();
+        }
+        public void StopAndWait(int timeoutMilliseconds = 5000) {
+            if (timeoutMilliseconds < 1) throw new ArgumentOutOfRangeException("timeoutMilliseconds");
+            var elapsed = Stopwatch.StartNew();
+            // Keep the Job until exit is verified, so failure does not lose
+            // ownership of remaining descendants or allow a route switch.
+            Job.Terminate();
+            var failures = new List<string>();
+            foreach (var process in Processes) {
+                try { if (!process.HasExited) process.Kill(); }
+                catch (System.ComponentModel.Win32Exception) { if (!process.HasExited) failures.Add("PID " + process.Id); }
+                catch (InvalidOperationException) { }
+            }
+            foreach (var process in Processes) {
+                try {
+                    int remaining = Math.Max(0, timeoutMilliseconds - (int)elapsed.ElapsedMilliseconds);
+                    if (!process.WaitForExit(remaining)) failures.Add("PID " + process.Id);
+                } catch (InvalidOperationException) { }
+            }
+            while (Job.ProcessIds().Length > 0 && elapsed.ElapsedMilliseconds < timeoutMilliseconds)
+                System.Threading.Thread.Sleep(25);
+            if (failures.Count > 0 || Job.ProcessIds().Length > 0)
+                throw new IOException("Не удалось дождаться завершения процессов сессии. " + string.Join(", ", failures.ToArray()));
+            Dispose();
         }
     }
     public static class NativeAppPatcher {
@@ -58,11 +86,17 @@ namespace DevProxyApp
                 if(!string.IsNullOrEmpty(target.ConfigPath)&&File.Exists(target.ConfigPath+".devproxy.bak"))
                     foreach(string path in new[]{target.ConfigPath,target.ConfigPath+".devproxy.bak"})before[path]=File.Exists(path)?File.ReadAllBytes(path):null;
             }
-            try {RestoreSettings(target);return restoreLauncher();}
+            List<string> restored;
+            try {RestoreSettings(target);restored=restoreLauncher();}
             catch(Exception error) {
                 try {RestoreFiles(before);}catch(Exception rollback){throw new IOException(error.Message+" "+rollback.Message,error);}
                 throw;
             }
+            if(target.IsInstalled && AntigravityIntegration.Supports(target.ExePath)) {
+                try { Logger.Log("[Restore] " + AntigravityIntegration.RestoreClient(target.ExePath)); }
+                catch(Exception error) { throw new IOException("Ярлыки/команда и настройки восстановлены, но бинарный патч снять не удалось. Повторите отмену патча после устранения причины. " + error.Message,error); }
+            }
+            return restored;
         }
         public static List<string> Apply(AppTarget target, string manager, IEnumerable<string> folders, NativeShortcuts shortcuts) {
             string summary;
@@ -143,7 +177,47 @@ namespace DevProxyApp
         internal string InitialShortcutKey;
         readonly Dictionary<string, NativeSession> _nativeSessions = new Dictionary<string, NativeSession>();
         readonly Dictionary<string,string> _nativeClientNotices = new Dictionary<string,string>();
+        bool _routeChangeInProgress;
         bool HasRunningSessions() { foreach (var session in _nativeSessions.Values) if (session.RunningProcess != null) return true; return false; }
+        internal bool EnsureSessionsStoppedForRouteChange(Func<string, bool> confirm = null, Action<NativeSession> stop = null) {
+            var active = new List<KeyValuePair<string, NativeSession>>();
+            var names = new List<string>();
+            foreach (var entry in _nativeSessions) if (entry.Value.RunningProcess != null) {
+                active.Add(entry);
+                var target = _cachedTargets.Find(x => x.Id == entry.Key);
+                names.Add(target == null ? entry.Key : target.DisplayName);
+            }
+            if (active.Count == 0) return true;
+            if (_routeChangeInProgress) throw new InvalidOperationException("Завершение сессий уже выполняется.");
+            _routeChangeInProgress = true;
+            try {
+                string message = "Перед сменой прокси / DNS нужно завершить активные сессии Dagami:\r\n\r\n" +
+                    string.Join("\r\n", names.ToArray()) +
+                    "\r\n\r\nПринудительно закрыть эти приложения и их фоновые процессы, затем применить настройки?" +
+                    "\r\nНесохранённые данные могут быть потеряны. После смены режима приложения нужно запустить заново.";
+                bool accepted = confirm != null ? confirm(message) :
+                    System.Windows.Forms.MessageBox.Show(this, message, "Смена режима подключения",
+                        System.Windows.Forms.MessageBoxButtons.YesNo, System.Windows.Forms.MessageBoxIcon.Warning,
+                        System.Windows.Forms.MessageBoxDefaultButton.Button2) == System.Windows.Forms.DialogResult.Yes;
+                if (!accepted) return false;
+                var failures = new List<string>();
+                for (int i = 0; i < active.Count; i++) {
+                    var entry = active[i];
+                    try {
+                        if (stop == null) entry.Value.StopAndWait(); else stop(entry.Value);
+                        if (entry.Value.RunningProcess != null) throw new IOException("Процесс сессии остался активным.");
+                        if (object.ReferenceEquals(_activeJobMgr, entry.Value.Job)) { _activeSessionProc = null; _activeJobMgr = null; }
+                        _nativeSessions.Remove(entry.Key);
+                        Logger.Log("[Session] Принудительно остановлена перед сменой маршрута: " + names[i]);
+                    } catch (Exception error) {
+                        failures.Add(names[i] + " (" + error.GetType().Name + ")");
+                    }
+                }
+                UpdateNativeStatus();
+                if (failures.Count > 0) throw new InvalidOperationException("Не удалось закрыть приложения: " + string.Join(", ", failures.ToArray()) + ". Настройки подключения не изменены.");
+                return true;
+            } finally { _routeChangeInProgress = false; }
+        }
         [DllImport("user32.dll")] static extern bool SetForegroundWindow(IntPtr window);
         [DllImport("user32.dll")] static extern bool ShowWindowAsync(IntPtr window, int command);
         static void FocusSession(Process process) {
@@ -152,6 +226,7 @@ namespace DevProxyApp
         }
         public string HandleShortcutRequest(NativeLaunchRequest request) {
             try {
+                if (_routeChangeInProgress) return "Идёт смена режима подключения. Повторите запуск после её завершения.";
                 if (string.IsNullOrEmpty(request.TargetId)) { ShowNativeWindow(); return null; }
                 if(_updatePreparing)return "Готовится обновление Dagami. Повторите запуск после перезапуска.";
                 if (_patchInProgress) return "Идёт подготовка приложения. Дождитесь завершения и снова откройте ярлык.";
@@ -172,7 +247,7 @@ namespace DevProxyApp
         }
         void ConfigureNativeShortcuts(bool restore) {
             var target = SelectedNativeTarget();
-            if (!restore) SaveNativeSettings();
+            if (!restore && !SaveNativeSettings()) return;
             if(NativeCliApps.IsCommandTarget(target)) {
                 if(restore)NativeCliApps.Current.Restore(target.Id);
                 else NativeCliApps.Current.Enable(target,Process.GetCurrentProcess().MainModule.FileName);
@@ -186,15 +261,19 @@ namespace DevProxyApp
             foreach (string path in paths) Logger.Log("[Shortcut] " + (restore ? "Восстановлен: " : "Прокси включён: ") + path);
             UpdateNativeDetails();
             System.Windows.Forms.MessageBox.Show(this, restore ? "Обычные ярлыки восстановлены. Запуск снова выполняется напрямую." :
-                "Готово. Открывайте приложение его обычным ярлыком на рабочем столе или в меню «Пуск». DevProxy запустится в фоне автоматически.\r\n\r\nПервый запуск после настройки: закройте копию приложения, открытую без DevProxy.",
-                "DevProxy — ярлыки", System.Windows.Forms.MessageBoxButtons.OK, System.Windows.Forms.MessageBoxIcon.Information);
+                "Готово. Открывайте приложение его обычным ярлыком на рабочем столе или в меню «Пуск». Dagami Agent Proxy запустится в фоне автоматически.\r\n\r\nПервый запуск после настройки: закройте копию приложения, открытую без Dagami Agent Proxy.",
+                "Dagami Agent Proxy — ярлыки", System.Windows.Forms.MessageBoxButtons.OK, System.Windows.Forms.MessageBoxIcon.Information);
         }
         void StopSelectedNativeSession() {
-            var target = SelectedNativeTarget(); NativeSession session;
-            if (!_nativeSessions.TryGetValue(target.Id, out session)) throw new InvalidOperationException("У выбранного приложения нет сессии DevProxy.");
-            if (_activeSessionProc != null && session.Processes.Contains(_activeSessionProc)) { _activeSessionProc = null; _activeJobMgr = null; }
-            session.Dispose(); _nativeSessions.Remove(target.Id); UpdateNativeStatus();
+            var target = SelectedNativeTarget();StopNativeSession(target.Id);UpdateNativeStatus();
             Logger.Log("[Session] Остановлена выбранная сессия: " + target.DisplayName);
+        }
+        void StopNativeSession(string id) {
+            NativeSession session;
+            if(!_nativeSessions.TryGetValue(id,out session))throw new InvalidOperationException("У приложения нет активной сессии Dagami.");
+            session.StopAndWait();
+            if(object.ReferenceEquals(_activeJobMgr,session.Job)){_activeSessionProc=null;_activeJobMgr=null;}
+            _nativeSessions.Remove(id);
         }
         void DisposeNativeSessions() {
             foreach (var session in _nativeSessions.Values) session.Dispose();

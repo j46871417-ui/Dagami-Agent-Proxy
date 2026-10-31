@@ -10,25 +10,29 @@ namespace DevProxyApp {
   public static string Kind(AppTarget target) {
    if(target==null)return "unknown"; string id=(target.Id??"").ToLowerInvariant();
    if(id=="codex"||id.EndsWith("_cli"))return "cli";
-   if(id=="codex-gui"||Name(target,"Codex.exe")&&!NativeCliApps.IsCli(target))return "codex-desktop";
-   if(id=="opencode-gui"||Name(target,"OpenCode.exe")&&!NativeCliApps.IsCli(target))return "opencode-desktop";
+   if(NativeCliApps.IsCli(target)&&!Name(target,"git.exe","cmd.exe","powershell.exe","pwsh.exe"))return "cli";
+   if(id=="codex-gui"||Name(target,"Codex.exe"))return "codex-desktop";
+   if(id=="opencode-gui"||Name(target,"OpenCode.exe"))return "opencode-desktop";
    if(id.StartsWith("jb_")||IsJetBrains(target.ExePath))return "jetbrains";
    if(id=="git"||Name(target,"git.exe"))return "git";
    if(Name(target,"cmd.exe","powershell.exe","pwsh.exe"))return "terminal";
    if(Name(target,"Antigravity.exe","Antigravity IDE.exe","Code.exe","Code - Insiders.exe","Cursor.exe","Windsurf.exe","VSCodium.exe")||
-      id=="antigravity"||id.StartsWith("vscode")||id=="cursor"||id=="windsurf"||id=="vscodium")return "vscode";
+      id=="antigravity"||id=="vscode"||id=="vscode-insiders"||id=="cursor"||id=="windsurf"||id=="vscodium")return "vscode";
    if(AppProxyPolicy.IsGemini(target))return "webview";
    return NativeCliApps.IsCli(target)?"cli":"unknown";
   }
   public static bool IsJetBrains(string executable) {
    if(string.IsNullOrEmpty(executable))return false;
    string name=Path.GetFileName(executable).ToLowerInvariant();
-   return Array.Exists(new[]{"idea64.exe","pycharm64.exe","webstorm64.exe","phpstorm64.exe","clion64.exe","goland64.exe","rider64.exe","datagrip64.exe","rubymine64.exe","rustrover64.exe","dataspell64.exe"},x=>x==name)&&File.Exists(Path.Combine(Path.GetDirectoryName(Path.GetDirectoryName(executable)),"product-info.json"));
+   string bin=Path.GetDirectoryName(executable),root=string.IsNullOrEmpty(bin)?null:Path.GetDirectoryName(bin);
+   return !string.IsNullOrEmpty(root)&&Array.Exists(new[]{"idea64.exe","pycharm64.exe","webstorm64.exe","phpstorm64.exe","clion64.exe","goland64.exe","rider64.exe","datagrip64.exe","rubymine64.exe","rustrover64.exe","dataspell64.exe"},x=>x==name)&&File.Exists(Path.Combine(root,"product-info.json"));
   }
   public static string SettingsPath(AppTarget target) {
    string kind=Kind(target),root=Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData);
    if(kind=="jetbrains") {
-    string product=Path.Combine(Path.GetDirectoryName(Path.GetDirectoryName(target.ExePath)),"product-info.json");
+    string bin=Path.GetDirectoryName(target.ExePath??""),install=string.IsNullOrEmpty(bin)?null:Path.GetDirectoryName(bin);
+    if(string.IsNullOrEmpty(install))return null;
+    string product=Path.Combine(install,"product-info.json");
     if(!File.Exists(product))return target.ConfigPath;
     var data=new JavaScriptSerializer().Deserialize<Dictionary<string,object>>(File.ReadAllText(product));object value;
     if(data==null)return null;
@@ -47,7 +51,7 @@ namespace DevProxyApp {
    }
    return !string.IsNullOrEmpty(target.ConfigPath)?target.ConfigPath:Path.Combine(root,folder,"User","settings.json");
   }
-  public static bool SupportsSettings(AppTarget target) {if(target==null)return false;string kind=Kind(target);return kind=="vscode"||kind=="jetbrains"||kind=="unknown";}
+  public static bool SupportsSettings(AppTarget target) {if(target==null)return false;string kind=Kind(target);return kind=="vscode"||kind=="jetbrains";}
   public static void ResolveSettings(AppTarget target) {
    string path=SettingsPath(target);
    if(path==null&&Kind(target)=="jetbrains")throw new InvalidDataException("Каталог настроек JetBrains не определён: проверьте product-info.json. Прежний путь не используется.");
@@ -85,7 +89,17 @@ namespace DevProxyApp {
   public static bool IsElectronDesktop(AppTarget target) {
    if(target==null||string.IsNullOrEmpty(target.ExePath))return false;
    string root=Path.GetDirectoryName(target.ExePath);
+   if(string.IsNullOrEmpty(root))return false;
    return File.Exists(Path.Combine(root,"resources","app.asar"))||File.Exists(Path.Combine(root,"resources","app","package.json"));
+  }
+  public static string[] RelatedExecutables(AppTarget target) {
+   var result=new List<string>();
+   if(target==null||string.IsNullOrEmpty(target.ExePath))return result.ToArray();
+   result.Add(Path.GetFullPath(AppProxyPolicy.Executable(target)));
+   if(AntigravityIntegration.IsIde(target.ExePath))try{foreach(string path in AntigravityIntegration.BackendPaths(target.ExePath))if(!result.Contains(path))result.Add(path);}catch(UnsupportedAntigravityBinaryException){}
+   if(Kind(target)=="opencode-desktop")foreach(string folder in new[]{Path.GetDirectoryName(target.ExePath),Path.Combine(Path.GetDirectoryName(target.ExePath),"resources")})
+    foreach(string name in new[]{"opencode-cli.exe","opencode-server.exe"}){string path=Path.Combine(folder,name);if(File.Exists(path))result.Add(path);}
+   return result.ToArray();
   }
   public static string Describe(AppTarget target) {
    switch(Kind(target)) {
@@ -97,7 +111,7 @@ namespace DevProxyApp {
     case "terminal":return "Патч: ярлык терминала с окружением прокси для дочерних команд. Системные команды в PATH не заменяются.";
     case "cli":return "Патч: команда CLI в пользовательском PATH и окружение прокси; параметры моделей и авторизации сохраняются.";
     case "webview":return "Патч: ярлыки и параметры WebView2/Chromium/Qt при запуске.";
-    default:return "Патч: управляемый ярлык и окружение HTTP(S). Собственная поддержка прокси приложением требует проверки.";
+    default:return "Только управляемый запуск: ярлык и окружение HTTP(S). Файлы приложения и его настройки не меняются. Если программа игнорирует прокси, этот способ не перенаправит её трафик.";
    }
   }
  }
