@@ -11,6 +11,7 @@ namespace DevProxyApp
         // session disposal still terminates the job and its descendants.
         public readonly JobObjectManager Job = new JobObjectManager(false);
         public readonly List<Process> Processes = new List<Process>();
+        public LocalProxyBridge PrivateBridge;
         public Process RunningProcess {
             get {
                 Process first=null;
@@ -31,6 +32,7 @@ namespace DevProxyApp
             Job.Dispose();
             foreach (var process in Processes) { try { if (!process.HasExited) process.Kill(); } catch { } process.Dispose(); }
             Processes.Clear();
+            if(PrivateBridge!=null){PrivateBridge.Dispose();PrivateBridge=null;}
         }
         public void StopAndWait(int timeoutMilliseconds = 5000) {
             if (timeoutMilliseconds < 1) throw new ArgumentOutOfRangeException("timeoutMilliseconds");

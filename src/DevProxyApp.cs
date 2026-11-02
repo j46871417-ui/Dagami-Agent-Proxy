@@ -1958,10 +1958,10 @@ namespace DevProxyApp
                         try {client.GetStream().WriteTimeout=500;byte[] busy=Encoding.ASCII.GetBytes("HTTP/1.1 503 Service Unavailable\r\nConnection: close\r\nContent-Length: 0\r\n\r\n");client.GetStream().Write(busy,0,busy.Length);}catch{}finally{client.Close();}
                         continue;
                     }
-                    TrackConnection(client);
                     try {
-                        if(!ThreadPool.QueueUserWorkItem(state=>{try{HandleConnection(state);}finally{_connectionSlots.Release();}},client))throw new IOException("Не удалось поставить соединение в очередь.");
-                    } catch {client.Close();_connectionSlots.Release();throw;}
+                        TrackConnection(client);
+                        if(!ThreadPool.QueueUserWorkItem(state=>HandleConnection(state),client))throw new IOException("Не удалось поставить соединение в очередь.");
+                    } catch {CloseConnection(client);_connectionSlots.Release();throw;}
 
 
 
@@ -2055,6 +2055,10 @@ namespace DevProxyApp
 
 
                 clientStream.ReadTimeout = 15000;
+                if(!LoopbackPeer.IsCurrentUser(client)) {
+                    byte[] forbidden=Encoding.ASCII.GetBytes("HTTP/1.1 403 Forbidden\r\nConnection: close\r\nContent-Length: 0\r\n\r\n");
+                    clientStream.Write(forbidden,0,forbidden.Length);return;
+                }
 
 
 
@@ -2266,42 +2270,18 @@ namespace DevProxyApp
 
 
 
-                    if (method.Equals("CONNECT", StringComparison.OrdinalIgnoreCase)) {
-
-
-
-                        byte[] ok = Encoding.ASCII.GetBytes("HTTP/1.1 200 Connection established\r\n\r\n");
-
-
-
-                        clientStream.Write(ok, 0, ok.Length); clientStream.Flush();
-
-
-
-                    } else {
-
-
-
-                        byte[] header = Encoding.ASCII.GetBytes(LoopbackRequest(headerText, localEndpoint));
-
-
-
-                        localStream.Write(header, 0, header.Length);
-
-
-
+                    byte[] initialLocal=new byte[totalRead-bodyOffset];
+                    if(initialLocal.Length>0)Buffer.BlockCopy(buffer,bodyOffset,initialLocal,0,initialLocal.Length);
+                    if (!method.Equals("CONNECT", StringComparison.OrdinalIgnoreCase)) {
+                        string localHeaders=HttpWire.RequestHeaders(headerText,localEndpoint,false,null);
+                        relaying=HttpWire.Exchange(clientStream,localStream,headerText,localHeaders,initialLocal,
+                            (input,output)=>Relay(input,output,client,upstream,connection),()=>tunnelEstablished=true);
+                        return;
                     }
-
-
-
-                    if (bodyOffset < totalRead) localStream.Write(buffer, bodyOffset, totalRead - bodyOffset);
-
-
-
-                    localStream.Flush(); tunnelEstablished = true;
-
-
-
+                    byte[] localOk=Encoding.ASCII.GetBytes("HTTP/1.1 200 Connection established\r\n\r\n");
+                    clientStream.Write(localOk,0,localOk.Length);clientStream.Flush();tunnelEstablished=true;
+                    if(initialLocal.Length>0)localStream.Write(initialLocal,0,initialLocal.Length);
+                    localStream.Flush();
                     Relay(clientStream, localStream, client, upstream, connection);
 
 
@@ -2886,107 +2866,12 @@ namespace DevProxyApp
 
 
 
-                    byte[] sendBytes;
-
-
-
-                    if (isDirect)
-
-
-
-                    {
-
-
-
-                        Uri destination=HttpDestination(method,target,headerText);
-
-
-
-                        byte[] header=Encoding.ASCII.GetBytes(LoopbackRequest(headerText,destination));
-
-
-
-                        sendBytes=new byte[header.Length+(totalRead-bodyOffset)];Array.Copy(header,sendBytes,header.Length);
-
-
-
-                        if(bodyOffset<totalRead)Array.Copy(buffer,bodyOffset,sendBytes,header.Length,totalRead-bodyOffset);
-
-
-
-                    }
-
-
-
-                    else if (!string.IsNullOrEmpty(_authHeader) && headerText.IndexOf("Proxy-Authorization", StringComparison.OrdinalIgnoreCase) < 0)
-
-
-
-                    {
-
-
-
-                        string mod = headerText.Insert(headerEnd, "\r\nProxy-Authorization: " + _authHeader);
-
-
-
-                        byte[] modifiedHeader = Encoding.ASCII.GetBytes(mod);
-
-
-
-                        sendBytes = new byte[modifiedHeader.Length + (totalRead - bodyOffset)];
-
-
-
-                        Array.Copy(modifiedHeader, sendBytes, modifiedHeader.Length);
-
-
-
-                        if (bodyOffset < totalRead)
-
-
-
-                            Array.Copy(buffer, bodyOffset, sendBytes, modifiedHeader.Length, totalRead - bodyOffset);
-
-
-
-                    }
-
-
-
-                    else
-
-
-
-                    {
-
-
-
-                        sendBytes = new byte[totalRead];
-
-
-
-                        Array.Copy(buffer, sendBytes, totalRead);
-
-
-
-                    }
-
-
-
-                    upstreamStream.Write(sendBytes, 0, sendBytes.Length);
-
-
-
-                    upstreamStream.Flush();
-
-
-
-                    Relay(clientStream, upstreamStream, client, upstream, connection);
-
-
-
-                    relaying = true;
+                    Uri destination=HttpDestination(method,target,headerText);
+                    string outgoing=HttpWire.RequestHeaders(headerText,destination,!isDirect,isDirect?null:_authHeader);
+                    byte[] initialBody=new byte[totalRead-bodyOffset];
+                    if(initialBody.Length>0)Buffer.BlockCopy(buffer,bodyOffset,initialBody,0,initialBody.Length);
+                    relaying=HttpWire.Exchange(clientStream,upstreamStream,headerText,outgoing,initialBody,
+                        (input,output)=>Relay(input,output,client,upstream,connection),()=>tunnelEstablished=true);
 
 
 
@@ -3066,7 +2951,7 @@ namespace DevProxyApp
 
 
 
-                if (!relaying) { CloseConnection(client); CloseConnection(upstream); }
+                if (!relaying) { CloseConnection(client); CloseConnection(upstream); _connectionSlots.Release(); }
 
 
 
@@ -3802,12 +3687,9 @@ namespace DevProxyApp
 
 
                     Interlocked.Decrement(ref _activeConnections);
-
-
+                    _connectionSlots.Release();
 
                 }
-
-
 
             };
 
@@ -3837,7 +3719,11 @@ namespace DevProxyApp
 
 
 
-            catch { try{d1.Dispose();}catch{}try{d2.Dispose();}catch{}if(!firstStarted)finished();finished();throw; }
+            catch {
+                try{d1.Dispose();}catch{}try{d2.Dispose();}catch{}
+                if(!firstStarted) { Interlocked.Decrement(ref _activeConnections); throw; }
+                finished(); // the running first direction owns the other completion
+            }
 
 
 
@@ -4259,7 +4145,16 @@ namespace DevProxyApp
 
         public string LastProxy { get; set; }
         public bool UseProxy { get; set; }
-        public string EffectiveProxy { get { return UseProxy ? LastProxy : "direct"; } }
+        public string LastLoadError { get; private set; }
+        public string EffectiveProxy { get {
+            if (!string.IsNullOrEmpty(LastLoadError)) throw new IOException(LastLoadError);
+            if (!UseProxy) return "direct";
+            if (MainForm.IsDirectProxyValue(LastProxy)) return "direct";
+            Uri parsed;
+            if (!UpstreamProxyDiagnostics.TryParse(LastProxy, out parsed))
+                throw new IOException("Прокси включён, но его настройки отсутствуют или недоступны. Сохраните подключение либо явно отключите прокси.");
+            return LastProxy;
+        } }
 
 
 
@@ -4436,6 +4331,7 @@ namespace DevProxyApp
 
 
 
+            LastLoadError = null;
             try
 
 
@@ -4498,7 +4394,13 @@ namespace DevProxyApp
 
 
 
-            catch { }
+            catch (Exception error) {
+                LastLoadError = "Не удалось загрузить настройки подключения (" + error.GetType().Name + "). Запуск заблокирован до повторного сохранения настроек.";
+                LastProxy = "";
+                Logger.Log("[Config] " + LastLoadError);
+                EnsureDefaultProfiles();
+                return;
+            }
 
 
 
@@ -4831,6 +4733,7 @@ namespace DevProxyApp
 
                 SafeWriteConfig(configFile, sb.ToString());
                 LastSaveError = null;
+                LastLoadError = null;
                 return true;
             }
             catch (Exception ex) {
@@ -4875,6 +4778,9 @@ namespace DevProxyApp
 
 
 
+            if (string.IsNullOrWhiteSpace(json) || json.Length > 1024*1024 ||
+                !(new JavaScriptSerializer { MaxJsonLength=1024*1024 }.DeserializeObject(json) is Dictionary<string,object>))
+                throw new InvalidDataException("Некорректный файл настроек.");
             // Protected values are preferred; legacy plaintext is read only for migration.
 
 
@@ -9347,7 +9253,7 @@ namespace DevProxyApp
 
 
                 string proxyUrl = ConfigManager.Instance.EffectiveProxy;
-                if (string.IsNullOrEmpty(proxyUrl) || IsDirectProxyValue(proxyUrl)) proxyUrl = "direct";
+                if (IsDirectProxyValue(proxyUrl)) proxyUrl = "direct";
 
 
 
@@ -9561,8 +9467,8 @@ namespace DevProxyApp
 
 
             error = null;
-
-
+            try { string validatedRoute = ConfigManager.Instance.EffectiveProxy; }
+            catch (IOException routeError) { error = routeError.Message; return false; }
 
             if (_bridgePort <= 0)
 
@@ -9632,6 +9538,7 @@ namespace DevProxyApp
 
 
 
+            LocalProxyBridge pendingBridge=null;
             try
 
 
@@ -9707,6 +9614,11 @@ namespace DevProxyApp
 
 
                 string localProxy = "http://127.0.0.1:" + _bridgePort;
+                if(reuse&&session.PrivateBridge!=null)localProxy="http://127.0.0.1:"+session.PrivateBridge.BoundPort;
+                else if(gemini) {
+                    pendingBridge=AppProxyPolicy.CreateGeminiBridge(target,ConfigManager.Instance.UseProxy,ConfigManager.Instance.EffectiveProxy);
+                    if(pendingBridge!=null)localProxy="http://127.0.0.1:"+pendingBridge.BoundPort;
+                }
 
 
 
@@ -9865,7 +9777,7 @@ namespace DevProxyApp
 
 
 
-                    psi.Arguments += " " + NativeLogin.ElectronArguments(target, localProxy, profileRoot);
+                    psi.Arguments = AppProxyPolicy.ManagedChromiumArguments((psi.Arguments ?? "") + " " + NativeLogin.ElectronArguments(target, localProxy, profileRoot), localProxy);
 
 
 
@@ -9902,6 +9814,8 @@ namespace DevProxyApp
 
 
                 session.Processes.Add(launched);
+                if(pendingBridge!=null){session.PrivateBridge=pendingBridge;pendingBridge=null;}
+                if(gemini)Logger.Log("[Gemini] effective route="+(session.PrivateBridge!=null?"upstream-only":"shared-explicit-route")+" bridge=127.0.0.1:"+new Uri(localProxy).Port+"; доступ чата не проверен.");
 
 
 
@@ -9917,7 +9831,7 @@ namespace DevProxyApp
 
 
 
-                Logger.Log("[✓] Процесс запущен: " + target.DisplayName + " (PID: " + launched.Id + "). Маршрут передан дочерним процессам.");
+                Logger.Log("[✓] Процесс запущен: " + target.DisplayName + " (PID: " + launched.Id + "). Параметры подключения переданы; запросы сервиса не проверены.");
 
 
 
@@ -9946,13 +9860,8 @@ namespace DevProxyApp
 
 
                 return false;
-
-
-
             }
-
-
-
+            finally { if(pendingBridge!=null)pendingBridge.Dispose(); }
         }
 
 

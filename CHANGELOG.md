@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.4.1 beta — 2026-11-02
+
+- Block managed launch after a configuration read/decryption error or a missing
+  enabled proxy; require explicit recovery instead of selecting direct routing.
+- Replace conflicting browser routing flags and use a private proxy-only bridge
+  for Gemini when an external proxy is enabled. Track its session lifecycle and
+  describe launch and network verification separately.
+- Keep live relay connections inside the 128-slot limit in native and Python
+  bridges. Authorize loopback clients by their OS account, denying unknown peers.
+- Frame ordinary HTTP as one transaction per connection; authenticate reconnects,
+  block unprocessed pipelining, preserve chunked RPC and HTTP upgrades.
+- Reject elevated automatic updates and restart only a successfully installed,
+  hash-verified executable. Protected folders use manual release installation.
+- Display damaged launcher records as requiring recovery, with undo available.
+- Prepare signed-license verification and its bot contract. Legacy acceptance is
+  intentionally retained pending issuer migration; no current activation changes.
+- Add live regression checks; see `SECURITY_FIXES.md` and `SIGNED_LICENSES.md`.
+
 ## 0.4.0 beta — 2026-10-31
 
 - Use a shared GUI/CLI binary restore path; report partial rollback explicitly

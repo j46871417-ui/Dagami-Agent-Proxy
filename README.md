@@ -14,7 +14,9 @@
 Менеджер запуска IDE и CLI через свой прокси. Профили, запуск приложений,
 ярлыки, системный DNS с копией и откатом. Ранее — DevProxy.
 
-**[Скачать v0.4.0-beta](https://github.com/j46871417-ui/Dagami-Agent-Proxy/releases/tag/v0.4.0-beta)**
+**[Скачать v0.4.1-beta](https://github.com/j46871417-ui/Dagami-Agent-Proxy/releases/tag/v0.4.1-beta)**
+
+Версия **0.4.1 бета** включает [исправления технического ревью](SECURITY_FIXES.md). Переход на подписанные лицензии [отложен до миграции бота](SIGNED_LICENSES.md). Доступность Gemini в конкретном аккаунте требует отдельной проверки.
 · **[Собрать Linux / macOS](BUILD_LINUX_MACOS.md)**
 
 Версия **0.4.0 бета**: исправлены подготовка backend отдельной Antigravity IDE,

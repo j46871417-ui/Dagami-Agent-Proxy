@@ -13,9 +13,9 @@ SOURCES = [
     "DevProxyApp.cs", "NativeUi.cs", "FluentUi.cs", "SimpleUi.cs", "AntigravityIntegration.cs", "CliRegionGate.cs", "ProxyDiagnostics.cs", "DnsProviders.cs", "DnsTransport.cs", "DnsAgent.cs", "DpiDesync.cs",
     "AntigravityUi.cs", "AntigravityLogin.cs", "NativeShortcuts.cs",
     "NativeLaunchBroker.cs", "NativeSessions.cs", "SystemDnsManager.cs", "NativeCli.cs", "Brand.cs",
-    "LicenseManager.cs", "AppProxyPolicy.cs", "ApplicationSupport.cs", "JetBrainsProxySettings.cs",
+    "LicenseManager.cs", "SignedLicenses.cs", "AppProxyPolicy.cs", "ApplicationSupport.cs", "JetBrainsProxySettings.cs",
     "ApplicationDiscovery.cs", "NativeCliApps.cs", "BugReports.cs", "NativeUpdates.cs",
-    "UpdateInstaller.cs", "UpdateUi.cs", "NativeStartup.cs",
+    "UpdateInstaller.cs", "UpdateUi.cs", "NativeStartup.cs", "LoopbackPeer.cs", "HttpWire.cs",
 ]
 
 

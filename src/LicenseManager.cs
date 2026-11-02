@@ -35,6 +35,7 @@ namespace DevProxyApp {
 
         public static string NormalizeKey(string raw) {
             if (string.IsNullOrEmpty(raw)) return "";
+            if(raw.Trim().StartsWith("DAGAMI2.",StringComparison.Ordinal))return raw.Trim();
             var sb = new StringBuilder();
             foreach (char c in raw) {
                 if (char.IsLetterOrDigit(c)) sb.Append(char.ToUpperInvariant(c));
@@ -49,6 +50,8 @@ namespace DevProxyApp {
         public static bool ValidateKey(string key) {
             string normalized = NormalizeKey(key);
             if (string.IsNullOrEmpty(normalized)) return false;
+            if(normalized.StartsWith("DAGAMI2.",StringComparison.Ordinal))return SignedLicenses.Validate(normalized);
+            if(!SignedLicenses.AcceptLegacyKeys)return false;
             string body = normalized.Replace("-", "").Substring(6);
             foreach (char c in body) {
                 if (Alphabet.IndexOf(c) < 0) return false;
@@ -79,6 +82,7 @@ namespace DevProxyApp {
             string stored = GetStoredKey();
             if (string.IsNullOrEmpty(stored)) return null;
             string normalized = NormalizeKey(stored);
+            if(normalized.StartsWith("DAGAMI2.",StringComparison.Ordinal))return "DAGAMI2-****";
             if (normalized.Length != 21) return "DAGAMI-****-****-****";
             return "DAGAMI-****-****-" + normalized.Substring(normalized.Length - 4);
         }
@@ -191,7 +195,7 @@ namespace DevProxyApp {
                 ForeColor = FluentTheme.Text,
                 BackColor = Color.FromArgb(248, 250, 254),
                 BorderStyle = BorderStyle.FixedSingle,
-                CharacterCasing = CharacterCasing.Upper
+                CharacterCasing = CharacterCasing.Normal, MaxLength = 4096
             };
             _keyBox.KeyDown += (s, e) => {
                 if (e.KeyCode == Keys.Enter) {

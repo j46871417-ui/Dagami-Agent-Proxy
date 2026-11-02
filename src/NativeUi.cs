@@ -95,31 +95,41 @@ namespace DevProxyApp
             }
         }
 
-        internal static bool IsTargetPatched(AppTarget target)
+        internal static string TargetPatchState(AppTarget target)
         {
-            if (target == null || !target.IsInstalled) return false;
+            if (target == null) return "none";
             try {
                 string issue;
                 int count = NativeCliApps.IsCommandTarget(target)
                     ? NativeCliApps.Current.VerifiedCount(target.Id, out issue)
                     : NativeShortcuts.Current.VerifiedCount(target.Id, out issue);
-                if (count > 0 || !string.IsNullOrEmpty(issue)) return true;
-            } catch { }
+                if (!string.IsNullOrEmpty(issue)) return "damaged";
+                if (count > 0) return "ready";
+            } catch { return "damaged"; }
             try {
                 if (ApplicationSupport.SupportsSettings(target)) {
                     ApplicationSupport.ResolveSettings(target);
                     if (!string.IsNullOrEmpty(target.ConfigPath) && File.Exists(target.ConfigPath + ".devproxy.bak"))
-                        return true;
+                        return "ready";
                 }
-            } catch { }
+            } catch { return "damaged"; }
             try {
                 if (AntigravityIntegration.Supports(target.ExePath)) {
                     foreach (string backend in AntigravityIntegration.BackendPaths(target.ExePath)) {
-                        if (AntigravityIntegration.HasActivePatchRecord(backend)) return true;
+                        if (AntigravityIntegration.HasActivePatchRecord(backend)) return "ready";
                     }
                 }
-            } catch { }
-            return false;
+            } catch { return "damaged"; }
+            return "none";
+        }
+
+        internal static bool IsTargetPatched(AppTarget target) { return TargetPatchState(target)=="ready"; }
+        public static string PatchStatusLabel(int records,string issue,bool persistent) {
+            return !string.IsNullOrEmpty(issue)?"Требует восстановления":records>0||persistent?"Пропатчено":"Не пропатчено";
+        }
+        static string TargetPatchLabel(AppTarget target) {
+            string state=TargetPatchState(target);
+            return state=="damaged"?"Требует восстановления":state=="ready"?"Пропатчено":"Не пропатчено";
         }
 
         internal void ReadStartupState()
@@ -414,8 +424,10 @@ namespace DevProxyApp
             bool hasSettingsBackup = false;
             try { if (target != null && ApplicationSupport.SupportsSettings(target)) { ApplicationSupport.ResolveSettings(target); hasSettingsBackup = !string.IsNullOrEmpty(target.ConfigPath) && File.Exists(target.ConfigPath + ".devproxy.bak"); } } catch { }
             bool hasBinaryPatch = _clientStatusText != null && (_clientStatusText.StartsWith("Патч: применён", StringComparison.OrdinalIgnoreCase) || _clientStatusText.IndexOf("частично", StringComparison.OrdinalIgnoreCase) >= 0 || _clientStatusText.IndexOf("повторная подготовка",StringComparison.OrdinalIgnoreCase)>=0);
-            bool isPatched = target != null && (_shortcutRecords > 0 || _shortcutIssue != null || hasSettingsBackup || hasBinaryPatch || _selectedPersistentPatch);
-            bool canUnpatch = isPatched;
+            bool hasPatchRecords = target != null && (_shortcutRecords > 0 || _shortcutIssue != null || hasSettingsBackup || hasBinaryPatch || _selectedPersistentPatch);
+            bool isPatched = hasPatchRecords && string.IsNullOrEmpty(_shortcutIssue);
+            bool canUnpatch = hasPatchRecords;
+            string patchLabel=PatchStatusLabel(_shortcutRecords,_shortcutIssue,hasSettingsBackup||hasBinaryPatch||_selectedPersistentPatch);
             _patchMenuItem.Visible = true;
             _patchMenuItem.Enabled = canPatch;
             if (_patchAppButton != null) _patchAppButton.Enabled = canPatch;
@@ -427,9 +439,9 @@ namespace DevProxyApp
             _clientPreparationItem.Enabled = target != null && target.IsInstalled && AntigravityIntegration.Supports(target.ExePath);
             string state = target == null ? "Выберите приложение" : !target.IsInstalled ? "Не установлено" :
                 running ? "Запущено через Dagami" : "Не запущено через Dagami";
-            string patchBadge = target == null || !target.IsInstalled ? "" : (isPatched ? "Пропатчено · " : "Не пропатчено · ");
+            string patchBadge = target == null || !target.IsInstalled ? "" : (patchLabel + " · ");
             if (target != null && _targetList != null && _targetList.SelectedItems.Count > 0 && _targetList.SelectedItems[0].SubItems.Count > 1) {
-                string listStatus = !target.IsInstalled ? "Не найдено" : (isPatched ? "Пропатчено" : "Не пропатчено");
+                string listStatus = !target.IsInstalled ? "Не найдено" : patchLabel;
                 if (_targetList.SelectedItems[0].SubItems[1].Text != listStatus) _targetList.SelectedItems[0].SubItems[1].Text = listStatus;
             }
             _targetDetails.Text = _proxyCheckFailed ? state + ". Последняя проверка маршрута не прошла." : state;
@@ -440,7 +452,7 @@ namespace DevProxyApp
             bool cli=NativeCliApps.IsCommandTarget(target);
 
             if (target != null && target.IsInstalled) {
-                _shortcutState.Text = isPatched ? ((_shortcutRecords > 0 && _shortcutIssue == null) ? "Статус: ПРОПАТЧЕНО · " + (cli ? "команда настроена через прокси" : "ярлыки настроены через прокси") : "Статус: Частичный патч · Требуется обновить " + (cli ? "команду" : "ярлыки")) : "Статус: НЕ ПРОПАТЧЕНО · " + (cli ? "прямой запуск команды" : "обычные ярлыки напрямую");
+                _shortcutState.Text = !string.IsNullOrEmpty(_shortcutIssue) ? "Статус: ТРЕБУЕТ ВОССТАНОВЛЕНИЯ · " + _shortcutIssue : isPatched ? ((_shortcutRecords > 0 && _shortcutIssue == null) ? "Статус: ПРОПАТЧЕНО · " + (cli ? "команда настроена через прокси" : "ярлыки настроены через прокси") : "Статус: Частичный патч · Требуется обновить " + (cli ? "команду" : "ярлыки")) : "Статус: НЕ ПРОПАТЧЕНО · " + (cli ? "прямой запуск команды" : "обычные ярлыки напрямую");
             } else { _shortcutState.Text = "Статус: не установлено"; }
 
 
@@ -541,8 +553,9 @@ namespace DevProxyApp
             BeginInvoke(new Action(() => {
                 _nativeColumnsPending = false;
                 if (_targetList.IsDisposed) return;
-                _targetList.Columns[0].Width=Math.Max(180,_targetList.ClientSize.Width-140);
-                _targetList.Columns[1].Width=130;_targetList.Columns[2].Width=0;
+                int statusWidth=Math.Max(130,TextRenderer.MeasureText("Требует восстановления",_targetList.Font).Width+20);
+                _targetList.Columns[0].Width=Math.Max(180,_targetList.ClientSize.Width-statusWidth-10);
+                _targetList.Columns[1].Width=statusWidth;_targetList.Columns[2].Width=0;
             }));
         }
 
@@ -557,7 +570,7 @@ namespace DevProxyApp
                 _targetList.Items.Clear();
                 foreach (AppTarget target in _cachedTargets) {
                     var item = new ListViewItem(target.DisplayName) { Tag = target };
-                    item.SubItems.Add(!target.IsInstalled ? "Не найдено" : (IsTargetPatched(target) ? "Пропатчено" : "Не пропатчено"));
+                    item.SubItems.Add(!target.IsInstalled ? "Не найдено" : TargetPatchLabel(target));
                     item.SubItems.Add(target.ExePath ?? "");
                     item.ToolTipText = (target.ExePath ?? target.DisplayName)+"\r\n"+ApplicationSupport.Describe(target);
                     item.Checked = ConfigManager.Instance.CheckedIds.Contains(target.Id);
@@ -667,7 +680,7 @@ namespace DevProxyApp
             if (!target.IsCustom) throw new InvalidOperationException("Из списка можно удалить только добавленные вручную приложения.");
             NativeSession active;
             if(_nativeSessions.TryGetValue(target.Id,out active)&&active.RunningProcess!=null)throw new InvalidOperationException("Сначала остановите приложение через «Действия → Остановить».");
-            if(IsTargetPatched(target))throw new InvalidOperationException("Сначала нажмите «Отменить патч». Удаление записи не должно оставлять управляемые ярлыки или команду CLI без возможности отката.");
+            if(TargetPatchState(target)!="none")throw new InvalidOperationException("Сначала нажмите «Отменить патч». Удаление записи не должно оставлять управляемые ярлыки или команду CLI без возможности отката.");
             int position=ConfigManager.Instance.CustomTargets.IndexOf(target);
             bool wasChecked=ConfigManager.Instance.CheckedIds.Remove(target.Id);
             ConfigManager.Instance.CustomTargets.Remove(target);

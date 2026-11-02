@@ -8,7 +8,7 @@ import subprocess
 import sys
 
 ROOT=Path(__file__).resolve().parents[1]
-SUITES=['BugReportChecks','ConsoleLaunchChecks','SessionStopChecks','HardReviewChecks','CliChecks','ApplicationSupportChecks',
+SUITES=['SecurityReviewChecks','BugReportChecks','ConsoleLaunchChecks','SessionStopChecks','HardReviewChecks','CliChecks','ApplicationSupportChecks',
         'ReviewRegressionChecks','ConnectionRecoveryChecks','CodexDiscoveryChecks','PatchChecks','ShortcutChecks','ShortcutRecoveryChecks',
         'NativeLoginChecks','GoogleGeminiChecks','AntigravityPatchChecks','Ide26Checks','ProxyFailureChecks','DnsTransportChecks','DnsProviderChecks','DnsAgentChecks','TlsDiagnosticsChecks','SystemDnsUiChecks','UserInfoChecks','LocalUiChecks','StartupChecks']
 

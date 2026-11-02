@@ -19,6 +19,17 @@ class ConnectionRecoveryChecks {
  static int Main(){
   string root=Path.Combine(Path.GetTempPath(),"Dagami-recovery-"+Guid.NewGuid().ToString("N"));Directory.CreateDirectory(root);
   try {
+   var invalid=Config(Path.Combine(root,"invalid"));
+   File.WriteAllText(Path.Combine(root,"invalid","config.json"),"{\"last_proxy_protected\":\"invalid-base64\",\"use_proxy\":true,\"use_dagami_dns\":false}");
+   invalid.Load();bool refused=false;try{string invalidRoute=invalid.EffectiveProxy;}catch(IOException){refused=true;}
+   Assert(refused&&!string.IsNullOrEmpty(invalid.LastLoadError),"Corrupt config silently selected a direct/auto-detected route");
+   invalid.LastProxy="http://fixture.invalid:8080";Assert(invalid.Save(),invalid.LastSaveError);
+   Assert(invalid.LastLoadError==null&&invalid.EffectiveProxy==invalid.LastProxy,"Explicit save did not recover connection settings");
+   invalid.LastProxy="";refused=false;try{string invalidRoute=invalid.EffectiveProxy;}catch(IOException){refused=true;}
+   Assert(refused,"Enabled empty proxy silently selected direct");invalid.UseProxy=false;Assert(invalid.EffectiveProxy=="direct","Explicit DNS-only mode rejected");
+   Assert(!UpdateInstaller.ShouldRestart(new UpdatePlan{Restart=true,GuiPath="missing-or-untrusted.exe"},false),"Rejected update can restart an unvalidated target");
+   foreach(var mode in new[]{new[]{true,true},new[]{false,false}}){refused=false;try{UpdateInstaller.RequireUserUpdate(mode[0],mode[1]);}catch(IOException){refused=true;}Assert(refused,"Elevated/protected update was allowed");}
+   UpdateInstaller.RequireUserUpdate(false,true);
    var adopt=typeof(ConfigManager).GetMethod("CanAdoptDetectedProxy",BindingFlags.Static|BindingFlags.NonPublic);
    Assert(!(bool)adopt.Invoke(null,new object[]{"http://127.0.0.1:53200",false}),"Own bridge adopted as upstream");
    Assert(!(bool)adopt.Invoke(null,new object[]{"http://localhost:53209",false}),"Reserve bridge adopted as upstream");

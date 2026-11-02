@@ -197,7 +197,7 @@ namespace DevProxyApp {
    return start;
   }
   public static int Run(string executable,string[] args,string upstream,string dnsHost){
-   if(string.IsNullOrWhiteSpace(upstream)&&!string.IsNullOrWhiteSpace(dnsHost))upstream="direct";
+
    Uri uri;if(!MainForm.IsDirectProxyValue(upstream)&&(!Uri.TryCreate(upstream,UriKind.Absolute,out uri)||(uri.Scheme!="http"&&uri.Scheme!="https")))throw new ArgumentException("Для CLI сначала настройте HTTP/HTTPS прокси или режим direct в Dagami.");
    if(AntigravityIntegration.Supports(executable) && ConfigManager.Instance.PrepareAntigravityClient)
     Console.Error.WriteLine(AntigravityIntegration.PrepareClient(executable).Message);
