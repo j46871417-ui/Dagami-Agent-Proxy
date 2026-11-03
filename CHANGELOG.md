@@ -1,5 +1,11 @@
 # Changelog
 
+## External TUN experiment — 2026-11-03
+
+- Add a source-only external TUN helper with a loopback SOCKS5 check,
+  child-only env cleanup, conflict checks and a no-write launch plan.
+- Document fork ideas, DLL hooks, endpoint patch limits and Codex routing.
+
 ## 0.4.0 beta — 2026-10-31
 
 - Use a shared GUI/CLI binary restore path; report partial rollback explicitly

@@ -41,7 +41,7 @@ def source_member(path):
         return path.suffix=='.py' or (relative.parent.as_posix()=='devproxy_pkg/assets' and
             path.name in SOURCE_ASSETS)
     if relative.parts[0]=='tests':return path.suffix in ('.py','.cs','.ps1','.md')
-    if relative.parts[0]=='tools':return path.name in ('check_source_hygiene.py','source-policy.json','test_source_hygiene.py','run_native_checks.py')
+    if relative.parts[0]=='tools':return path.name in ('check_source_hygiene.py','source-policy.json','test_source_hygiene.py','run_native_checks.py','external_tun.py')
     if relative.parts[0]=='.agents':return path.suffix in ('.md','.json','.sh','.py')
     if relative.parts[0]=='bug_reports':return Path(*relative.parts[1:]).as_posix() in BUG_REPORTS_FILES
     return relative.parts[:2]==('.github','workflows') and path.suffix in ('.yml','.yaml')
@@ -80,7 +80,7 @@ def main():
     names=['.gitignore','.gitattributes','.gitleaks.toml','.githooks/pre-commit',
            'devproxy_gui.py','pyproject.toml','PORTABLE.md','BUILD_LINUX_MACOS.md',
            'README.md','MATRIX.md','APPLICATIONS.md','BUG_REPORTS.md','RELEASE_NOTES.md','CHANGELOG.md','AGENTS.md',
-           'SYSTEM_DNS.md','SOURCE_POLICY.md','STARTUP.md','LICENSE',
+           'SYSTEM_DNS.md','SOURCE_POLICY.md','STARTUP.md','EXTERNAL_TUN.md','LICENSE',
            'tools/build_portable.py','tools/build_native_app.py','tools/install_portable.py','install.sh',
            'src/SystemDns.ps1','src/app.manifest',*['src/'+name for name in NATIVE_SOURCES]]
     staged=output/('source-'+uuid.uuid4().hex+'.tmp')
