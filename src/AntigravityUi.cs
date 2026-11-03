@@ -14,18 +14,18 @@ namespace DevProxyApp
         {
             var page = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 3, BackColor = FluentTheme.Background };
             page.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
-            page.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-            page.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+            page.RowStyles.Add(new RowStyle(SizeType.Absolute, 136));
+            page.RowStyles.Add(new RowStyle(SizeType.Absolute, 60));
             page.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
             var card = new FluentCard { Dock = DockStyle.Fill };
             var body = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 3, BackColor = FluentTheme.Surface };
             body.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
             body.Controls.Add(FluentLabel("Патчинг и проверка Antigravity / agy CLI", 15, true), 0, 0);
-            _prepareAntigravity = new CheckBox { Text = "Автоматически подготавливать совместимые версии", AutoSize = true, Checked = ConfigManager.Instance.PrepareAntigravityClient };
+            _prepareAntigravity = new CheckBox { Text = "Подготавливать совместимые версии Antigravity", AutoSize = true, Checked = ConfigManager.Instance.PrepareAntigravityClient };
 
             body.Controls.Add(new Label { Dock = DockStyle.Fill, ForeColor = FluentTheme.Muted,
                 Text = "Проверка разделяет ошибки прокси, DNS и сертификата. Она не входит в аккаунт и не отправляет запрос модели. Вход завершите в IDE." }, 0, 2);
-            body.RowStyles.Add(new RowStyle(SizeType.AutoSize)); body.RowStyles.Add(new RowStyle(SizeType.Absolute, 0)); body.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+            body.RowStyles.Add(new RowStyle(SizeType.Absolute, 34)); body.RowStyles.Add(new RowStyle(SizeType.Absolute, 0)); body.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
             card.Controls.Add(body); page.Controls.Add(card, 0, 0);
             var actions = new FlowLayoutPanel { Dock = DockStyle.Fill, WrapContents = false, AutoScroll = true };
             AddNativeButton(actions, "Вход через прокси", OpenAntigravityLogin);

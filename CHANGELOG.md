@@ -1,5 +1,15 @@
 # Changelog
 
+## macOS-style Windows UI — 2026-11-03
+
+- Bring the Mac fork visual style to Windows: a light sidebar, colored vector
+  marks, blue route card, rounded panels and soft controls.
+- Show app icons in roomier rows, keep native list keyboard access, and give
+  the launch action clear priority over patch tools.
+- Add styled settings tabs and visible page descriptions. Keep Windows
+  network controls and the existing three-page navigation.
+
+
 ## External TUN experiment — 2026-11-03
 
 - Add a source-only external TUN helper with a loopback SOCKS5 check,

@@ -173,7 +173,7 @@ namespace DevProxyApp {
    }
   }
   Panel BuildSettingsTabs(Panel connection,Panel advanced,Panel diagnose,Panel journal){
-   var host=new Panel{Dock=DockStyle.Fill};_settingsTabs=new TabControl{Dock=DockStyle.Fill,AccessibleName="Настройки и дополнительные инструменты"};
+   var host=new Panel{Dock=DockStyle.Fill};_settingsTabs=new FluentTabs{Dock=DockStyle.Fill,AccessibleName="Настройки и дополнительные инструменты"};
    var pages=new[]{connection,advanced,diagnose,journal};var names=new[]{"Подключение","Дополнительно","Диагностика","Журнал"};
    for(int index=0;index<pages.Length;index++){var tab=new TabPage(names[index]){BackColor=FluentTheme.Background,Padding=new Padding(4)};pages[index].Dock=DockStyle.Fill;tab.Controls.Add(pages[index]);_settingsTabs.TabPages.Add(tab);}host.Controls.Add(_settingsTabs);return host;
   }

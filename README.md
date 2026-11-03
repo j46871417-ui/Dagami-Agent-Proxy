@@ -218,3 +218,17 @@ Codex Desktop из Microsoft Store обнаруживается по пакет�
   <a href="https://t.me/dagamvi/2140">Обсуждение и техподдержка</a> |
   <a href="https://dns.dagami.ru/support/agent-proxy/">Сообщить об ошибке</a>
 </p>
+
+## Windows UI design branch
+
+`design/macos-style` adapts the visual language of the
+[macOS fork](https://github.com/ImRealDerli/Dagami-Agent-Proxy-macOS)
+(reviewed at `eb78b3b`) to the native Windows app. The light sidebar, colored
+vector marks, gradient route card and rounded controls are drawn in WinForms;
+no web runtime or extra executable is needed. App rows retain native list
+selection, keyboard access and their existing actions. Windows settings and
+network behavior stay under the existing controls.
+
+Build with `python tools/build_native_app.py --output-dir dist-portable/windows`.
+The preview fixture renders every page and settings tab at the normal and
+minimum window sizes without changing live DNS or starting proxy sessions.
