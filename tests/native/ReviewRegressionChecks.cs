@@ -34,7 +34,7 @@ class ReviewRegressionChecks {
     try{store.Restore(app.Id);}catch(InvalidOperationException){rejected=true;}Assert(rejected,"foreign modification accepted");Assert(Hash(a)==patched&&store.Count(app.Id)==2,"partial restore changed first link/journal");
    });
    Case("missing settings can be restored from backup",()=>{
-    string folder=Folder("MissingSettings");var app=App(folder,"Editor.exe","settings-fixture");app.ConfigPath=Path.Combine(folder,"settings.json");File.WriteAllText(app.ConfigPath,"{\"http.proxy\":\"http://original.invalid:80\"}");string message;
+    string folder=Folder("MissingSettings");var app=App(folder,"Code.exe","settings-fixture");app.ConfigPath=Path.Combine(folder,"settings.json");File.WriteAllText(app.ConfigPath,"{\"http.proxy\":\"http://original.invalid:80\"}");string message;
     Assert(ProxyEngine.ApplyProxyToTarget(app,"http://127.0.0.1:12345",out message),message);File.Delete(app.ConfigPath);Assert(ProxyEngine.RestoreTarget(app,out message),message);Assert(File.ReadAllText(app.ConfigPath).Contains("original.invalid"),"original proxy missing");
    });
    Case("restore write failure rolls earlier links back",()=>{
@@ -44,7 +44,7 @@ class ReviewRegressionChecks {
     Assert(failed,"write lock ignored");Assert(Hash(a)==ah&&Hash(b)==bh&&store.Count(app.Id)==2,"failed restore left partial state");store.Restore(app.Id);
    });
    Case("launcher failure preserves current settings and backup",()=>{
-    string folder=Folder("ConfigRollback");var app=App(folder,"Editor.exe","rollback-settings");app.ConfigPath=Path.Combine(folder,"settings.json");File.WriteAllText(app.ConfigPath,"{\"http.proxy\":\"http://original.invalid\",\"other\":true}");string message;
+    string folder=Folder("ConfigRollback");var app=App(folder,"Code.exe","rollback-settings");app.ConfigPath=Path.Combine(folder,"settings.json");File.WriteAllText(app.ConfigPath,"{\"http.proxy\":\"http://original.invalid\",\"other\":true}");string message;
     Assert(ProxyEngine.ApplyProxyToTarget(app,"http://127.0.0.1:12345",out message),message);File.AppendAllText(app.ConfigPath,"\n");string config=Hash(app.ConfigPath),backup=Hash(app.ConfigPath+".devproxy.bak");bool failed=false;
     try{NativeAppPatcher.RestoreWithLauncher(app,()=>{throw new IOException("fixture launcher failure");});}catch(IOException){failed=true;}
     Assert(failed&&Hash(app.ConfigPath)==config&&Hash(app.ConfigPath+".devproxy.bak")==backup,"config/backup lost after launcher failure");

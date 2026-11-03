@@ -13,6 +13,18 @@ namespace DevProxyApp {
   public int Status {get;private set;}
   public UpstreamConnectException(int status):base("Upstream proxy refused CONNECT; HTTP status="+status){Status=status;}
  }
+ // Availability of the selected bridge route, not just a separate upstream.
+ public static class ConnectionDiagnostics {
+  public static ProxyProbeResult Check(int bridgePort,Func<int,string> probe=null){
+   if(bridgePort<=0)return new ProxyProbeResult{Message="Локальный мост не запущен."};
+   try {
+    string result=(probe??AntigravityDiagnostics.ProbeUserInfo)(bridgePort);
+    return new ProxyProbeResult{Available=true,Status=401,Message="Проверен только маршрут userinfo; ответ модели и регион API не проверены. "+result};
+   }catch(Exception error){
+    return new ProxyProbeResult{Message="Проверка маршрута через Dagami не прошла ("+error.GetType().Name+"). Проверьте журнал; доступ аккаунта не проверен."};
+   }
+  }
+ }
  public static class TlsDiagnostics {
   public static SslStream Connect(Stream stream,string host,string layer,int timeoutMilliseconds=10000,bool checkRevocation=true) {
    SslPolicyErrors policy=SslPolicyErrors.None; string chainStatus="none"; bool checkedCertificate=false;

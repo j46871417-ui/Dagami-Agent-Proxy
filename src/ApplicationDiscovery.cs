@@ -11,6 +11,12 @@ using Microsoft.Win32;
 
 namespace DevProxyApp {
  public static class ApplicationDiscovery {
+  public static AppTarget FindByExecutable(IEnumerable<AppTarget> targets,string executable) {
+   if(string.IsNullOrEmpty(executable))return null;
+   string full=Path.GetFullPath(executable);
+   foreach(var target in targets)try{if(target!=null&&!string.IsNullOrEmpty(target.ExePath)&&string.Equals(Path.GetFullPath(target.ExePath),full,StringComparison.OrdinalIgnoreCase))return target;}catch(ArgumentException){}catch(NotSupportedException){}
+   return null;
+  }
   public const string CodexPackageFamily = "OpenAI.Codex_2p2nqsd0c76g0";
   [DllImport("kernel32.dll",CharSet=CharSet.Unicode,ExactSpelling=true)]
   static extern int GetPackagesByPackageFamily(string family,ref uint count,[Out] IntPtr[] names,ref uint length,IntPtr buffer);

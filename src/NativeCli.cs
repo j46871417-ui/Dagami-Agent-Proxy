@@ -54,7 +54,7 @@ namespace DevProxyApp {
                 if(args.Length!=1)throw new ArgumentException("doctor — состояние без изменения настроек; diagnose error REPORT.log — объяснение ошибки.");
                 DnsProviders.Initialize(null,false);
                 var config=ConfigManager.Instance;Uri proxy;var pool=DnsProviders.ForServer(config.DnsHost);
-                Console.WriteLine(new JavaScriptSerializer().Serialize(new{version=Brand.Version,proxyConfigured=UpstreamProxyDiagnostics.TryParse(config.LastProxy,out proxy),dnsEnabled=config.UseDagamiDns,dnsTransport=pool==null?"custom UDP/TCP":pool.Length>0&&pool[0].Provider=="magicdns"?"DoH: MagicDNS":"DoH: Dagami -> MagicDNS",providers=DnsProviders.Snapshot(),systemDns=SystemDnsManager.BriefStatus(),loginVerified=false,modelResponseVerified=false,next="diagnose login; patch APP_ID --dry-run"}));return true;
+                Console.WriteLine(new JavaScriptSerializer().Serialize(new{version=Brand.Version,proxyConfigured=UpstreamProxyDiagnostics.TryParse(config.LastProxy,out proxy),proxyEnabled=config.UseProxy,dnsEnabled=config.UseDagamiDns,dnsTransport=pool==null?"custom UDP/TCP":pool.Length>0&&pool[0].Provider=="magicdns"?"DoH: MagicDNS":"DoH: Dagami -> MagicDNS",providers=DnsProviders.Snapshot(),systemDns=SystemDnsManager.BriefStatus(),loginVerified=false,modelResponseVerified=false,next="diagnose login; patch APP_ID --dry-run"}));return true;
             }
             if(command=="diagnose"&&args.Length==3&&args[1]=="error"){
                 var report=new FileInfo(args[2]);if(!report.Exists||report.Length>1048576)throw new ArgumentException("Нужен текстовый отчёт до 1 МБ.");
@@ -79,11 +79,12 @@ namespace DevProxyApp {
             if(command=="diagnose") {
                 if(args.Length!=2 || args[1]!="login")throw new ArgumentException("diagnose login — проверка userinfo без токена; настройки не меняются.");
                 var config=ConfigManager.Instance;
-                if(string.IsNullOrWhiteSpace(config.LastProxy))throw new InvalidOperationException("Прокси не настроен.");
+                string routeProxy=string.IsNullOrWhiteSpace(config.EffectiveProxy)&&config.UseDagamiDns?"direct":config.EffectiveProxy;
+                if(string.IsNullOrWhiteSpace(routeProxy))throw new InvalidOperationException("Прокси не настроен.");
                 using(var bridge=new LocalProxyBridge()) {
-                    if(!bridge.Start(0,config.LastProxy,config.UseDagamiDns?config.DnsHost:null))throw new IOException("Не удалось запустить диагностический мост.");
-                    Console.WriteLine(AntigravityDiagnostics.LoginRouteReport(bridge.BoundPort,config.UseDagamiDns,config.DnsHost,config.LastProxy));
-                    Console.WriteLine(AntigravityDiagnostics.TokenRouteReport(bridge.BoundPort,config.UseDagamiDns,config.DnsHost,config.LastProxy));
+                    if(!bridge.Start(0,routeProxy,config.UseDagamiDns?config.DnsHost:null))throw new IOException("Не удалось запустить диагностический мост.");
+                    Console.WriteLine(AntigravityDiagnostics.LoginRouteReport(bridge.BoundPort,config.UseDagamiDns,config.DnsHost,routeProxy));
+                    Console.WriteLine(AntigravityDiagnostics.TokenRouteReport(bridge.BoundPort,config.UseDagamiDns,config.DnsHost,routeProxy));
                     Console.WriteLine(bridge.RouteReport());
                 }
                 return true;
@@ -97,6 +98,7 @@ namespace DevProxyApp {
             }
             if(command=="proxy") {
                 if(args.Length==2&&args[1]=="status") {
+                    if(MainForm.IsDirectProxyValue(ConfigManager.Instance.LastProxy)){Console.WriteLine("Прямой маршрут Windows/VPN.");return true;}
                     Uri proxy;if(!Uri.TryCreate(ConfigManager.Instance.LastProxy,UriKind.Absolute,out proxy)){Console.WriteLine("Прокси не настроен.");return true;}
                     var safe=new UriBuilder(proxy){UserName="",Password=""};Console.WriteLine(safe.Uri.AbsoluteUri);return true;
                 }
@@ -106,12 +108,15 @@ namespace DevProxyApp {
                     if(!owns)throw new InvalidOperationException("Для смены подключения сначала завершите Dagami Agent Proxy через «Выход» в трее. Активные сессии используют прежний профиль.");
                     }finally{if(owns)mutex.ReleaseMutex();}
                 }
-                Console.Write("HTTP/HTTPS прокси (ввод скрыт): ");var text=new System.Text.StringBuilder();
+                Console.Write("HTTP/HTTPS прокси или direct для Windows/VPN (ввод скрыт): ");var text=new System.Text.StringBuilder();
                 if(Console.IsInputRedirected)text.Append(Console.ReadLine());
                 else {while(true){var key=Console.ReadKey(true);if(key.Key==ConsoleKey.Enter)break;if(key.Key==ConsoleKey.Backspace){if(text.Length>0)text.Length--;continue;}if(!char.IsControl(key.KeyChar))text.Append(key.KeyChar);}}
                 Console.WriteLine();Uri value;
-                if(!UpstreamProxyDiagnostics.TryParse(text.ToString(),out value))throw new ArgumentException("Нужен корректный HTTP/HTTPS URL.");
-                ConfigManager.Instance.LastProxy=value.AbsoluteUri;ConfigManager.Instance.Save();Console.WriteLine("Подключение сохранено для CLI и Windows GUI.");return true;
+                string input=text.ToString().Trim();
+                bool direct=MainForm.IsDirectProxyValue(input);
+                if(!direct&&!UpstreamProxyDiagnostics.TryParse(input,out value))throw new ArgumentException("Нужен корректный HTTP/HTTPS URL или direct.");
+                string normalized=direct?"direct":new Uri(input).AbsoluteUri;
+                ConfigManager.Instance.ChangeConnection(cfg=>cfg.LastProxy=normalized);Console.WriteLine("Подключение сохранено для CLI и Windows GUI.");return true;
             }
             if(command=="dns"){
                 if(args.Length==2&&args[1]=="refresh"){DnsProviders.Refresh();Console.WriteLine(new JavaScriptSerializer().Serialize(new{endpoints=DnsProviders.Snapshot(),checkedUtc=DnsProviders.LastCheckedUtc,error=DnsProviders.LastError}));return true;}
@@ -141,7 +146,7 @@ namespace DevProxyApp {
                     int offset=args.Length>2&&args[2]=="--"?3:2;
                     string[] forwarded=new string[args.Length-offset];Array.Copy(args,offset,forwarded,0,forwarded.Length);
                     var config=ConfigManager.Instance;
-                    Environment.ExitCode=NativeCliApps.Run(app.ExePath,forwarded,config.LastProxy,config.UseDagamiDns?config.DnsHost:null);return true;
+                    Environment.ExitCode=NativeCliApps.Run(app.ExePath,forwarded,config.EffectiveProxy,config.UseDagamiDns?config.DnsHost:null);return true;
                 }
                 if(args.Length!=2)throw new ArgumentException("Аргументы run поддерживаются здесь только для CLI.");
                 Process.Start(new ProcessStartInfo(manager,"--shortcut-launch "+NativeShortcuts.Quote(app.Id)){UseShellExecute=false,CreateNoWindow=true});Console.WriteLine("Запрос запуска отправлен фоновому Dagami Agent Proxy.");return true;
@@ -153,9 +158,10 @@ namespace DevProxyApp {
             }
             List<string> paths;
             if(command=="patch"){
-                Uri proxy;if(!Uri.TryCreate(ConfigManager.Instance.LastProxy,UriKind.Absolute,out proxy)||(proxy.Scheme!="http"&&proxy.Scheme!="https"))throw new ArgumentException("Сначала настройте подключение: proxy set");
+                var cfg=ConfigManager.Instance;string patchProxy=string.IsNullOrWhiteSpace(cfg.EffectiveProxy)&&cfg.UseDagamiDns?"direct":cfg.EffectiveProxy;
+                Uri proxy;if(!MainForm.IsDirectProxyValue(patchProxy)&&(!Uri.TryCreate(patchProxy,UriKind.Absolute,out proxy)||(proxy.Scheme!="http"&&proxy.Scheme!="https")))throw new ArgumentException("Сначала настройте подключение: proxy set");
                 string summary;
-                paths=NativeAppPatcher.Apply(app,manager,NativeShortcuts.UserFolders(),store,ConfigManager.Instance.LastProxy,out summary,true);
+                paths=NativeAppPatcher.Apply(app,manager,NativeShortcuts.UserFolders(),store,patchProxy,out summary,true);
                 Console.WriteLine(summary);
             }else {
                 paths=NativeAppPatcher.RestoreWithLauncher(app,()=>NativeCliApps.IsCommandTarget(app)?NativeCliApps.Current.Restore(app.Id):store.Restore(app.Id));
@@ -166,7 +172,7 @@ namespace DevProxyApp {
         // Classify a supplied report without echoing account tokens, paths or its body.
         public static string FailureHint(string report){
             string value=(report??"").ToLowerInvariant();
-            if(value.Contains("user location is not supported")||value.Contains("region is not supported"))return "Сервер отклонил регион выхода. Проверьте DNS/прокси и фактический маршрут. Локальная подготовка CLI не меняет серверное решение о регионе.";
+            if(value.Contains("user location is not supported")||value.Contains("region is not supported"))return "Google API отклонил условие региона. Проверьте регион выхода, фактический маршрут запросов модели и доступ аккаунта. Успешный вход и ответы других моделей не подтверждают доступ Gemini. Локальная подготовка CLI не меняет серверное решение о регионе.";
             if(value.Contains("subscription_required"))return "Сервер требует подходящую подписку или доступ аккаунта. Региональный патч это ограничение не снимает.";
             if(System.Text.RegularExpressions.Regex.IsMatch(value,@"\b407\b"))return "Прокси отклонил авторизацию (HTTP 407). Обновите данные подключения в настройках.";
             if(value.Contains("certificate")||value.Contains("authenticationexception")||value.Contains("сертификат"))return "Не прошла проверка TLS. Проверьте время, имя сервера и цепочку доверия; отключать проверку сертификата не нужно.";

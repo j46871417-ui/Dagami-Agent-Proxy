@@ -233,7 +233,7 @@ class ValidationTests(unittest.TestCase):
                     request(server='fe80::1%en0\nnameserver 1.1.1.1'),request(services=[{}]),request(mode='other'),request('reset',confirmed=False)):
             with self.assertRaises((ValueError,TypeError)):dns.validate_request(bad)
     def test_domain_presets_match_windows(self):
-        self.assertEqual(66,len(dns.domains()));self.assertEqual(76,len(dns.domains('Full')))
+        self.assertEqual(75,len(dns.domains()));self.assertEqual(85,len(dns.domains('Full')))
         self.assertIn('clients6.google.com',dns.domains());self.assertNotIn('twitch.tv',dns.domains())
         self.assertIn('twitch.tv',dns.domains('Full'))
     def test_snapshot_exact_bytes_and_size_limit(self):

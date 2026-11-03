@@ -43,7 +43,8 @@ class DnsProviderChecks {
   Assert(DnsProviders.ForServer("dns.comss.one")!=null&&DnsProviders.ForServer("dns.comss.one")[0].Provider=="comss","Built-in Comss.one DNS missing");
   Assert(DnsProviders.ForServer("dns.geohide.ru")!=null&&DnsProviders.ForServer("dns.geohide.ru")[0].Provider=="geohide","Built-in GeoHide DNS missing");
   Assert(DnsProviders.ForServer("dns.malw.link")!=null&&DnsProviders.ForServer("dns.malw.link")[0].Provider=="malw"&&DnsProviders.ForServer("dns.malw.link")[0].Protocol=="TLS","Built-in Malw.link DoT DNS missing");
-  Assert(DnsProviders.ExtendedPool("dns.dagami.ru").Length>6,"Extended pool does not include built-in reserve providers");
+  Assert(Array.TrueForAll(DnsProviders.ExtendedPool("dns.dagami.ru"),ep=>ep.Provider=="dagami"||ep.Provider=="magicdns"),"Unselected provider silently added to Dagami/MagicDNS");
+  var budget=typeof(DnsProviders).GetMethod("AttemptTimeout",BindingFlags.NonPublic|BindingFlags.Static);int remainingBudget=12000,attempts=6;for(int i=0;i<6;i++){int allowed=(int)budget.Invoke(null,new object[]{remainingBudget,attempts--,2400});Assert(allowed>0&&allowed<=2400,"Invalid DNS time budget");remainingBudget-=allowed;if(i==2)Assert(remainingBudget>=6000,"Primary consumed reserve DNS budget");}
   var ordered=DnsProviders.ExtendedPool("dns.dagami.ru");int lastDagami=Array.FindLastIndex(ordered,x=>x.Provider=="dagami"),firstMagic=Array.FindIndex(ordered,x=>x.Provider=="magicdns");
   Assert(lastDagami>=0&&firstMagic>lastDagami,"Dagami must precede all MagicDNS fallback nodes");
   Assert(DnsProviders.ExtendedPool("dns.magicdns.ru")[0].Provider=="magicdns","Explicitly selected provider must stay first");

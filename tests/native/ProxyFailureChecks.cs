@@ -40,6 +40,7 @@ class ProxyFailureChecks {
   }}finally{server.Stop();worker.Join(1000);}
  }
  static int Main(){try {
+  FailedProxyMustNotConnectDirectly();
   foreach(int status in new[]{200,407,403,503})Probe(status);
   MetadataHostIsExact();
   Assert(UpstreamProxyDiagnostics.IsDnsEndpointMistakenForProxy("http://dns.dagami.ru:50128"),"Known DNS endpoint not identified");
@@ -72,4 +73,29 @@ class ProxyFailureChecks {
   Assert(calls==1&&report.Contains("Сравнение недоступно"),"Missing comparison settings not handled");
   Console.WriteLine("PASS "+checks+" CONNECT auth/status, URL validation, port fallback, self-upstream and synthetic OAuth comparison checks");return 0;
  }catch(Exception e){Console.Error.WriteLine(e);return 1;}}
+
+ sealed class NoDirectBridge:LocalProxyBridge {
+  public int DirectCalls;
+  protected override TcpClient ConnectDirect(string host,int port,out Stream stream){
+   Interlocked.Increment(ref DirectCalls);stream=null;throw new IOException("Fixture intercepted forbidden direct route before DNS/network");
+  }
+ }
+ static void FailedProxyMustNotConnectDirectly(){
+  using(var unavailable=new Socket(AddressFamily.InterNetwork,SocketType.Stream,ProtocolType.Tcp)){
+   unavailable.Bind(new IPEndPoint(IPAddress.Loopback,0));
+   using(var bridge=new NoDirectBridge()){
+    Assert(bridge.Start(0,"http://127.0.0.1:"+((IPEndPoint)unavailable.LocalEndPoint).Port),"Failure fixture bridge did not start");
+    // Resolver is enabled, but the unscoped host must never be resolved/dialled.
+    typeof(LocalProxyBridge).GetField("_scopedDns",BindingFlags.Instance|BindingFlags.NonPublic).SetValue(bridge,new ScopedDnsResolver("192.0.2.53"));
+    foreach(string method in new[]{"CONNECT","GET"})using(var client=new TcpClient("127.0.0.1",bridge.BoundPort)){
+     client.GetStream().ReadTimeout=5000;string authority="outside.fixture.invalid:443";
+     string request=method+" "+(method=="CONNECT"?authority:"http://outside.fixture.invalid/fixture")+" HTTP/1.1\r\nHost: "+authority+"\r\n\r\n";
+     byte[] bytes=Encoding.ASCII.GetBytes(request);client.GetStream().Write(bytes,0,bytes.Length);
+     string reply=Header(client.GetStream());
+     Assert(reply.Contains(" 502 ")&&reply.Contains("X-Dagami-Failure-Phase: upstream-connect"),"Proxy failure was not reported at the selected route");
+     Assert(bridge.DirectCalls==0,"Failed configured proxy silently attempted direct "+method);
+    }
+   }
+  }
+ }
 }

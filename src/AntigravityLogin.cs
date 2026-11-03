@@ -19,6 +19,27 @@ namespace DevProxyApp
     public static class NativeLogin
 
     {
+        public static void StopExactExecutables(System.Collections.Generic.IEnumerable<string> executables, int timeoutMilliseconds=5000) {
+            var deadline=Stopwatch.StartNew();var errors=new System.Collections.Generic.List<string>();
+            var paths=new System.Collections.Generic.HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach(string value in executables) {
+                if(string.IsNullOrEmpty(value)||!Path.IsPathRooted(value))throw new ArgumentException("Для остановки нужен полный путь приложения.");
+                paths.Add(Path.GetFullPath(value));
+            }
+            foreach(string path in paths)foreach(var process in Process.GetProcessesByName(Path.GetFileNameWithoutExtension(path)))using(process) {
+                try {
+                    if(process.HasExited)continue;
+                    // Never infer ownership from a process name or kill after an
+                    // access-denied path lookup. Another install may share a name.
+                    if(!string.Equals(Path.GetFullPath(process.MainModule.FileName),path,StringComparison.OrdinalIgnoreCase))continue;
+                    process.Kill();
+                    if(!process.WaitForExit(Math.Max(0,timeoutMilliseconds-(int)deadline.ElapsedMilliseconds)))errors.Add(Path.GetFileName(path)+": процесс не завершился");
+                } catch(InvalidOperationException) { }
+                catch(System.ComponentModel.Win32Exception) { errors.Add(Path.GetFileName(path)+": не удалось проверить путь или завершить PID "+process.Id); }
+            }
+            foreach(string path in paths)try{RequireStopped(path);}catch(InvalidOperationException error){errors.Add(error.Message);}
+            if(errors.Count>0)throw new IOException("Не все процессы закрыты. "+string.Join("; ",errors.ToArray()));
+        }
 
         public static void RequireStopped(string executable)
 
@@ -225,6 +246,7 @@ namespace DevProxyApp
                 throw new InvalidOperationException("Сначала запустите Antigravity через Dagami Agent Proxy.");
 
             string url = NativeLogin.FindFreshLoginUrl();
+            if (!url.Contains("prompt=") && url.Contains("accounts.google.com")) url += (url.Contains("?") ? "&" : "?") + "prompt=select_account";
 
             string browser = NativeLogin.FindBrowser();
 
@@ -240,15 +262,15 @@ namespace DevProxyApp
 
             try { Clipboard.SetText(url); } catch { }
 
-            Logger.Log("[OAuth] Открыт браузер через Smart DNS мост. Ссылка входа скопирована в буфер обмена.");
+            Logger.Log("[OAuth] Открыт браузер через выбранный маршрут Dagami. Ссылка входа скопирована в буфер обмена.");
 
             if (_antigravityReport != null)
 
             {
 
-                _antigravityReport.Text = "Открыт браузер через локальный Smart DNS мост.\r\n" +
+                _antigravityReport.Text = "Открыт браузер через локальный мост Dagami.\r\n" +
 
-                    "Google видит европейский адрес узла Smart DNS. Завершите вход в браузере.\r\n" +
+                    "Завершите вход в браузере. Регион выхода и доступ к моделям этой проверкой не подтверждаются.\r\n" +
 
                     "Ссылка входа также скопирована в буфер обмена (можно вставить в браузер с VPN).";
 
@@ -259,4 +281,3 @@ namespace DevProxyApp
     }
 
 }
-

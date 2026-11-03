@@ -31,6 +31,9 @@ class StartupChecks {
   Environment.CurrentDirectory=Path.GetDirectoryName(Assembly.GetExecutingAssembly().Location);
   if(args.Length==1&&args[0]=="--log"){var writer=new StreamWriter("startup-checks.log",false,Encoding.UTF8){AutoFlush=true};Console.SetOut(writer);Console.SetError(writer);}
  try{
+  Assert(WindowsExecutionContext.IntegrityRid()>=8192,"Fixture must run with normal user integrity, outside a Low-labelled output directory");
+  Assert(WindowsExecutionContext.StartupProblem(4096)!=null&&WindowsExecutionContext.StartupProblem(0)!=null,"Low/untrusted process allowed to start child applications");
+  Assert(WindowsExecutionContext.StartupProblem(8192)==null&&WindowsExecutionContext.StartupProblem(12288)==null,"Normal user process incorrectly requires elevation");
   string exe=typeof(SystemDnsManager).Assembly.Location;
   Assert(new WindowsStartupTaskStore().Read("DagamiAgentProxy-ReadCheck-"+Guid.NewGuid().ToString("N"))==null,"Missing task cannot be read safely through the Windows backend");
   IntPtr module=LoadLibraryEx(exe,IntPtr.Zero,0x22);Assert(module!=IntPtr.Zero,"Cannot inspect executable manifest");

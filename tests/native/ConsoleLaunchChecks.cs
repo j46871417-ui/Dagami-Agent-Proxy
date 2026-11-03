@@ -23,7 +23,9 @@ class ConsoleLaunchChecks {
    if(!NativeCliApps.IsConsoleTarget(new AppTarget{ExePath=command}))throw new Exception("Converted command is not a console application");
    var psi=new ProcessStartInfo(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.System),"cmd.exe"),"/d /q"){UseShellExecute=false,CreateNoWindow=true,RedirectStandardInput=true,RedirectStandardOutput=true,RedirectStandardError=true,WorkingDirectory=root};
    using(var process=Process.Start(psi)){
-    process.StandardInput.WriteLine("\""+command+"\" \""+result+"\"");process.StandardInput.Flush();
+    // The redirected cmd pipe uses an OEM code page. Keep its text ASCII;
+    // Unicode fixture paths are already passed through CreateProcessW as WorkingDirectory.
+    process.StandardInput.WriteLine("\"agy.exe\" \"input.txt\"");process.StandardInput.Flush();
     System.Threading.Thread.Sleep(1200);process.StandardInput.WriteLine("interactive-input");process.StandardInput.WriteLine("exit");process.StandardInput.Close();
     if(!process.WaitForExit(8000)){process.Kill();throw new Exception("Interactive terminal did not finish");}
     string output=process.StandardOutput.ReadToEnd(),error=process.StandardError.ReadToEnd();

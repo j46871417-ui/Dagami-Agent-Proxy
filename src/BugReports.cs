@@ -33,7 +33,7 @@ namespace DevProxyApp {
    text=Regex.Replace(text,@"(?i)[a-z]:\\Users\\[^\\\r\n]+",@"C:\Users\[user]");
    text=Regex.Replace(text,@"/(?:home|Users)/[^/\s]+","/home/[user]");
    text=Regex.Replace(text,@"[\w.+-]+@[\w.-]+\.[a-zA-Z]{2,}","[email removed]");
-   return text.Replace("\0","");
+   return Regex.Replace(text.Replace("\0",""), @"\r?\n", "\r\n");
   }
   public static string ReadLogs(string path) {
    if(!File.Exists(path))return "Журнал ещё не создан.";
@@ -122,7 +122,7 @@ namespace DevProxyApp {
   readonly TableLayoutPanel fields=new TableLayoutPanel{Dock=DockStyle.Fill,ColumnCount=1,RowCount=9,AutoScroll=true,Padding=new Padding(16)};
   BugReportPayload pending;string image="";bool busy,sent;
   public BugReportDialog(string logPath=null) {
-   Text="Сообщить об ошибке · Dagami";Size=new Size(680,850);MinimumSize=new Size(440,600);StartPosition=FormStartPosition.CenterParent;Font=new Font("Segoe UI",10);AutoScaleMode=AutoScaleMode.Dpi;
+   Text="Сообщить об ошибке · Dagami";Size=new Size(680,850);MinimumSize=new Size(440,600);StartPosition=FormStartPosition.CenterParent;Font=new Font("Segoe UI",10);AutoScaleMode=AutoScaleMode.Dpi; try { Icon = Brand.LoadIcon(); } catch { } BackColor = FluentTheme.Background; ForeColor = FluentTheme.Text;
    var panel=new TableLayoutPanel{Dock=DockStyle.Fill,RowCount=3,ColumnCount=1};panel.RowStyles.Add(new RowStyle(SizeType.Percent,100));panel.RowStyles.Add(new RowStyle(SizeType.AutoSize));panel.RowStyles.Add(new RowStyle(SizeType.AutoSize));Controls.Add(panel);panel.Controls.Add(fields,0,0);
    panel.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,100));fields.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,100));message.Dock=DockStyle.Fill;
    fields.RowStyles.Add(new RowStyle(SizeType.AutoSize));fields.RowStyles.Add(new RowStyle(SizeType.AutoSize));fields.RowStyles.Add(new RowStyle(SizeType.Absolute,115));fields.RowStyles.Add(new RowStyle(SizeType.AutoSize));fields.RowStyles.Add(new RowStyle(SizeType.AutoSize));fields.RowStyles.Add(new RowStyle(SizeType.Absolute,125));fields.RowStyles.Add(new RowStyle(SizeType.AutoSize));fields.RowStyles.Add(new RowStyle(SizeType.Absolute,105));fields.RowStyles.Add(new RowStyle(SizeType.AutoSize));

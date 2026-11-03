@@ -191,6 +191,25 @@ namespace DevProxyApp
 
 
         {
+            // Check before starting a bridge, saving config or launching children.
+            // A Low-labelled build image lowers even an Explorer-launched process.
+            int integrity;
+            try { integrity = WindowsExecutionContext.IntegrityRid(); }
+            catch { integrity = -1; }
+            if (args != null && args.Length == 1 && args[0] == "--permissions-info") {
+                EnsureConsole(); ConfigureConsoleEncoding();
+                Console.WriteLine(new JavaScriptSerializer().Serialize(new { integrityRid = integrity, normalUserAccess = integrity >= 8192 }));
+                Environment.ExitCode = integrity < 0 ? 1 : 0;
+                return;
+            }
+            string startupProblem = WindowsExecutionContext.StartupProblem(integrity);
+            if (startupProblem != null) {
+                if (args != null && args.Length > 0) { EnsureConsole(); ConfigureConsoleEncoding(); Console.Error.WriteLine(startupProblem); }
+                else MessageBox.Show(startupProblem, Brand.Name + " — ограниченные права процесса", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                Environment.ExitCode = 5;
+                return;
+            }
+
 
 
 
@@ -678,18 +697,8 @@ namespace DevProxyApp
 
 
 
+                ConfigManager.Instance.ChangeConnection(cfg => cfg.LastProxy = norm);
                 ProxyEngine.ApplyProxyAll(norm);
-
-
-
-                ConfigManager.Instance.LastProxy = norm;
-
-
-
-                ConfigManager.Instance.Save();
-
-
-
                 return;
 
 
@@ -1298,6 +1307,11 @@ namespace DevProxyApp
 
 
 
+                    if (File.Exists(LogFilePath) && new FileInfo(LogFilePath).Length > 2 * 1024 * 1024) {
+                        string prevLog = Path.Combine(Path.GetDirectoryName(LogFilePath), "devproxy.prev.log");
+                        if (File.Exists(prevLog)) File.Delete(prevLog);
+                        File.Move(LogFilePath, prevLog);
+                    }
                     File.AppendAllText(LogFilePath, line + Environment.NewLine, Encoding.UTF8);
 
 
@@ -1575,6 +1589,8 @@ namespace DevProxyApp
 
 
         private int _activeConnections;
+        public const int MaximumConcurrentConnections = 128;
+        private readonly SemaphoreSlim _connectionSlots = new SemaphoreSlim(MaximumConcurrentConnections);
 
 
 
@@ -1938,11 +1954,15 @@ namespace DevProxyApp
 
 
 
+                    if(!_connectionSlots.Wait(0)) {
+                        try {client.GetStream().WriteTimeout=500;byte[] busy=Encoding.ASCII.GetBytes("HTTP/1.1 503 Service Unavailable\r\nConnection: close\r\nContent-Length: 0\r\n\r\n");client.GetStream().Write(busy,0,busy.Length);}catch{}finally{client.Close();}
+                        continue;
+                    }
                     TrackConnection(client);
+                    try {
+                        if(!ThreadPool.QueueUserWorkItem(state=>{try{HandleConnection(state);}finally{_connectionSlots.Release();}},client))throw new IOException("Не удалось поставить соединение в очередь.");
+                    } catch {client.Close();_connectionSlots.Release();throw;}
 
-
-
-                    ThreadPool.QueueUserWorkItem(HandleConnection, client);
 
 
 
@@ -2390,35 +2410,7 @@ namespace DevProxyApp
 
 
 
-                    // A TCP/TLS connection to Smart DNS does not establish that
-
-
-
-                    // Google's region check accepts the resulting route. When an
-
-
-
-                    // upstream was explicitly configured, send the two Cloud Code
-
-
-
-                    // API hosts through it and let the client see the real reply.
-
-
-
-                    if (_upstreamHost != null && IsCloudCodeApiHost(host) && colon>0 && target.Substring(colon+1)=="443") {
-
-
-
-                        Logger.Log(connection + " Cloud Code: используется настроенный внешний прокси.");
-
-
-
-                    }
-
-
-
-                    else if (_scopedDns != null && ScopedDnsResolver.IsScoped(host))
+                    if (_scopedDns != null && ScopedDnsResolver.IsScoped(host, _upstreamHost == null))
 
 
 
@@ -3094,7 +3086,7 @@ namespace DevProxyApp
 
 
 
-        private TcpClient ConnectDirect(string host, int port, out Stream stream)
+        protected virtual TcpClient ConnectDirect(string host, int port, out Stream stream)
 
 
 
@@ -3119,56 +3111,12 @@ namespace DevProxyApp
 
 
                 IPAddress ip;
-
-
-
-                if (IPAddress.TryParse(host, out ip)) {
-
-
-
+                // Direct means the Windows/VPN route. Smart DNS was selected
+                // explicitly above; do not silently resolve again here.
+                if (IPAddress.TryParse(host, out ip))
                     result = tcp.BeginConnect(ip, port, null, null);
-
-
-
-                } else if (_scopedDns != null && ScopedDnsResolver.IsScoped(host)) {
-
-
-
-                    IPAddress resolved = _scopedDns.Resolve(host);
-
-
-
-                    if (resolved != null) {
-
-
-
-                        result = tcp.BeginConnect(resolved, port, null, null);
-
-
-
-                    } else {
-
-
-
-                        result = tcp.BeginConnect(host, port, null, null);
-
-
-
-                    }
-
-
-
-                } else {
-
-
-
+                else
                     result = tcp.BeginConnect(host, port, null, null);
-
-
-
-                }
-
-
 
                 using (result.AsyncWaitHandle) {
 
@@ -3243,25 +3191,24 @@ namespace DevProxyApp
 
 
                 tcp.NoDelay = true;
-
-
-
-                var result = tcp.BeginConnect(endpoint == null ? _upstreamHost : endpoint.ToString(), endpoint == null ? _upstreamPort : 443, null, null);
-
-
-
-                using (result.AsyncWaitHandle) {
-
-
-
-                    if (!result.AsyncWaitHandle.WaitOne(8000)) throw new TimeoutException("Upstream connection timed out.");
-
-
-
-                    tcp.EndConnect(result);
-
-
-
+                string connectHost = endpoint == null ? _upstreamHost : endpoint.ToString();
+                int connectPort = endpoint == null ? _upstreamPort : 443;
+                int connectTimeout = endpoint == null ? 8000 : 4500;
+                try {
+                    var result = tcp.BeginConnect(connectHost, connectPort, null, null);
+                    using (result.AsyncWaitHandle) {
+                        if (!result.AsyncWaitHandle.WaitOne(connectTimeout)) throw new TimeoutException("Upstream connection timed out.");
+                        tcp.EndConnect(result);
+                    }
+                } catch {
+                    if (endpoint == null) throw;
+                    try { tcp.Close(); } catch { }
+                    tcp = new TcpClient { NoDelay = true };
+                    var retry = tcp.BeginConnect(connectHost, connectPort, null, null);
+                    using (retry.AsyncWaitHandle) {
+                        if (!retry.AsyncWaitHandle.WaitOne(4500)) throw new TimeoutException("Upstream connection timed out.");
+                        tcp.EndConnect(retry);
+                    }
                 }
 
 
@@ -4311,6 +4258,8 @@ namespace DevProxyApp
 
 
         public string LastProxy { get; set; }
+        public bool UseProxy { get; set; }
+        public string EffectiveProxy { get { return UseProxy ? LastProxy : "direct"; } }
 
 
 
@@ -4410,6 +4359,7 @@ namespace DevProxyApp
 
 
 
+            UseProxy = true;
             UseDagamiDns = true;
 
 
@@ -4534,6 +4484,8 @@ namespace DevProxyApp
 
 
 
+                    configFile = localConfigFile;
+                    configDir = localConfigDir;
                     ParseJsonConfig(content);
 
 
@@ -4630,7 +4582,8 @@ namespace DevProxyApp
 
 
 
-        public void Save()
+        public string LastSaveError { get; private set; }
+        public bool Save()
 
 
 
@@ -4659,6 +4612,7 @@ namespace DevProxyApp
 
 
                 sb.AppendLine("{");
+                sb.AppendLine("  \"connection_policy_version\": 1,");
 
 
 
@@ -4670,6 +4624,7 @@ namespace DevProxyApp
 
 
 
+                sb.AppendFormat("  \"use_proxy\": {0},\n", UseProxy ? "true" : "false");
                 sb.AppendFormat("  \"use_dagami_dns\": {0},\n", UseDagamiDns ? "true" : "false");
 
 
@@ -4874,196 +4829,44 @@ namespace DevProxyApp
 
 
 
-                string json = sb.ToString();
-
-
-
-                try {
-
-
-
-                    SafeWriteConfig(configFile, json);
-
-
-
-                } catch (Exception exPrimary) {
-
-
-
-                    try {
-
-
-
-                        SafeWriteConfig(localConfigFile, json);
-
-
-
-                        Logger.Log("[Config] Конфигурация сохранена в локальный профиль (fallback): " + localConfigFile);
-
-
-
-                        return;
-
-
-
-                    } catch { }
-
-
-
-                    Logger.Log("[-] Не удалось сохранить конфигурацию: " + exPrimary.Message);
-
-
-
-                }
-
-
-
+                SafeWriteConfig(configFile, sb.ToString());
+                LastSaveError = null;
+                return true;
             }
-
-
-
-            catch (Exception ex) { Logger.Log("[-] Не удалось сохранить конфигурацию: " + ex.Message); }
-
-
-
+            catch (Exception ex) {
+                LastSaveError = "Не удалось сохранить параметры (" + ex.GetType().Name + "). Проверьте права доступа к профилю пользователя.";
+                Logger.Log("[Config] " + LastSaveError);
+                return false;
+            }
         }
-
-
-
         private static void SafeWriteConfig(string path, string content)
-
         {
-
-            string dir = Path.GetDirectoryName(path);
-
+            string dir = Path.GetDirectoryName(Path.GetFullPath(path));
             if (!Directory.Exists(dir)) Directory.CreateDirectory(dir);
-
-
-
+            string temp = Path.Combine(dir, ".devproxy-config-" + Guid.NewGuid().ToString("N") + ".tmp");
             try {
-
-                var identity = System.Security.Principal.WindowsIdentity.GetCurrent();
-
-                if (identity != null && identity.User != null) {
-
-                    var dirInfo = new DirectoryInfo(dir);
-
-                    var dirAcl = dirInfo.GetAccessControl();
-
-                    dirAcl.AddAccessRule(new System.Security.AccessControl.FileSystemAccessRule(
-
-                        identity.User,
-
-                        System.Security.AccessControl.FileSystemRights.FullControl,
-
-                        System.Security.AccessControl.InheritanceFlags.ContainerInherit | System.Security.AccessControl.InheritanceFlags.ObjectInherit,
-
-                        System.Security.AccessControl.PropagationFlags.None,
-
-                        System.Security.AccessControl.AccessControlType.Allow));
-
-                    dirInfo.SetAccessControl(dirAcl);
-
-                }
-
-            } catch { }
-
-
-
-            if (File.Exists(path)) {
-
-                try {
-
-                    var attrs = File.GetAttributes(path);
-
-                    if ((attrs & (FileAttributes.ReadOnly | FileAttributes.Hidden)) != 0) {
-
-                        File.SetAttributes(path, attrs & ~(FileAttributes.ReadOnly | FileAttributes.Hidden));
-
-                    }
-
-                } catch { }
-
-            }
-
-
-
-            string temp = path + "." + Guid.NewGuid().ToString("N") + ".tmp";
-
-            Exception lastEx = null;
-
-            try {
-
                 File.WriteAllText(temp, content, new UTF8Encoding(false));
-
-                for (int attempt = 1; attempt <= 5; attempt++) {
-
-                    try {
-
-                        if (File.Exists(path)) {
-
-                            try {
-
-                                File.Replace(temp, path, null);
-
-                                return;
-
-                            } catch {
-
-                                File.Copy(temp, path, true);
-
-                                return;
-
-                            }
-
-                        } else {
-
-                            File.Move(temp, path);
-
-                            return;
-
-                        }
-
-                    } catch (Exception ex) {
-
-                        lastEx = ex;
-
-                        System.Threading.Thread.Sleep(attempt * 40);
-
-                    }
-
-                }
-
-                using (var fs = new FileStream(path, FileMode.Create, FileAccess.Write, FileShare.ReadWrite))
-
-                using (var sw = new StreamWriter(fs, new UTF8Encoding(false))) {
-
-                    sw.Write(content);
-
-                    sw.Flush();
-
-                }
-
-            } catch (Exception ex) {
-
-                if (lastEx != null) throw new AggregateException(ex, lastEx);
-
-                throw;
-
+                if (File.Exists(path)) File.Replace(temp, path, null);
+                else File.Move(temp, path);
             } finally {
-
-                if (File.Exists(temp)) try { File.Delete(temp); } catch { }
-
+                if (File.Exists(temp)) try { File.Delete(temp); } catch (IOException) { } catch (UnauthorizedAccessException) { }
             }
-
         }
-
-
-
-
-
-
-
+        public void ChangeConnection(Action<ConfigManager> update)
+        {
+            string proxy = LastProxy, dns = DnsHost, dpiMode = DpiDesyncMode;
+            bool useProxy = UseProxy, useDns = UseDagamiDns, obfuscation = DnsObfuscation, block = BlockAntigravityUpdates;
+            bool prepare = PrepareAntigravityClient, systemEnv = SetSystemEnv;
+            try {
+                update(this);
+                if (!Save()) throw new IOException(LastSaveError);
+            } catch {
+                LastProxy = proxy; DnsHost = dns; DpiDesyncMode = dpiMode;
+                UseProxy = useProxy; UseDagamiDns = useDns; DnsObfuscation = obfuscation; BlockAntigravityUpdates = block;
+                PrepareAntigravityClient = prepare; SetSystemEnv = systemEnv;
+                throw;
+            }
+        }
         void ParseJsonConfig(string json)
 
 
@@ -5132,6 +4935,8 @@ namespace DevProxyApp
 
 
 
+            Match mUseProxy = Regex.Match(json, @"\""use_proxy\""\s*:\s*(true|false)");
+            if (mUseProxy.Success) UseProxy = mUseProxy.Groups[1].Value.ToLower() == "true";
             Match mDns = Regex.Match(json, @"\""use_dagami_dns\""\s*:\s*(true|false)");
 
 
@@ -5181,6 +4986,13 @@ namespace DevProxyApp
 
 
             if (mDpiMode.Success) DpiDesyncMode = UnescapeJson(mDpiMode.Groups[1].Value);
+            if (!Regex.IsMatch(json, @"""connection_policy_version""\s*:\s*1(?:\s*[,}])")) {
+                if (DnsObfuscation || BlockAntigravityUpdates)
+                    Logger.Log("[Config] Старый формат: дробление TLS и блокировка обновлений отключены. Их можно включить явно в дополнительных параметрах и сохранить.");
+                DnsObfuscation = false;
+                BlockAntigravityUpdates = false;
+            }
+
 
 
 
@@ -5572,7 +5384,7 @@ namespace DevProxyApp
 
 
 
-                        if (m.Success && !string.IsNullOrEmpty(m.Groups[1].Value))
+                        if (m.Success && CanAdoptDetectedProxy(m.Groups[1].Value, File.Exists(path + ".devproxy.bak")))
 
 
 
@@ -5616,7 +5428,7 @@ namespace DevProxyApp
 
 
 
-            if (!string.IsNullOrEmpty(envProxy)) return envProxy;
+            if (CanAdoptDetectedProxy(envProxy, false)) return envProxy;
 
 
 
@@ -5636,6 +5448,12 @@ namespace DevProxyApp
 
 
 
+        internal static bool CanAdoptDetectedProxy(string value, bool managedSettings) {
+            Uri proxy;
+            if (!UpstreamProxyDiagnostics.TryParse(value, out proxy)) return false;
+            if (proxy.IsLoopback && (managedSettings || (proxy.Port >= 53200 && proxy.Port < 53210))) return false;
+            return !UpstreamProxyDiagnostics.IsDnsEndpointMistakenForProxy(value);
+        }
         public void AddProfileIfMissing(string name, string url)
 
 
@@ -5680,7 +5498,7 @@ namespace DevProxyApp
 
 
 
-            AddProfileIfMissing("SOCKS5 Local (:10808)", "socks5://127.0.0.1:10808");
+            AddProfileIfMissing("v2rayN / Xray HTTP (:10809)", "http://127.0.0.1:10809");
 
 
 
@@ -5688,7 +5506,7 @@ namespace DevProxyApp
 
 
 
-            AddProfileIfMissing("SOCKS Local (:2080)", "socks5://127.0.0.1:2080");
+            AddProfileIfMissing("NekoBox / Nekoray HTTP (:2080)", "http://127.0.0.1:2080");
 
 
 
@@ -6836,11 +6654,7 @@ namespace DevProxyApp
 
 
 
-                        "http.proxy", "http.proxyStrictSSL", "http.proxySupport", "http.noProxy",
-
-
-
-                        "update.mode", "update.enableWindowsBackgroundUpdates", "extensions.autoUpdate", "extensions.autoCheckUpdates"
+                        "http.proxy", "http.proxyStrictSSL", "http.proxySupport", "http.noProxy"
 
 
 
@@ -6913,22 +6727,6 @@ namespace DevProxyApp
 
 
                 settings.Remove("http.noProxy");
-
-
-
-                settings.Remove("update.mode");
-
-
-
-                settings.Remove("update.enableWindowsBackgroundUpdates");
-
-
-
-                settings.Remove("extensions.autoUpdate");
-
-
-
-                settings.Remove("extensions.autoCheckUpdates");
 
 
 
@@ -7134,124 +6932,24 @@ namespace DevProxyApp
 
         static void WriteAtomic(string path, string content)
         {
-            string directory = Path.GetDirectoryName(path);
-            if (!string.IsNullOrEmpty(directory) && !Directory.Exists(directory))
-            {
-                try { Directory.CreateDirectory(directory); } catch { }
+            string directory = Path.GetDirectoryName(Path.GetFullPath(path));
+            if (!Directory.Exists(directory)) Directory.CreateDirectory(directory);
+            if (File.Exists(path)) {
+                byte[] existing = File.ReadAllBytes(path);
+                bool bom = existing.Length >= 3 && existing[0] == 239 && existing[1] == 187 && existing[2] == 191;
+                // ReadAllText hides BOM, but IDE components using JSON.parse do
+                // not accept it. Identical text must still repair legacy files.
+                if (!bom && string.Equals(Encoding.UTF8.GetString(existing), content, StringComparison.Ordinal)) return;
             }
-
-            if (File.Exists(path))
-            {
-                try
-                {
-                    string existing = File.ReadAllText(path, Encoding.UTF8);
-                    if (string.Equals(existing, content, StringComparison.Ordinal)) return;
-                }
-                catch { }
+            string temporary = Path.Combine(directory, ".devproxy-" + Guid.NewGuid().ToString("N") + ".tmp");
+            try {
+                File.WriteAllText(temporary, content, new UTF8Encoding(false));
+                if (File.Exists(path)) File.Replace(temporary, path, null);
+                else File.Move(temporary, path);
+            } finally {
+                if (File.Exists(temporary)) try { File.Delete(temporary); } catch (IOException) { } catch (UnauthorizedAccessException) { }
             }
-
-            Exception lastError = null;
-            for (int attempt = 0; attempt < 5; attempt++)
-            {
-                if (attempt > 0) Thread.Sleep(50 * attempt);
-
-                if (attempt == 2 && !string.IsNullOrEmpty(directory))
-                {
-                    try
-                    {
-                        var dSecurity = Directory.GetAccessControl(directory);
-                        var currentUser = System.Security.Principal.WindowsIdentity.GetCurrent().User;
-                        if (currentUser != null)
-                        {
-                            dSecurity.AddAccessRule(new System.Security.AccessControl.FileSystemAccessRule(
-                                currentUser,
-                                System.Security.AccessControl.FileSystemRights.FullControl,
-                                System.Security.AccessControl.InheritanceFlags.ContainerInherit | System.Security.AccessControl.InheritanceFlags.ObjectInherit,
-                                System.Security.AccessControl.PropagationFlags.None,
-                                System.Security.AccessControl.AccessControlType.Allow));
-                            Directory.SetAccessControl(directory, dSecurity);
-                        }
-                    }
-                    catch { }
-                }
-
-                string temporary = Path.Combine(directory, ".devproxy-" + Guid.NewGuid().ToString("N") + ".tmp");
-                bool wroteTemp = false;
-                try
-                {
-                    File.WriteAllText(temporary, content, Encoding.UTF8);
-                    wroteTemp = true;
-
-                    if (File.Exists(path))
-                    {
-                        try
-                        {
-                            FileAttributes attr = File.GetAttributes(path);
-                            if ((attr & (FileAttributes.ReadOnly | FileAttributes.Hidden)) != 0)
-                            {
-                                File.SetAttributes(path, attr & ~(FileAttributes.ReadOnly | FileAttributes.Hidden));
-                            }
-                        }
-                        catch { }
-
-                        File.Replace(temporary, path, null);
-                    }
-                    else
-                    {
-                        File.Move(temporary, path);
-                    }
-                    return;
-                }
-                catch (Exception ex)
-                {
-                    lastError = ex;
-                }
-                finally
-                {
-                    if (wroteTemp)
-                    {
-                        try { if (File.Exists(temporary)) File.Delete(temporary); } catch { }
-                    }
-                }
-
-                try
-                {
-                    if (File.Exists(path))
-                    {
-                        try
-                        {
-                            FileAttributes attr = File.GetAttributes(path);
-                            if ((attr & (FileAttributes.ReadOnly | FileAttributes.Hidden)) != 0)
-                            {
-                                File.SetAttributes(path, attr & ~(FileAttributes.ReadOnly | FileAttributes.Hidden));
-                            }
-                        }
-                        catch { }
-                    }
-
-                    using (var fs = new FileStream(path, FileMode.Create, FileAccess.Write, FileShare.ReadWrite))
-                    using (var writer = new StreamWriter(fs, Encoding.UTF8))
-                    {
-                        writer.Write(content);
-                        writer.Flush();
-                    }
-                    return;
-                }
-                catch (Exception ex)
-                {
-                    lastError = ex;
-                }
-            }
-
-            if (lastError != null) throw lastError;
         }
-
-
-
-
-
-
-
         static void UpdateShortcutFile(string lnkPath, string exePath, string proxyUrl, bool remove)
 
 
@@ -9648,7 +9346,8 @@ namespace DevProxyApp
 
 
 
-                string proxyUrl = ConfigManager.Instance.LastProxy;
+                string proxyUrl = ConfigManager.Instance.EffectiveProxy;
+                if (string.IsNullOrEmpty(proxyUrl) || IsDirectProxyValue(proxyUrl)) proxyUrl = "direct";
 
 
 
@@ -9672,11 +9371,11 @@ namespace DevProxyApp
 
 
 
-                if (string.IsNullOrEmpty(proxyUrl) && ConfigManager.Instance.UseDagamiDns)
+                if (proxyUrl == null)
 
 
 
-                    proxyUrl = "direct";
+                    return;
 
 
 
@@ -9748,7 +9447,7 @@ namespace DevProxyApp
 
 
 
-                        if (dpiMode == DpiDesyncMode.ExternalEngine) {
+                        if (ConfigManager.Instance.DnsObfuscation && dpiMode == DpiDesyncMode.ExternalEngine) {
 
 
 
@@ -9839,6 +9538,11 @@ namespace DevProxyApp
 
 
 
+
+        private void KillConflictingProcesses(AppTarget target, string executable)
+        {
+            NativeLogin.StopExactExecutables(ApplicationSupport.RelatedExecutables(target));
+        }
 
         private bool LaunchTarget(AppTarget target, out string error) { return LaunchTarget(target, "", null, out error); }
 
@@ -9948,49 +9652,31 @@ namespace DevProxyApp
 
 
 
-                if (!reuse && (IsElectronTarget(target) || gemini || ApplicationSupport.Kind(target)=="jetbrains" || ApplicationSupport.Kind(target)=="opencode-desktop")) NativeLogin.RequireStopped(executable);
+                try {
+                    if(!reuse && (IsElectronTarget(target)||gemini||ApplicationSupport.Kind(target)=="jetbrains"||ApplicationSupport.Kind(target)=="opencode-desktop"))
+                        foreach(string path in ApplicationSupport.RelatedExecutables(target))NativeLogin.RequireStopped(path);
+                } catch (InvalidOperationException ex) {
+                    bool canPrompt = Application.OpenForms.Count > 0 && Environment.UserInteractive;
+                    if (canPrompt) {
+                        var res = MessageBox.Show(ex.Message + "\n\nЗавершить работающие процессы и продолжить запуск через Dagami?",
+                            "Приложение уже запущено", MessageBoxButtons.YesNo, MessageBoxIcon.Warning, MessageBoxDefaultButton.Button2);
+                        if (res == DialogResult.Yes) {
+                            try {
+                                KillConflictingProcesses(target, executable);
 
-
-
-                if(!reuse&&ApplicationSupport.Kind(target)=="opencode-desktop") {
-
-
-
-                    NativeLogin.RequireStopped("opencode-cli.exe");
-
-
-
-                    NativeLogin.RequireStopped("opencode-server.exe");
-
-
-
+                            } catch (Exception killEx) {
+                                error = "Не удалось завершить процессы: " + killEx.Message;
+                                return false;
+                            }
+                        } else {
+                            error = ex.Message;
+                            return false;
+                        }
+                    } else {
+                        error = ex.Message;
+                        return false;
+                    }
                 }
-
-
-
-                if (antigravity && !reuse) {
-
-
-
-                    try {
-
-
-
-                        foreach (string backend in AntigravityIntegration.BackendPaths(target.ExePath))
-
-
-
-                            if (Path.GetFileName(backend).Equals("agy.exe", StringComparison.OrdinalIgnoreCase)) NativeLogin.RequireStopped(backend);
-
-
-
-                    } catch (UnsupportedAntigravityBinaryException) { /* Missing backend is reported by preparation; ordinary proxy launch remains available. */ }
-
-
-
-                }
-
-
 
                 if (AntigravityIntegration.Supports(target.ExePath) && !reuse && ConfigManager.Instance.PrepareAntigravityClient)
 
@@ -10052,7 +9738,13 @@ namespace DevProxyApp
 
 
 
+                    if (string.IsNullOrEmpty(originalDirectory)) psi.WorkingDirectory = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
                     psi=NativeCliApps.CreateStart(executable,NativeCliApps.SplitArguments(originalArguments),localProxy,psi.WorkingDirectory);
+                    if (string.IsNullOrEmpty(originalArguments) && string.IsNullOrEmpty(originalDirectory) && NativeCliApps.UsesCommandShim(target)) {
+                        string cmdLine = string.IsNullOrEmpty(psi.Arguments) ? NativeShortcuts.Quote(psi.FileName) : (NativeShortcuts.Quote(psi.FileName) + " " + psi.Arguments);
+                        psi.FileName = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.System), "cmd.exe");
+                        psi.Arguments = "/d /k \"" + cmdLine + "\"";
+                    }
 
 
 
@@ -10200,28 +9892,6 @@ namespace DevProxyApp
                 }
 
 
-
-                try {
-                    string exeName = Path.GetFileNameWithoutExtension(target.ExePath);
-                    if (!string.IsNullOrEmpty(exeName)) {
-                        Process[] existing = Process.GetProcessesByName(exeName);
-                        if (existing.Length > 0) {
-                            bool hasUntracked = false;
-                            foreach (var p in existing) {
-                                try {
-                                    if (session == null || !session.Processes.Exists(sp => sp.Id == p.Id)) {
-                                        hasUntracked = true;
-                                        break;
-                                    }
-                                } catch { }
-                                p.Dispose();
-                            }
-                            if (hasUntracked) {
-                                Logger.Log("[!] Обнаружен уже запущенный процесс " + exeName + ". Чтобы применились параметры проксирования, перезапустите приложение через Dagami.");
-                            }
-                        }
-                    }
-                } catch { }
 
                 Process launched = Process.Start(psi);
 
@@ -10523,7 +10193,7 @@ namespace DevProxyApp
 
 
 
-                var probe = UpstreamProxyDiagnostics.Check(ConfigManager.Instance.LastProxy);
+                var probe = ConnectionDiagnostics.Check(_bridgePort);
 
 
 
@@ -10575,7 +10245,7 @@ namespace DevProxyApp
 
 
 
-                _appFeedback.Text = "Дождитесь завершения подготовки перед выходом из DevProxy.";
+                _appFeedback.Text = "Дождитесь завершения подготовки перед выходом из Dagami Agent Proxy.";
 
 
 
@@ -10640,6 +10310,3 @@ namespace DevProxyApp
 
 
 }
-
-
-

@@ -62,7 +62,9 @@ namespace DevProxyApp {
   }
   public static UpdateRelease Check(bool includePrereleases){using(var network=new UpdateNetwork()){string json=Encoding.UTF8.GetString(network.Get(new Uri(Api),4*1024*1024));return SelectRelease(json,includePrereleases);}}
   public static string Download(UpdateRelease release,Action<string> progress){
-   ValidateRelease(release);string folder=Path.Combine(Root,"staged",Guid.NewGuid().ToString("N"));Directory.CreateDirectory(folder);
+   ValidateRelease(release);
+   try{string stagedRoot=Path.Combine(Root,"staged");if(Directory.Exists(stagedRoot))foreach(string oldDir in Directory.GetDirectories(stagedRoot)){string name=Path.GetFileName(oldDir);if(name.StartsWith("smoke-",StringComparison.OrdinalIgnoreCase)||Directory.GetLastWriteTimeUtc(oldDir)<DateTime.UtcNow.AddDays(-7))try{Directory.Delete(oldDir,true);}catch{}}}catch{}
+   string folder=Path.Combine(Root,"staged",Guid.NewGuid().ToString("N"));Directory.CreateDirectory(folder);
    using(var network=new UpdateNetwork()){
     if(release.Archive!=null){var a=release.Archive;if(progress!=null)progress("Загрузка Windows-архива…");byte[] data=network.Get(new Uri(a.Url),a.Size);if(data.LongLength!=a.Size||Hash(data)!=a.Sha256.ToLowerInvariant())throw new InvalidDataException("SHA-256 архива не совпал.");ExtractArchive(release,data,folder);}
     else {var asset=release.Gui;if(progress!=null)progress("Загрузка "+asset.Name+"…");byte[] data=network.Get(new Uri(asset.Url),asset.Size);if(data.LongLength!=asset.Size||Hash(data)!=asset.Sha256.ToLowerInvariant())throw new InvalidDataException("SHA-256 не совпал: "+asset.Name+". Установка отменена.");Atomic(Path.Combine(folder,asset.Name),data);}

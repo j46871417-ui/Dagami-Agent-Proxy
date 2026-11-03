@@ -6,8 +6,8 @@ if(-not (Test-Path -LiteralPath $engine)){$engine=Join-Path $PSScriptRoot '..\..
 $script:Checks=0
 function Assert($Value,[string]$Message){$script:Checks++;if(-not $Value){throw $Message}}
 function Reject([scriptblock]$Action,[string]$Message){$caught=$false;try{& $Action | Out-Null}catch{$caught=$true};Assert $caught $Message}
-Assert (@(Get-ProviderDomains Full).Count -eq 76) 'Script domain list mismatch'
-Assert (@(Get-ProviderDomains Development).Count -lt 76) 'Development preset not filtered'
+Assert (@(Get-ProviderDomains Full).Count -eq 85) 'Script domain list mismatch'
+Assert (@(Get-ProviderDomains Development).Count -lt 85) 'Development preset not filtered'
 foreach($domain in @('accounts.google.com','oauth2.googleapis.com','lh3.googleusercontent.com','www.gstatic.com','ssl.gstatic.com')) {
     Assert ($domain -in @(Get-ProviderDomains Development)) ('Missing Google dependency: '+$domain)
 }
