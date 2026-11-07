@@ -1,5 +1,13 @@
 # Changelog
 
+## Documentation after 0.5.0 beta
+
+- Add a short Russian quick start, a platform-specific user guide with
+  troubleshooting and a fork maintainer guide covering build, configuration,
+  infrastructure, tests, licensing and release packaging.
+- Link the guides from README. Include user instructions in binary packages
+  and all three guides in the desktop source archive.
+
 ## Source maintenance after 0.5.0 beta
 
 - Remove the retired Python/Tk desktop client, its packaging/install scripts

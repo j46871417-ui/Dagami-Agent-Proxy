@@ -13,6 +13,10 @@ macOS — AppKit, Linux — GTK 3.
 · [Группа](https://t.me/dagamvi)
 · [Канал](https://t.me/dagamivibe)
 
+**[Быстрый старт](docs/QUICK_START.md)** ·
+**[Руководство пользователя](docs/USER_GUIDE.md)** ·
+**[Как сделать свой форк](docs/FORKING.md)**
+
 ## Подключение
 
 1. Получите ключ через `/key` в @bright26bot.
@@ -77,6 +81,9 @@ SHA-256 появятся в `dist-portable/native-next`. На Windows испол
 `v0.5.0-beta`.
 
 ## Документация
+
+[Краткая инструкция](docs/QUICK_START.md) · [Полное руководство](docs/USER_GUIDE.md)
+· [Разработка и выпуск форков](docs/FORKING.md)
 
 [DNS и откат](SYSTEM_DNS.md) · [Автозапуск Windows](STARTUP.md)
 · [Баг-репорты](BUG_REPORTS.md) · [Сервер управляемого доступа](MANAGED_ACCESS.md)

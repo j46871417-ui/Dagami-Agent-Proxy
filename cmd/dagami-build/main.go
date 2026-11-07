@@ -255,7 +255,7 @@ func buildPortable(tmp, out, osName, arch string, routing bool, winForms string,
 				return e
 			}
 		}
-		for _, name := range []string{"NATIVE_NEXT.md", "APP_ROUTING.md", "MANAGED_ACCESS.md", "RELEASE_NOTES.md", "LICENSE", "THIRD_PARTY_NOTICES.md"} {
+		for _, name := range []string{"docs/QUICK_START.md", "docs/USER_GUIDE.md", "APPLICATIONS.md", "SYSTEM_DNS.md", "STARTUP.md", "BUG_REPORTS.md", "bug_reports/README.md", "NATIVE_NEXT.md", "APP_ROUTING.md", "MANAGED_ACCESS.md", "RELEASE_NOTES.md", "LICENSE", "THIRD_PARTY_NOTICES.md"} {
 			if e := zipFile(z, name, name, 0644); e != nil {
 				return e
 			}
@@ -417,6 +417,7 @@ func zipText(z *zip.Writer, name, text string) error {
 }
 func sourceZip(path string) error {
 	names := []string{"go.mod", "go.sum", "LICENSE", "README.md", "NATIVE_NEXT.md", "APPLICATIONS.md", "APP_ROUTING.md", "MANAGED_ACCESS.md", "RELEASE_NOTES.md", "STARTUP.md", "SYSTEM_DNS.md", "BUG_REPORTS.md", "SOURCE_POLICY.md", "SECURITY_FIXES.md", "SIGNED_LICENSES.md", "THIRD_PARTY_NOTICES.md", "CHANGELOG.md", "src/SystemDns.ps1", "src/app.manifest", "assets/dagami-agent-proxy.ico", "assets/icon-64.png", "assets/dagami-logo.jpg", "tools/run_native_checks.py", "tests/native/README.md", "tests/native/SystemDnsChecks.ps1"}
+	names = append(names, "docs/QUICK_START.md", "docs/USER_GUIDE.md", "docs/FORKING.md", "AGENTS.md", "bug_reports/README.md")
 	for _, s := range nativeSources {
 		names = append(names, "src/"+s)
 	}
