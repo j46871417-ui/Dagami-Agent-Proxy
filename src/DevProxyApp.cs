@@ -9407,7 +9407,7 @@ namespace DevProxyApp
 
 
 
-                            Logger.Log("[-] C# bridge supports only HTTP and HTTPS upstream proxies. Use the Python GUI for SOCKS5.");
+                            Logger.Log("[-] Мост Windows поддерживает HTTP и HTTPS. Для SOCKS5 используйте переносимый клиент Dagami.");
 
 
 

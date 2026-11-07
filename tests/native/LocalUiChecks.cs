@@ -40,24 +40,24 @@ class LocalUiChecks {
     Assert(form.Controls.Find("BugReportNavigationButton",true).Length==1,"Global report button missing");
     Assert(form.Controls.Find("SaveJournalButton",true).Length==1,"Journal export button missing");
     Assert(form.Controls.Find("BlockUpdatesCheckBox",true).Length==1,"Antigravity update blocker checkbox missing");
-    Assert(form.Controls.Find("MainStartWithWindowsCheckBox",true).Length==1,"Main screen Windows autostart checkbox missing");
-    Assert(form.Controls.Find("MainUseProxyCheckBox",true).Length==1,"Main screen UseProxy checkbox missing");
-    Assert(form.Controls.Find("MainUseDnsCheckBox",true).Length==1,"Main screen UseDns checkbox missing");
+    Assert(form.Controls.Find("MainStartWithWindowsCheckBox",true).Length==0,"Autostart still duplicated on main screen");
+    Assert(form.Controls.Find("MainUseProxyCheckBox",true).Length==0,"Proxy switch still duplicated on main screen");
+    Assert(form.Controls.Find("MainUseDnsCheckBox",true).Length==0,"DNS switch still duplicated on main screen");
+    Assert(form.Controls.Find("ManualDnsButton",true).Length==1,"Manual DNS is not on its own page");
+    Assert(form.Controls.Find("ResetDnsNrptButton",true).Length==1,"Reset is not on the DNS page");
     Assert(form.Controls.Find("UseProxyCheckBox",true).Length==1,"Settings UseProxy checkbox missing");
     Assert(Get(form,"_dnsObfuscation")!=null,"Pre-DNS obfuscation checkbox missing");
     Assert(VpnDiagnostics.IsFakeIpAddress(System.Net.IPAddress.Parse("198.18.0.25"))&&!VpnDiagnostics.IsFakeIpAddress(System.Net.IPAddress.Parse("8.8.8.8")),"Fake-IP detection failed");
     Assert(VpnDiagnostics.IsVirtualVpnAdapter("Nekoray Tun","WireGuard Tunnel",System.Net.NetworkInformation.NetworkInterfaceType.Ethernet),"Virtual VPN TUN detection failed");
     Assert(Buttons(form,"Сообщить о сбое")==1&&Buttons(form,"Баг-репорт")==0,"Duplicate report action remains");
     Assert(VisibleButtons(form)<=10,"Main screen still has too many visible buttons");
-    Assert(((Panel[])Get(form,"_pageControls")).Length==3,"Advanced tools remain in main navigation");
+    Assert(((Panel[])Get(form,"_pageControls")).Length==5,"Flat pages are missing");
     Assert(!((Timer)Get(form,"_nativeLogTimer")).Enabled,"Static preview starts background polling");
-    Call(form,"ShowFluentPage",1);var tabs=(TabControl)Get(form,"_settingsTabs");
-    for(int index=0;index<tabs.TabPages.Count;index++){tabs.SelectedIndex=index;Application.DoEvents();Bounds(form);Picture(form,"local-settings-"+index+".png");}
-    tabs.SelectedIndex=1;((CheckBox)Get(form,"_wholeNetworkDns")).Checked=true;Application.DoEvents();Bounds(form);((CheckBox)Get(form,"_wholeNetworkDns")).Checked=false;
-    Call(form, "ShowFluentPage", 2); Bounds(form); Picture(form, "local-dns.png");
+    for(int index=0;index<5;index++){Call(form,"ShowFluentPage",index);Bounds(form);Picture(form,"local-page-"+index+".png");}
+    Call(form,"ShowFluentPage",1);((CheckBox)Get(form,"_wholeNetworkDns")).Checked=true;Application.DoEvents();Bounds(form);((CheckBox)Get(form,"_wholeNetworkDns")).Checked=false;
     form.Size = form.MinimumSize; Application.DoEvents();
-    foreach(int index in new[]{0,1,2}){Call(form,"ShowFluentPage",index);Bounds(form);Picture(form,"local-page-"+index+"-min.png");}
-    Call(form,"ShowFluentPage",1);for(int index=0;index<tabs.TabPages.Count;index++){tabs.SelectedIndex=index;Application.DoEvents();Bounds(form);Picture(form,"local-settings-"+index+"-min.png");}
+    for(int index=0;index<5;index++){Call(form,"ShowFluentPage",index);Bounds(form);Picture(form,"local-page-"+index+"-min.png");}
+
    }
    string reportLog=Path.Combine(Environment.CurrentDirectory,"report-fixture.log");File.WriteAllText(reportLog,"[TEST] Interactive console regression fixture\nAuthorization: Bearer fixture-secret\n[TEST] HTTP bridge ready on loopback\n");
    using(var report=new BugReportDialog(reportLog)){

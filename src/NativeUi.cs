@@ -27,8 +27,6 @@ namespace DevProxyApp
         private readonly List<Button> _nativeButtons = new List<Button>();
 
         private FluentButton _primaryAppAction;
-        private FluentButton _patchAppButton;
-        private FluentButton _unpatchAppButton;
         private FluentButton _moreAppActions;
         private ToolStripMenuItem _patchMenuItem;
         private ToolStripMenuItem _unpatchMenuItem;
@@ -44,10 +42,7 @@ namespace DevProxyApp
         private string[] _pageNames, _pageDescriptions;
         private bool _proxyCheckFailed;
         private CheckBox _startWithWindows;
-        private CheckBox _mainStartWithWindows;
         private CheckBox _useProxyCheckBox;
-        private CheckBox _mainUseProxy;
-        private CheckBox _mainUseDns;
         private bool _updatingRouteFlags;
 
         internal void SyncRouteCheckboxes()
@@ -57,8 +52,6 @@ namespace DevProxyApp
                 bool useProxy = ConfigManager.Instance.UseProxy;
                 bool useDns = ConfigManager.Instance.UseDagamiDns;
                 if (_useProxyCheckBox != null) _useProxyCheckBox.Checked = useProxy;
-                if (_mainUseProxy != null) _mainUseProxy.Checked = useProxy;
-                if (_mainUseDns != null) _mainUseDns.Checked = useDns;
                 if (_dnsEnabled != null && _dnsEnabled.Checked != useDns) {
                     _changingDnsPreference = true;
                     _dnsEnabled.Checked = useDns;
@@ -129,7 +122,6 @@ namespace DevProxyApp
                 var startup = NativeStartup.Current;
                 bool enabled = !_preview && startup.IsEnabled();
                 if (_startWithWindows != null) _startWithWindows.Checked = enabled;
-                if (_mainStartWithWindows != null) _mainStartWithWindows.Checked = enabled;
                 if (_startupStatus != null) {
                     _startupStatus.Text = enabled ? "Автозапуск включён для этой копии." :
                         (!_preview && startup.HasLegacyElevatedTask() ? "Обнаружен старый автозапуск с правами администратора. Включите автозапуск заново, чтобы обновить его." : "Автозапуск выключен.");
@@ -198,7 +190,7 @@ namespace DevProxyApp
             }
             _pageControls[index].BringToFront();
             _fluentHeading.Text = _pageNames[index]; _fluentSubtitle.Text = _pageDescriptions[index];
-            if (index == 1 && _settingsTabs.SelectedIndex==0) { _proxyBox.Focus(); _proxyBox.SelectAll(); }
+
         }
 
         private void ExecuteNativeAction(Action action)
@@ -340,7 +332,6 @@ namespace DevProxyApp
 
             if (!ConfirmSettingsRestore()) return;
             _nativeBusy = true; _patchInProgress = true; SetNativeButtonsEnabled(false);
-            if (_unpatchAppButton != null) _unpatchAppButton.Text = "Откат…";
             _appFeedback.Text = "Восстановление исходных файлов, настроек и ярлыков…";
             var worker = new System.Threading.Thread(() => {
                 var summary = new System.Text.StringBuilder();
@@ -359,7 +350,6 @@ namespace DevProxyApp
                 string finalMsg = summary.ToString().Trim();
                 try { BeginInvoke(new Action(() => {
                     _nativeBusy = false; _patchInProgress = false;
-                    if (_unpatchAppButton != null) _unpatchAppButton.Text = "Отменить патч";
                     SetNativeButtonsEnabled(true); UpdateNativeDetails(); QueueClientStatus(true);
                     _appFeedback.Text = success ? "Патч отменён, исходные параметры возвращены." : finalMsg;
                     MessageBox.Show(this, string.IsNullOrEmpty(finalMsg) ? "Исходные настройки и ярлыки восстановлены." : finalMsg,
@@ -418,9 +408,7 @@ namespace DevProxyApp
             bool canUnpatch = isPatched;
             _patchMenuItem.Visible = true;
             _patchMenuItem.Enabled = canPatch;
-            if (_patchAppButton != null) _patchAppButton.Enabled = canPatch;
             if (_unpatchMenuItem != null) _unpatchMenuItem.Enabled = canUnpatch;
-            if (_unpatchAppButton != null) _unpatchAppButton.Enabled = canUnpatch;
             _stopAppItem.Enabled = running;
             _removeAppItem.Enabled = target != null && target.IsCustom;
             _restoreShortcutItem.Enabled = _shortcutRecords > 0 || _shortcutIssue != null;
@@ -434,9 +422,9 @@ namespace DevProxyApp
             }
             _targetDetails.Text = _proxyCheckFailed ? state + ". Последняя проверка маршрута не прошла." : state;
             _shortcutExplanation.Text = target == null ? "Выберите приложение, чтобы настроить его ярлыки." : _shortcutIssue != null ?
-                (_shortcutIssue.TrimEnd('.') + ". Нажмите «Пропатчить».") :
+                (_shortcutIssue.TrimEnd('.') + ". Выберите «Действия → Настроить обычный запуск».") :
                 (_shortcutRecords > 0 ? "Открывайте настроенный ярлык: Dagami запустится в фоне." :
-                "Нажмите «Пропатчить», затем открывайте приложение обычным ярлыком.");
+                "Настройте обычный запуск в меню «Действия», затем используйте ярлык.");
             bool cli=NativeCliApps.IsCommandTarget(target);
 
             if (target != null && target.IsInstalled) {
@@ -449,7 +437,7 @@ namespace DevProxyApp
             if(_clientPreparationStatus!=null)_clientPreparationStatus.Text=_clientStatusText==null?"":(_clientStatusText+(ConfigManager.Instance.BlockAntigravityUpdates?" · Обновления через мост: блокируются":" · Обновления через мост: разрешены"));
             if(cli&&_shortcutIssue==null)_shortcutExplanation.Text=_shortcutRecords>0?"Команда настроена. Перезапустите терминал; прямой путь к EXE обходит запускатель.":"Настройте обычную команду CLI, затем перезапустите терминал.";
             _restoreShortcutItem.Text=cli?"Восстановить прямой запуск команды":"Восстановить обычные ярлыки";
-            if (running) _shortcutExplanation.Text = "Сессия активна (просто закрыть окно недостаточно — остаются фоновые процессы). Для отзыва или применения патча нажмите кнопку ниже либо выберите «Действия → Остановить».";
+            if (running) _shortcutExplanation.Text = "Сессия активна (просто закрыть окно недостаточно — остаются фоновые процессы). Для отзыва или применения патча выберите «Действия → Остановить».";
             if (_proxyCheckMessage != null) _appFeedback.Text = _proxyCheckMessage;
         }
 
@@ -604,7 +592,7 @@ namespace DevProxyApp
                 bool flagsActive = ConfigManager.Instance.UseProxy || ConfigManager.Instance.UseDagamiDns;
                 string proxyText = ConfigManager.Instance.UseProxy ? (!string.IsNullOrEmpty(ConfigManager.Instance.LastProxy) && !IsDirectProxyValue(ConfigManager.Instance.LastProxy) ? "Прокси: включён" : "Прокси: прямой (direct)") : "Прокси: выключен";
                 string dnsText = ConfigManager.Instance.UseDagamiDns ? (currentDns==null?"Свой DNS":currentDns.Length>0&&currentDns[0].Provider=="magicdns"?"DNS: MagicDNS":"DNS: Dagami → MagicDNS") : "DNS: выключен";
-                _connectionSummary.Text = !flagsActive ? (_bridgePort > 0 ? "Мост 127.0.0.1:" + _bridgePort + "  ·  " : "") + "Режим не выбран (прокси и DNS выключены)  ·  Включите флаги ниже.\nПараметры подключения — в настройках. Системный DNS — в «DNS»." : (_bridgePort > 0 ? "Мост 127.0.0.1:" + _bridgePort + "  ·  " : "Проверьте подключение  ·  ") + proxyText + "  ·  " + dnsText + "\nПараметры подключения — в настройках. Системный DNS — в «DNS».";
+                _connectionSummary.Text = !flagsActive ? (_bridgePort > 0 ? "Мост 127.0.0.1:" + _bridgePort + "  ·  " : "") + "Режим не выбран (прокси и DNS выключены)  ·  Включите флаги ниже.\nПараметры подключения — в настройках. Системный DNS — в «DNS и сброс»." : (_bridgePort > 0 ? "Мост 127.0.0.1:" + _bridgePort + "  ·  " : "Проверьте подключение  ·  ") + proxyText + "  ·  " + dnsText + "\nПараметры подключения — в настройках. Системный DNS — в «DNS и сброс».";
             }
 
 

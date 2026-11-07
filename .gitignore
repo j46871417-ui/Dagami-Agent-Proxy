@@ -121,3 +121,6 @@ desktop.ini
 # Local review screenshots and fixture leftovers
 /local-*.png
 /temp-test/
+/native/core/target/
+/internal/portable/core.wasm
+/internal/portable/system_dns.ps1

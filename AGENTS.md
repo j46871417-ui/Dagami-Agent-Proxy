@@ -1,7 +1,7 @@
 # Repository guidance
 
 Dagami Agent Proxy is a Windows native C# application with portable Python sources
-and a separate bug-report service. User instructions and explicit publication
+and a separate bug-report service. The new desktop packages and build pipeline use Go and Rust; older Python sources are retained as a migration reference. User instructions and explicit publication
 authorization take precedence; do not ask again for an already approved action.
 
 ## Layout
@@ -18,16 +18,14 @@ authorization take precedence; do not ask again for an already approved action.
 Run from the repository root:
 
 ```sh
-python tools/check_source_hygiene.py
-python -m unittest discover -s tools -p test_source_hygiene.py
-python -m unittest discover -s tests -p 'test_*.py'
-python tools/build_portable.py --source-only
+rustup target add wasm32-unknown-unknown
+go run ./cmd/dagami-build audit
+go run ./cmd/dagami-build -test -source
 ```
 
-On Windows, build with `python tools/build_native_app.py --output-dir <directory>`.
-Selected native checks can be run with `python tools/run_native_checks.py --assembly
-<path-to-DagamiAgentProxy.exe> --output-dir <dedicated-directory>`.
-Server tests require the dependencies in `bug_reports/service/requirements.txt`.
+On Windows add `-windows-native -native-checks`. The desktop source archive and
+binary packages exclude the legacy Python tree. The legacy tests remain useful
+when changing legacy behavior. The bug-report service has its own requirements.
 
 Use fixtures and loopback traffic. Do not run `LicenseChecks` against the real user
 activation or change live DNS, shortcuts, accounts or installed application binaries

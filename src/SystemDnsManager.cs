@@ -325,7 +325,7 @@ namespace DevProxyApp
         readonly Button _resetAll = new Button { Text = "Очистить все DNS и NRPT…", AutoSize = true, Height = 34, BackColor = Color.FromArgb(185, 28, 28), ForeColor = Color.White, FlatStyle = FlatStyle.Flat, UseVisualStyleBackColor = false };
         bool _busy;
         bool _loading;
-        public SystemDnsForm(string server = null) {
+        public SystemDnsForm(string server = null, bool startReset = false, bool showReset = true) {
             if(!string.IsNullOrWhiteSpace(server))_server.Text=server.Trim();
             Icon = Brand.LoadIcon();
             Text = Brand.Name + " — запись DNS в Windows"; StartPosition = FormStartPosition.CenterParent; ClientSize = new Size(820, 720); MinimumSize = new Size(720, 700);
@@ -345,11 +345,16 @@ namespace DevProxyApp
             actions.Controls.AddRange(new Control[] { _apply, _restore, _refresh }); body.Controls.Add(actions, 0, 6);
             var danger = new FlowLayoutPanel { Dock = DockStyle.Fill, WrapContents = false, Margin = Padding.Empty };
             danger.Controls.Add(_resetAll); danger.Controls.Add(new Label { AutoSize = true, ForeColor = Color.Firebrick, Text = "Все адаптеры и чужие правила.\r\nНужны два подтверждения.", Margin = new Padding(12, 3, 0, 0) }); body.Controls.Add(danger, 0, 7);
+            danger.Visible=showReset; if(!showReset)body.RowStyles[7].Height=0;
             body.Controls.Add(new Label { Dock = DockStyle.Fill, ForeColor = FluentTheme.Muted, Text = "По умолчанию общий DNS сети сохраняется. Для смены DNS всей сети выберите отдельный пункт и нужные адаптеры.\r\nНовая запись сохранит прежнюю копию. При откате внешние DNS остаются как есть, удалённые адаптеры пропускаются. Итог — в отчёте ниже." }, 0, 8);
             body.Controls.Add(_report, 0, 9); Controls.Add(body);
             _apply.Click += (s, e) => Run("Apply"); _restore.Click += (s, e) => Run("Restore"); _refresh.Click += (s, e) => RefreshAdapters(null);
             _resetAll.Click += (s, e) => { if (!_busy && !_loading && ConfirmFullReset((text, title) => MessageBox.Show(this, text, title, MessageBoxButtons.YesNo, MessageBoxIcon.Warning, MessageBoxDefaultButton.Button2))) Run("ResetAll"); };
-            Shown += (s, e) => RefreshAdapters(null);
+            Shown += (s, e) => {
+                if (!startReset) { RefreshAdapters(null); return; }
+                if (ConfirmFullReset((text, title) => MessageBox.Show(this, text, title, MessageBoxButtons.YesNo, MessageBoxIcon.Warning, MessageBoxDefaultButton.Button2))) Run("ResetAll");
+                else Close();
+            };
             FormClosing += (s, e) => { if (_busy) { e.Cancel = true; _report.AppendText("\r\nДождитесь завершения операции и отчёта."); } };
         }
         public static bool ConfirmFullReset(Func<string, string, DialogResult> show) {

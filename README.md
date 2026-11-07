@@ -1,3 +1,6 @@
+> Новый локальный вариант: [Go/Rust, прямое меню Windows и сборки для трёх ОС](NATIVE_NEXT.md).
+> Ниже описана прежняя версия и её возможности для сравнения при миграции.
+
 <p align="center">
   <img src="devproxy_pkg/assets/dagami-logo.jpg" alt="Dagami Agent Proxy" width="380" />
 </p>

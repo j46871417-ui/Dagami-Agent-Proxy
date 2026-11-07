@@ -6,7 +6,6 @@ using System.Windows.Forms;
 
 namespace DevProxyApp {
  public partial class MainForm {
-  TabControl _settingsTabs;
   Label _dnsOverview,_dnsAddressDetails;
   FluentButton _encryptedDnsAction;
   DateTime _nextDnsUiRead;
@@ -125,9 +124,7 @@ namespace DevProxyApp {
    _refreshDnsLink=new LinkLabel{Text="Проверить актуальные адреса",AutoSize=true,LinkColor=FluentTheme.Accent};
    _refreshDnsLink.LinkClicked+=(s,e)=>RunLiveDnsProbe();
    rows.Controls.Add(_refreshDnsLink);
-   var manual=new LinkLabel{Text="Ручное управление системным DNS и восстановлением…",AutoSize=true,LinkColor=FluentTheme.Accent,Margin=new Padding(0,16,0,0)};manual.LinkClicked+=(s,e)=>ExecuteNativeAction(()=>{using(var dialog=new SystemDnsForm(_dnsBox.Text.Trim()))dialog.ShowDialog(this);UpdateNativeStatus();});rows.Controls.Add(manual);
-   rows.SizeChanged+=(sender,e)=>page.AutoScrollMinSize=new Size(0,rows.Height+32);
-   page.Controls.Add(rows);page.AutoScrollMinSize=new Size(0,rows.Height+32);return page;
+   page.Controls.Add(rows);return page;
   }
 
   void RunLiveDnsProbe(){
@@ -172,13 +169,19 @@ namespace DevProxyApp {
     MessageBox.Show(this,"Профиль DNS загружен и сохранён:\r\n"+spec,"Свой DNS",MessageBoxButtons.OK,MessageBoxIcon.Information);
    }
   }
-  Panel BuildSettingsTabs(Panel connection,Panel advanced,Panel diagnose,Panel journal){
-   var host=new Panel{Dock=DockStyle.Fill};_settingsTabs=new FluentTabs{Dock=DockStyle.Fill,AccessibleName="Настройки и дополнительные инструменты"};
-   var pages=new[]{connection,advanced,diagnose,journal};var names=new[]{"Подключение","Дополнительно","Диагностика","Журнал"};
-   for(int index=0;index<pages.Length;index++){var tab=new TabPage(names[index]){BackColor=FluentTheme.Background,Padding=new Padding(4)};pages[index].Dock=DockStyle.Fill;tab.Controls.Add(pages[index]);_settingsTabs.TabPages.Add(tab);}host.Controls.Add(_settingsTabs);return host;
+  Panel BuildFlatConnectionPage(Panel connection, Panel advanced){
+   var host=new FluentPageHost{Dock=DockStyle.Fill,AutoScroll=true,BackColor=FluentTheme.Background};
+   var rows=new FluentLayout{Dock=DockStyle.Top,AutoSize=true,AutoSizeMode=AutoSizeMode.GrowAndShrink,ColumnCount=1,RowCount=2,Margin=Padding.Empty};
+   rows.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,100));
+   var connectionHeight=new RowStyle(SizeType.Absolute,230);var advancedHeight=new RowStyle(SizeType.Absolute,640);
+   rows.RowStyles.Add(connectionHeight);rows.RowStyles.Add(advancedHeight);
+   var content=advanced.Controls[0];advanced.AutoScroll=false;
+   Action fit=()=>{advancedHeight.Height=content.Height+36;rows.PerformLayout();};
+   content.SizeChanged+=(s,e)=>fit();
+   rows.Controls.Add(connection,0,0);rows.Controls.Add(advanced,0,1);host.Controls.Add(rows);fit();return host;
   }
   Panel BuildDnsPage(){
-   var page=new FluentLayout{Dock=DockStyle.Fill,ColumnCount=1,RowCount=3,Padding=new Padding(4)};page.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,100));page.RowStyles.Add(new RowStyle(SizeType.Absolute,236));page.RowStyles.Add(new RowStyle(SizeType.Absolute,240));page.RowStyles.Add(new RowStyle(SizeType.Percent,100));
+   var page=new FluentLayout{Dock=DockStyle.Fill,ColumnCount=1,RowCount=3,Padding=new Padding(4)};page.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,100));page.RowStyles.Add(new RowStyle(SizeType.Absolute,236));page.RowStyles.Add(new RowStyle(SizeType.Absolute,266));page.RowStyles.Add(new RowStyle(SizeType.Percent,100));
    var appCard=new FluentCard{Dock=DockStyle.Fill,Padding=new Padding(16,12,16,12),Margin=new Padding(0,0,0,8)};var appRows=new FluentLayout{Dock=DockStyle.Fill,ColumnCount=1,RowCount=5};appRows.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,100));foreach(int height in new[]{38,28,28,38})appRows.RowStyles.Add(new RowStyle(SizeType.Absolute,height));appRows.RowStyles.Add(new RowStyle(SizeType.Percent,100));
    appRows.Controls.Add(FluentLabel("DNS для приложений",15,true),0,0);
    appRows.Controls.Add(_dnsEnabled,0,1);
@@ -190,7 +193,7 @@ namespace DevProxyApp {
    _dnsQuickPresetBox.SelectedIndexChanged+=(s,e)=>{
     if(_changingDnsPreference||_preview)return;
     int idx=_dnsQuickPresetBox.SelectedIndex;
-    if(idx==BuiltInDnsPresets.Length-1){ShowFluentPage(1);_settingsTabs.SelectedIndex=1;_dnsBox.Focus();return;}
+    if(idx==BuiltInDnsPresets.Length-1){ShowFluentPage(1);_dnsBox.Focus();return;}
     try{
      _changingDnsPreference=true;
      _dnsBox.Text=BuiltInDnsPresets[idx][1];
@@ -210,9 +213,21 @@ namespace DevProxyApp {
    _appDnsDescription=new Label{Dock=DockStyle.Fill,ForeColor=FluentTheme.Muted};appRows.Controls.Add(_appDnsDescription,0,4);appCard.Controls.Add(appRows);page.Controls.Add(appCard,0,0);
    _dnsEnabled.CheckedChanged+=(s,e)=>{if(_changingDnsPreference||_preview)return;try{SaveDnsPreference();}catch(Exception error){_changingDnsPreference=true;_dnsEnabled.Checked=ConfigManager.Instance.UseDagamiDns;_changingDnsPreference=false;MessageBox.Show(this,error.Message,"DNS",MessageBoxButtons.OK,MessageBoxIcon.Warning);}};
    _dnsObfuscation.CheckedChanged+=(s,e)=>{if(_changingDnsPreference||_preview)return;try{ConfigManager.Instance.ChangeConnection(cfg=>cfg.DnsObfuscation=_dnsObfuscation.Checked);}catch(Exception error){MessageBox.Show(this,error.Message,"DNS",MessageBoxButtons.OK,MessageBoxIcon.Warning);}UpdateDnsPage();};
-   var systemCard=new FluentCard{Dock=DockStyle.Fill,Padding=new Padding(16,12,16,12),Margin=Padding.Empty};var systemRows=new FluentLayout{Dock=DockStyle.Fill,ColumnCount=1,RowCount=4};systemRows.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,100));foreach(int height in new[]{38,42,46})systemRows.RowStyles.Add(new RowStyle(SizeType.Absolute,height));systemRows.RowStyles.Add(new RowStyle(SizeType.Percent,100));systemRows.Controls.Add(FluentLabel("DNS для ИИ в Windows",15,true),0,0);systemRows.Controls.Add(new Label{Dock=DockStyle.Fill,ForeColor=FluentTheme.Muted,Text="Вшивание выбранного DNS (Dagami, MagicDNS, Comss, GeoHide или своего) в службу Windows. Прежние настройки сохраняются для отката."},0,1);
-   var actions=new FlowLayoutPanel{Dock=DockStyle.Fill,WrapContents=false};AddNativeButton(actions,"Включить в Windows",ToggleEncryptedDns);_encryptedDnsAction=(FluentButton)_nativeButtons[_nativeButtons.Count-1];_encryptedDnsAction.Primary=true;systemRows.Controls.Add(actions,0,2);
-   _dnsOverview=new Label{Dock=DockStyle.Fill,ForeColor=FluentTheme.Muted};systemRows.Controls.Add(_dnsOverview,0,3);systemCard.Controls.Add(systemRows);page.Controls.Add(systemCard,0,1);return page;
+   var systemCard=new FluentCard{Dock=DockStyle.Fill,Padding=new Padding(16,12,16,12),Margin=Padding.Empty};var systemRows=new FluentLayout{Dock=DockStyle.Fill,ColumnCount=1,RowCount=5};systemRows.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,100));foreach(int height in new[]{38,42,46,46})systemRows.RowStyles.Add(new RowStyle(SizeType.Absolute,height));systemRows.RowStyles.Add(new RowStyle(SizeType.Percent,100));systemRows.Controls.Add(FluentLabel("Системный DNS и восстановление",15,true),0,0);systemRows.Controls.Add(new Label{Dock=DockStyle.Fill,ForeColor=FluentTheme.Muted,Text="Быстрый режим включает шифрованный DNS для ИИ. Ручная настройка позволяет выбрать сервер и адаптеры. Прежние параметры сохраняются."},0,1);
+   var actions=new FlowLayoutPanel{Dock=DockStyle.Fill,WrapContents=false};AddNativeButton(actions,"Включить в Windows",ToggleEncryptedDns);_encryptedDnsAction=(FluentButton)_nativeButtons[_nativeButtons.Count-1];_encryptedDnsAction.Primary=true;
+   AddNativeButton(actions,"Настроить DNS вручную…",()=>OpenSystemDns(false));
+   _nativeButtons[_nativeButtons.Count-1].Name="ManualDnsButton";
+   systemRows.Controls.Add(actions,0,2);
+   var resetRow=new FlowLayoutPanel{Dock=DockStyle.Fill,WrapContents=false};
+   AddNativeButton(resetRow,"Очистить все DNS и NRPT…",()=>OpenSystemDns(true));
+   var reset=(FluentButton)_nativeButtons[_nativeButtons.Count-1];reset.Name="ResetDnsNrptButton";reset.ForeColor=Color.Firebrick;
+   systemRows.Controls.Add(resetRow,0,3);
+   _dnsOverview=new Label{Dock=DockStyle.Fill,ForeColor=FluentTheme.Muted};systemRows.Controls.Add(_dnsOverview,0,4);systemCard.Controls.Add(systemRows);page.Controls.Add(systemCard,0,1);return page;
+  }
+  void OpenSystemDns(bool reset){
+   if(_preview)return;
+   using(var dialog=new SystemDnsForm(_dnsBox.Text.Trim(),reset,false))dialog.ShowDialog(this);
+   _nextDnsUiRead=DateTime.MinValue;UpdateNativeStatus();
   }
   void SaveDnsPreference(){
    string dns=_dnsBox.Text.Trim().TrimEnd('.');

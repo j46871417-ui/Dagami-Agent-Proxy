@@ -1,5 +1,16 @@
 # Changelog
 
+## Go/Rust portable client and flat Windows UI — 2026-11-07
+
+- Add a compiled portable client with profiles, local proxy sessions, route
+  checks, manual DNS, and a read-only Rust backend inspector.
+- Use a Go build and packaging path without Python for desktop packages.
+- Put DNS setup and NRPT reset on the main DNS page, and give Journal and
+  Diagnostics their own sections. Keep patch and restore actions in one menu.
+
+See [NATIVE_NEXT.md](NATIVE_NEXT.md) for scope and remaining migration gaps.
+
+
 ## macOS-style Windows UI — 2026-11-03
 
 - Bring the Mac fork visual style to Windows: a light sidebar, colored vector

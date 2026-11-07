@@ -14,13 +14,8 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           fetch-depth: 0
-      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
-        with:
-          python-version: '3.13'
       - name: Check tracked files, duplicates and staged credentials
-        run: python tools/check_source_hygiene.py
-      - name: Test the source guard
-        run: python -m unittest discover -s tools -p test_source_hygiene.py
+        run: go run ./cmd/dagami-build audit
       - name: Download verified Gitleaks
         env:
           GITLEAKS_SHA256: 551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb
