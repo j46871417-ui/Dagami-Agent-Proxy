@@ -47,7 +47,7 @@ func run() error {
 	target := flag.String("target", runtime.GOOS+"/"+runtime.GOARCH, "target GOOS/GOARCH or all")
 	out := flag.String("out", "dist-portable/native-next", "output directory")
 	check := flag.Bool("test", false, "run Go fixtures before packaging")
-	native := flag.Bool("windows-native", false, "also build feature-complete WinForms version without Python")
+	native := flag.Bool("windows-native", false, "also export the standalone WinForms EXE")
 	nativeChecks := flag.Bool("native-checks", false, "run selected WinForms preview/fixture checks")
 	source := flag.Bool("source", false, "also package desktop source without the legacy Python application")
 	routing := flag.Bool("routing-only", false, "build only app routing and connectivity checks, without DNS changes or binary inspection")
@@ -93,7 +93,7 @@ func run() error {
 	}
 	defer os.RemoveAll(tmp)
 	if !*routing {
-		if e = prepare(tmp); e != nil {
+		if e = copyFile("src/SystemDns.ps1", "internal/portable/system_dns.ps1", 0644); e != nil {
 			return e
 		}
 	}
@@ -111,6 +111,22 @@ func run() error {
 		all = targets
 	}
 	manifest := map[string]string{}
+	var windowsBinary string
+	if !*routing && (runtime.GOOS == "windows" && (*target == "all" || *target == "windows/amd64") || *native || *nativeChecks) {
+		windowsDir := filepath.Join(tmp, "winforms")
+		if *native || *nativeChecks {
+			windowsDir = filepath.Join(dir, "windows-native")
+		}
+		windowsBinary, e = buildWindows(windowsDir, sign)
+		if e != nil {
+			return e
+		}
+		if *native || *nativeChecks {
+			if e = addHash(manifest, windowsBinary); e != nil {
+				return e
+			}
+		}
+	}
 	for _, t := range all {
 		valid := false
 		for _, known := range targets {
@@ -122,7 +138,7 @@ func run() error {
 			return fmt.Errorf("unsupported target %q", t)
 		}
 		parts := strings.Split(t, "/")
-		bundle, e := buildPortable(tmp, dir, parts[0], parts[1], *routing, sign)
+		bundle, e := buildPortable(tmp, dir, parts[0], parts[1], *routing, windowsBinary, sign)
 		if e != nil {
 			return e
 		}
@@ -130,27 +146,18 @@ func run() error {
 			return e
 		}
 	}
-	if *native || *nativeChecks {
-		exe, e := buildWindows(filepath.Join(dir, "windows-native"), sign)
-		if e != nil {
+	if *nativeChecks {
+		checks := filepath.Join(tmp, "windows-checks")
+		if e = checkWindows(windowsBinary, checks); e != nil {
 			return e
 		}
-		if e = addHash(manifest, exe); e != nil {
+		previews := filepath.Join(dir, "previews")
+		if e = os.MkdirAll(previews, 0755); e != nil {
 			return e
 		}
-		if *nativeChecks {
-			checks := filepath.Join(tmp, "windows-checks")
-			if e = checkWindows(exe, checks); e != nil {
+		for _, image := range []string{"local-apps.png", "local-page-2.png"} {
+			if e = copyFile(filepath.Join(checks, image), filepath.Join(previews, image), 0644); e != nil {
 				return e
-			}
-			previews := filepath.Join(dir, "previews")
-			if e = os.MkdirAll(previews, 0755); e != nil {
-				return e
-			}
-			for _, image := range []string{"local-apps.png", "local-page-2.png"} {
-				if e = copyFile(filepath.Join(checks, image), filepath.Join(previews, image), 0644); e != nil {
-					return e
-				}
 			}
 		}
 	}
@@ -173,16 +180,7 @@ func execRun(name string, env []string, args ...string) error {
 	cmd.Stderr = os.Stderr
 	return cmd.Run()
 }
-func prepare(tmp string) error {
-	if e := execRun("cargo", []string{"CARGO_TARGET_DIR=" + tmp}, "build", "--manifest-path", "native/core/Cargo.toml", "--target", "wasm32-unknown-unknown", "--release", "--locked"); e != nil {
-		return fmt.Errorf("Rust build: %w (install wasm32-unknown-unknown with rustup)", e)
-	}
-	if e := copyFile(filepath.Join(tmp, "wasm32-unknown-unknown", "release", "dagami_byte_core.wasm"), "internal/portable/core.wasm", 0644); e != nil {
-		return e
-	}
-	return copyFile("src/SystemDns.ps1", "internal/portable/system_dns.ps1", 0644)
-}
-func buildPortable(tmp, out, osName, arch string, routing bool, sign func(string) error) (string, error) {
+func buildPortable(tmp, out, osName, arch string, routing bool, winForms string, sign func(string) error) (string, error) {
 	label := osName + "-" + arch
 	build := filepath.Join(tmp, label)
 	if e := os.MkdirAll(build, 0755); e != nil {
@@ -199,12 +197,16 @@ func buildPortable(tmp, out, osName, arch string, routing bool, sign func(string
 		args = append(args, "-tags", "routing_only")
 		variant = "Routing"
 	}
-	if e := execRun("go", []string{"GOOS=" + osName, "GOARCH=" + arch, "CGO_ENABLED=0"}, append(args, "-o", path, "./cmd/dagami")...); e != nil {
-		return "", e
-	}
-	if osName == "windows" && sign != nil {
-		if e := sign(path); e != nil {
+	if osName == "windows" && winForms != "" {
+		path, variant = winForms, "Desktop"
+	} else {
+		if e := execRun("go", []string{"GOOS=" + osName, "GOARCH=" + arch, "CGO_ENABLED=0"}, append(args, "-o", path, "./cmd/dagami")...); e != nil {
 			return "", e
+		}
+		if osName == "windows" && sign != nil {
+			if e := sign(path); e != nil {
+				return "", e
+			}
 		}
 	}
 	archive := filepath.Join(out, "Dagami-"+variant+"-"+label+".zip")
@@ -227,14 +229,14 @@ func buildPortable(tmp, out, osName, arch string, routing bool, sign func(string
 				return e
 			}
 		}
-		if routing {
+		if osName == "windows" {
 			return nil
 		}
-		dep, e := exec.Command("go", "list", "-m", "-f", "{{.Dir}}", "github.com/tetratelabs/wazero").Output()
+		dep, e := exec.Command("go", "list", "-m", "-f", "{{.Dir}}", "github.com/ebitengine/purego").Output()
 		if e != nil {
 			return e
 		}
-		return zipFile(z, filepath.Join(strings.TrimSpace(string(dep)), "LICENSE"), "LICENSE-wazero.txt", 0644)
+		return zipFile(z, filepath.Join(strings.TrimSpace(string(dep)), "LICENSE"), "LICENSE-purego.txt", 0644)
 	})
 	if e != nil {
 		return "", e
@@ -383,7 +385,7 @@ func zipText(z *zip.Writer, name, text string) error {
 	return e
 }
 func sourceZip(path string) error {
-	names := []string{"go.mod", "go.sum", "LICENSE", "NATIVE_NEXT.md", "APP_ROUTING.md", "THIRD_PARTY_NOTICES.md", "CHANGELOG.md", "src/SystemDns.ps1", "src/app.manifest", "devproxy_pkg/assets/dagami-agent-proxy.ico", "devproxy_pkg/assets/icon-64.png", "native/core/Cargo.toml", "native/core/Cargo.lock", "native/core/src/lib.rs"}
+	names := []string{"go.mod", "go.sum", "LICENSE", "NATIVE_NEXT.md", "APP_ROUTING.md", "THIRD_PARTY_NOTICES.md", "CHANGELOG.md", "src/SystemDns.ps1", "src/app.manifest", "devproxy_pkg/assets/dagami-agent-proxy.ico", "devproxy_pkg/assets/icon-64.png"}
 	for _, s := range nativeSources {
 		names = append(names, "src/"+s)
 	}

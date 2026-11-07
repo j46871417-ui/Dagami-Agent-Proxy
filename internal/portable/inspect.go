@@ -3,6 +3,7 @@
 package portable
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
@@ -34,34 +35,71 @@ func InspectBinary(path string) (BinaryReport, error) {
 	if e != nil || !fi.Mode().IsRegular() || fi.Size() > 512*1024*1024 {
 		return BinaryReport{}, errors.New("проверка поддерживает обычные файлы до 512 МиБ")
 	}
-	data, e := io.ReadAll(io.LimitReader(f, 512*1024*1024+1))
+	report, e := scanBinary(io.LimitReader(f, fi.Size()+1))
 	if e != nil {
 		return BinaryReport{}, e
 	}
-	if int64(len(data)) != fi.Size() {
+	after, e := f.Stat()
+	if e != nil || int64(report.Bytes) != fi.Size() || after.Size() != fi.Size() || after.ModTime() != fi.ModTime() {
 		return BinaryReport{}, errors.New("файл менялся во время чтения")
 	}
-	digest := sha256.Sum256(data)
-	report := BinaryReport{File: filepath.Base(path), Bytes: len(data), SHA256: hex.EncodeToString(digest[:])}
-	core, e := NewByteCore()
-	if e != nil {
-		return report, e
+	report.File = filepath.Base(path)
+	return report, nil
+}
+
+const inspectChunkSize = 128 * 1024
+
+func scanBinary(r io.Reader) (BinaryReport, error) {
+	type signature struct {
+		needle []byte
+		count  int
+		next   int
 	}
-	defer core.Close()
-	for _, sig := range knownSignatures {
-		hits, e := core.Find(data, []byte(sig))
-		if e != nil {
-			return report, e
+	signatures := make([]signature, 0, len(knownSignatures)+1)
+	overlap := 0
+	for _, text := range append(append([]string(nil), knownSignatures...), "https_proxy") {
+		signatures = append(signatures, signature{needle: []byte(text)})
+		overlap = max(overlap, len(text)-1)
+	}
+	data := make([]byte, inspectChunkSize+overlap)
+	read, retained := 0, 0
+	hash := sha256.New()
+	for {
+		n, err := io.ReadFull(r, data[retained:retained+inspectChunkSize])
+		if err != nil && err != io.EOF && err != io.ErrUnexpectedEOF {
+			return BinaryReport{}, err
 		}
-		if len(hits) != 1 {
+		hash.Write(data[retained : retained+n])
+		start := read - retained
+		read += n
+		window := data[:retained+n]
+		for i := range signatures {
+			sig := &signatures[i]
+			for index := max(0, sig.next-start); index+len(sig.needle) <= len(window); {
+				found := bytes.Index(window[index:], sig.needle)
+				if found < 0 {
+					break
+				}
+				index += found + len(sig.needle)
+				sig.next = start + index
+				sig.count++
+				if sig.count > 1024 {
+					return BinaryReport{}, errors.New("неоднозначная сигнатура: слишком много совпадений")
+				}
+			}
+		}
+		if err != nil {
+			break
+		}
+		retained = min(overlap, len(window))
+		copy(data, window[len(window)-retained:])
+	}
+	report := BinaryReport{Bytes: read, SHA256: hex.EncodeToString(hash.Sum(nil)), ProxySites: signatures[len(signatures)-1].count}
+	for _, sig := range signatures[:len(signatures)-1] {
+		if sig.count != 1 {
 			report.Missing++
 		}
 	}
-	hits, e := core.Find(data, []byte("https_proxy"))
-	if e != nil {
-		return report, e
-	}
-	report.ProxySites = len(hits)
 	report.KnownShape = report.Missing == 0 && report.ProxySites <= 32
 	return report, nil
 }

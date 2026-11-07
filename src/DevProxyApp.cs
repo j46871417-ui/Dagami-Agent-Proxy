@@ -6144,6 +6144,9 @@ namespace DevProxyApp
 
             list.Add(new AppTarget{Id="codex-gui",DisplayName="Codex Desktop",ExePath=ApplicationDiscovery.Desktop("Codex",new[]{Path.Combine(localAppData,@"Programs\Codex\Codex.exe"),Path.Combine(localAppData,@"OpenAI\Codex\Codex.exe"),Path.Combine(progFiles,@"Codex\Codex.exe")})});
 
+            list.Add(new AppTarget{Id="claude-gui",DisplayName="Claude Desktop",ExePath=ApplicationDiscovery.Desktop("Claude",new[]{Path.Combine(localAppData,@"AnthropicClaude\Claude.exe"),Path.Combine(localAppData,@"Programs\Claude\Claude.exe")})});
+            list.Add(new AppTarget{Id="gemini-gui",DisplayName="Gemini Desktop",ExePath=ApplicationDiscovery.Desktop("Gemini",new[]{Path.Combine(localAppData,@"Programs\Gemini\Gemini.exe"),Path.Combine(progFiles,@"Google\Gemini\Gemini.exe")})??ApplicationDiscovery.Desktop("GeminiAppLauncher",new[]{Path.Combine(localAppData,@"Programs\Gemini\GeminiAppLauncher.exe")})});
+
 
 
             list.Add(new AppTarget{Id="opencode-gui",DisplayName="OpenCode Desktop",ExePath=ApplicationDiscovery.Desktop("OpenCode",new[]{Path.Combine(localAppData,@"Programs\OpenCode\OpenCode.exe"),Path.Combine(localAppData,@"OpenCode\OpenCode.exe"),Path.Combine(progFiles,@"OpenCode\OpenCode.exe")})});
@@ -9030,7 +9033,6 @@ namespace DevProxyApp
 
 
 
-            _cachedTargets = ProxyEngine.ScanAllTargets();
 
 
 
@@ -9182,7 +9184,7 @@ namespace DevProxyApp
 
 
 
-            if (_nativeLogTimer != null) _nativeLogTimer.Dispose();
+            if (_sessionRefreshTimer != null) _sessionRefreshTimer.Dispose();
 
 
 
@@ -9231,13 +9233,11 @@ namespace DevProxyApp
 
 
                     if (_logQueue.Count > 1000) _logQueue.RemoveAt(0);
-
-
-
+                    if (!_showNativeLog || _logUpdateQueued || !IsHandleCreated || IsDisposed) return;
+                    _logUpdateQueued = true;
                 }
-
-
-
+                try { BeginInvoke(new Action(FlushNativeLog)); }
+                catch (InvalidOperationException) { lock (_logLock) _logUpdateQueued = false; }
             };
 
 
@@ -9973,7 +9973,7 @@ namespace DevProxyApp
 
 
 
-            return kind=="vscode"||kind=="codex-desktop";
+            return kind=="vscode"||kind=="codex-desktop"||kind=="claude-desktop";
 
 
 

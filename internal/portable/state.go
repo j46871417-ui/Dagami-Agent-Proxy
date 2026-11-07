@@ -159,7 +159,17 @@ func (c *Controller) eventLocked(s string) {
 		c.events = append([]Event(nil), c.events[len(c.events)-200:]...)
 	}
 }
-func (c *Controller) Snapshot() any {
+
+type Snapshot struct {
+	State       State         `json:"state"`
+	Sessions    []SessionInfo `json:"sessions"`
+	Events      []Event       `json:"events"`
+	OS          string        `json:"os"`
+	Preview     bool          `json:"preview"`
+	RoutingOnly bool          `json:"routing_only"`
+}
+
+func (c *Controller) Snapshot() Snapshot {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	state := c.state
@@ -171,14 +181,7 @@ func (c *Controller) Snapshot() any {
 	for _, s := range c.sessions {
 		sessions = append(sessions, s.SessionInfo)
 	}
-	return struct {
-		State       State         `json:"state"`
-		Sessions    []SessionInfo `json:"sessions"`
-		Events      []Event       `json:"events"`
-		OS          string        `json:"os"`
-		Preview     bool          `json:"preview"`
-		RoutingOnly bool          `json:"routing_only"`
-	}{state, sessions, append([]Event(nil), c.events...), runtime.GOOS, c.preview, RoutingOnly}
+	return Snapshot{state, sessions, append([]Event(nil), c.events...), runtime.GOOS, c.preview, RoutingOnly}
 }
 func (c *Controller) SaveProfile(name, raw string) error {
 	if len(name) < 1 || len(name) > 80 || len(raw) > 4096 {

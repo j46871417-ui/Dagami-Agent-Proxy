@@ -52,7 +52,7 @@ class LocalUiChecks {
     Assert(Buttons(form,"Сообщить о сбое")==1&&Buttons(form,"Баг-репорт")==0,"Duplicate report action remains");
     Assert(VisibleButtons(form)<=10,"Main screen still has too many visible buttons");
     Assert(((Panel[])Get(form,"_pageControls")).Length==5,"Flat pages are missing");
-    Assert(!((Timer)Get(form,"_nativeLogTimer")).Enabled,"Static preview starts background polling");
+    Assert(Get(form,"_sessionRefreshTimer")==null,"Static preview starts background polling");
     for(int index=0;index<5;index++){Call(form,"ShowFluentPage",index);Bounds(form);Picture(form,"local-page-"+index+".png");}
     Call(form,"ShowFluentPage",1);((CheckBox)Get(form,"_wholeNetworkDns")).Checked=true;Application.DoEvents();Bounds(form);((CheckBox)Get(form,"_wholeNetworkDns")).Checked=false;
     form.Size = form.MinimumSize; Application.DoEvents();

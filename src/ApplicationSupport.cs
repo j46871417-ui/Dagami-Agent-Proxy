@@ -12,6 +12,7 @@ namespace DevProxyApp {
    if(id=="codex"||id.EndsWith("_cli"))return "cli";
    if(NativeCliApps.IsCli(target)&&!Name(target,"git.exe","cmd.exe","powershell.exe","pwsh.exe"))return "cli";
    if(id=="codex-gui"||Name(target,"Codex.exe"))return "codex-desktop";
+   if(id=="claude-gui"||Name(target,"Claude.exe"))return "claude-desktop";
    if(id=="opencode-gui"||Name(target,"OpenCode.exe"))return "opencode-desktop";
    if(id.StartsWith("jb_")||IsJetBrains(target.ExePath))return "jetbrains";
    if(id=="git"||Name(target,"git.exe"))return "git";
@@ -105,6 +106,7 @@ namespace DevProxyApp {
    switch(Kind(target)) {
     case "vscode":return "Патч: настройки IDE, обычные ярлыки, Chromium и окружение дочерних процессов. Профиль аккаунта сохраняется.";
     case "codex-desktop":return "Патч: ярлыки, Chromium и окружение backend. config.toml и настройки sandbox не меняются.";
+    case "claude-desktop":return "Запуск: параметры Chromium и окружение. Для Cowork и удалённых коннекторов проверьте маршрут отдельно.";
     case "opencode-desktop":return "Патч: ярлыки, Electron/WebView2 по структуре установки и окружение backend. Старый фоновый сервер нужно закрыть. JSON-ключ proxy не добавляется.";
     case "jetbrains":return "Патч: proxy.settings.xml, JVM и ярлыки. Gradle/Maven/SSH могут иметь отдельные настройки.";
     case "git":return "Патч: отдельная команда dagami-git и HTTP(S)-окружение. Обычный git и глобальный .gitconfig сохраняются; SSH требует своей настройки.";

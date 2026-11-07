@@ -783,6 +783,18 @@ namespace DevProxyApp
             return ProbeRequest("www.googleapis.com", "/oauth2/v2/userinfo", null, null, bridgePort, false);
         }
 
+        public static string ProbeService(int bridgePort, string service) {
+            string host;
+            switch (service) {
+                case "Gemini": host="gemini.google.com"; break;
+                case "Cursor": host="api2.cursor.sh"; break;
+                case "Codex": host="chatgpt.com"; break;
+                case "Claude": host="claude.ai"; break;
+                default: throw new ArgumentException("Выберите сервис для проверки.");
+            }
+            return ProbeRequest(host, "/", null, null, bridgePort, false);
+        }
+
         private static int HttpStatus(string status) {
             string[] parts=status.Split(' '); int code;
             if(parts.Length<2 || (parts[0]!="HTTP/1.1" && parts[0]!="HTTP/1.0") || parts[1].Length!=3 ||

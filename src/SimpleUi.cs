@@ -12,7 +12,7 @@ namespace DevProxyApp {
   bool _encryptedDnsActive,_encryptedDnsRunning,_changingDnsPreference,_probingDnsAddresses;
   CheckBox _wholeNetworkDns;
   CheckBox _dnsObfuscation;
-  ComboBox _dpiModeBox,_dnsPresetBox,_dnsQuickPresetBox;
+  ComboBox _dpiModeBox,_dnsPresetBox,_dnsQuickPresetBox,_probeService;
   LinkLabel _refreshDnsLink,_refreshDnsQuickLink;
   CheckedListBox _dnsNetworkAdapters;
   Label _appDnsDescription;
@@ -68,7 +68,10 @@ namespace DevProxyApp {
    bool hasCreds=(ConfigManager.Instance.LastProxy??"").Contains("@");
    _proxyBox=new TextBox{Dock=DockStyle.Fill,UseSystemPasswordChar=hasCreds,Text=ConfigManager.Instance.LastProxy,BorderStyle=BorderStyle.FixedSingle,AccessibleName="Адрес HTTP или HTTPS прокси"};rows.Controls.Add(_proxyBox,0,2);
    var reveal=new CheckBox{Text="Показать",AutoSize=true,Checked=!hasCreds,Margin=new Padding(12,3,0,0)};reveal.CheckedChanged+=(s,e)=>_proxyBox.UseSystemPasswordChar=!reveal.Checked;rows.Controls.Add(reveal,1,2);
-   var actions=new FlowLayoutPanel{Dock=DockStyle.Fill,WrapContents=false};AddNativeButton(actions,"Сохранить и проверить",CheckFluentProxy);((FluentButton)_nativeButtons[_nativeButtons.Count-1]).Primary=true;_useProxyCheckBox=new CheckBox{Name="UseProxyCheckBox",Text="Использовать прокси",AutoSize=true,Checked=ConfigManager.Instance.UseProxy,Margin=new Padding(14,7,0,0),AccessibleName="Использовать указанный прокси"};_useProxyCheckBox.CheckedChanged+=(s,e)=>ApplyRouteFlagsChange(_useProxyCheckBox.Checked,ConfigManager.Instance.UseDagamiDns);actions.Controls.Add(_useProxyCheckBox);rows.Controls.Add(actions,0,3);rows.SetColumnSpan(actions,2);
+   var actions=new FlowLayoutPanel{Dock=DockStyle.Fill,WrapContents=false};AddNativeButton(actions,"Сохранить и проверить",CheckFluentProxy);((FluentButton)_nativeButtons[_nativeButtons.Count-1]).Primary=true;
+   _probeService=new ComboBox{Width=112,DropDownStyle=ComboBoxStyle.DropDownList,AccessibleName="Сервис для проверки подключения",Margin=new Padding(4,4,0,0)};
+   _probeService.Items.AddRange(new object[]{"Antigravity","Gemini","Cursor","Codex","Claude"});_probeService.SelectedIndex=0;PreventAccidentalScroll(_probeService);actions.Controls.Add(_probeService);
+   _useProxyCheckBox=new CheckBox{Name="UseProxyCheckBox",Text="Использовать прокси",AutoSize=true,Checked=ConfigManager.Instance.UseProxy,Margin=new Padding(14,7,0,0),AccessibleName="Использовать указанный прокси"};_useProxyCheckBox.CheckedChanged+=(s,e)=>ApplyRouteFlagsChange(_useProxyCheckBox.Checked,ConfigManager.Instance.UseDagamiDns);actions.Controls.Add(_useProxyCheckBox);rows.Controls.Add(actions,0,3);rows.SetColumnSpan(actions,2);
    var note=new Label{Dock=DockStyle.Fill,ForeColor=FluentTheme.Muted,Text="Для системного VPN укажите direct. Smart DNS включается отдельно на странице DNS. После сохранения запускайте приложение через Dagami."};rows.Controls.Add(note,0,4);rows.SetColumnSpan(note,2);card.Controls.Add(rows);page.Controls.Add(card,0,0);
    _dnsEnabled=new CheckBox{Text="Шифрованный DNS для входа и приложений",AutoSize=true,Checked=ConfigManager.Instance.UseDagamiDns};
    _dnsObfuscation=new CheckBox{Text="Экспериментальное разделение TLS и DNS",AutoSize=true,Checked=ConfigManager.Instance.DnsObfuscation};

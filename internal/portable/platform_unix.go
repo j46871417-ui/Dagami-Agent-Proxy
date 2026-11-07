@@ -71,13 +71,6 @@ func manageProcess(cmd *exec.Cmd) (func() error, error) {
 		return e
 	}, nil
 }
-func openBrowser(address string) error {
-	command := "xdg-open"
-	if runtime.GOOS == "darwin" {
-		command = "open"
-	}
-	return exec.Command(command, address).Run()
-}
 func resolveExecutable(path string) (string, error) {
 	if runtime.GOOS == "darwin" && strings.HasSuffix(path, ".app") {
 		data, e := os.ReadFile(filepath.Join(path, "Contents", "Info.plist"))

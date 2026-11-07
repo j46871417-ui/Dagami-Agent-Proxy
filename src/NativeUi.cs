@@ -19,7 +19,23 @@ namespace DevProxyApp
         private TextBox _nativeLog;
         private Label _nativeStatus;
         private Label _targetDetails;
-        private System.Windows.Forms.Timer _nativeLogTimer;
+        private System.Windows.Forms.Timer _sessionRefreshTimer;
+        private volatile bool _showNativeLog;
+        private bool _logUpdateQueued;
+
+        private void FlushNativeLog()
+        {
+            var batch = new System.Text.StringBuilder();
+            lock (_logLock) {
+                _logUpdateQueued = false;
+                if (!_showNativeLog || !Visible || _logQueue.Count == 0) return;
+                foreach (string message in _logQueue)
+                    batch.Append(DateTime.Now.ToString("HH:mm:ss")).Append(' ').AppendLine(message);
+                _logQueue.Clear();
+            }
+            if (_nativeLog.TextLength + batch.Length > 100000) _nativeLog.Clear();
+            _nativeLog.AppendText(batch.ToString());
+        }
         private bool _refreshingTargets;
         private bool _nativeBusy;
         private bool _nativeColumnsPending;
@@ -149,7 +165,6 @@ namespace DevProxyApp
         private bool _updatingStartup;
         private string _shortcutIssue, _proxyCheckMessage;
         private int _shortcutRecords;
-        private int _shortcutRefreshTicks;
         private string _clientStatusKey, _clientStatusText;
         private int _clientStatusRevision;
         private bool _selectedPersistentPatch;
@@ -190,6 +205,11 @@ namespace DevProxyApp
             }
             _pageControls[index].BringToFront();
             _fluentHeading.Text = _pageNames[index]; _fluentSubtitle.Text = _pageDescriptions[index];
+            _showNativeLog = index == 3;
+            if (_showNativeLog) FlushNativeLog();
+            if (index == 0) UpdateNativeDetails();
+            if (index == 2) _nextDnsUiRead = DateTime.MinValue;
+            UpdateNativeStatus();
 
         }
 
@@ -597,7 +617,9 @@ namespace DevProxyApp
 
 
 
-            if(!_nativeBusy)UpdateDnsPage();
+            if (_sessionRefreshTimer != null)
+                _sessionRefreshTimer.Enabled = active != 0 && Visible && WindowState != FormWindowState.Minimized;
+            if (!_nativeBusy && _pageControls != null && _pageControls[2].Visible) UpdateDnsPage();
             UpdateAppActionState();
         }
 

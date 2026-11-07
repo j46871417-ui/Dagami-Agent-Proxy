@@ -7,9 +7,8 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
-	"os/signal"
-	"syscall"
 
+	"dagami.local/agentproxy/internal/desktop"
 	"dagami.local/agentproxy/internal/portable"
 )
 
@@ -45,8 +44,8 @@ func run() error {
 	}
 	flags := flag.NewFlagSet("DagamiAgentProxy", flag.ContinueOnError)
 	dir := flags.String("state-dir", "", "каталог настроек")
-	headless := flags.Bool("no-browser", false, "только локальный интерфейс без открытия браузера")
 	preview := flags.Bool("preview", false, "демо без записи настроек и запуска приложений")
+	page := flags.String("page", "apps", "открыть раздел apps, connection, dns или journal")
 	probe := flags.Bool("doctor", false, "состояние, без изменения сети")
 	if e := flags.Parse(os.Args[1:]); e != nil {
 		return e
@@ -62,26 +61,5 @@ func run() error {
 	if *probe {
 		return json.NewEncoder(os.Stdout).Encode(c.Snapshot())
 	}
-	s, e := portable.StartServer(c)
-	if e != nil {
-		return e
-	}
-	defer s.Close()
-	if portable.RoutingOnly {
-		fmt.Println("Dagami Agent Proxy · Routing")
-	} else {
-		fmt.Println("Dagami Agent Proxy · Go + Rust")
-	}
-	fmt.Println("Локальный интерфейс: " + s.URL + "/#" + s.Token)
-	if !*headless {
-		if e = s.Open(); e != nil {
-			fmt.Fprintln(os.Stderr, "Откройте локальную ссылку выше в браузере.")
-		}
-	}
-	signals := make(chan os.Signal, 1)
-	signal.Notify(signals, os.Interrupt, syscall.SIGTERM)
-	defer signal.Stop(signals)
-	go func() { <-signals; s.Close() }()
-	s.Wait()
-	return nil
+	return desktop.Run(c, *page)
 }

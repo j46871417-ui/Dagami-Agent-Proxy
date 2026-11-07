@@ -92,19 +92,6 @@ func manageProcess(cmd *exec.Cmd) (func() error, error) {
 		return err
 	}, nil
 }
-func openBrowser(address string) error {
-	target, err := syscall.UTF16PtrFromString(address)
-	if err != nil {
-		return err
-	}
-	verb, _ := syscall.UTF16PtrFromString("open")
-	shell := syscall.NewLazyDLL("shell32.dll").NewProc("ShellExecuteW")
-	result, _, _ := shell.Call(0, uintptr(unsafe.Pointer(verb)), uintptr(unsafe.Pointer(target)), 0, 0, 1)
-	if result <= 32 {
-		return errors.New("Windows не смог открыть браузер по умолчанию")
-	}
-	return nil
-}
 func resolveExecutable(path string) (string, error) {
 	fi, e := os.Stat(path)
 	if e != nil {

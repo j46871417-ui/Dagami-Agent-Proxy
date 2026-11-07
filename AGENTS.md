@@ -1,7 +1,8 @@
 # Repository guidance
 
 Dagami Agent Proxy is a Windows native C# application with portable Python sources
-and a separate bug-report service. The new desktop packages and build pipeline use Go and Rust; older Python sources are retained as a migration reference. User instructions and explicit publication
+and a separate bug-report service. The desktop build uses WinForms on Windows and
+Go with native toolkit bindings for the portable client. Older Python sources are retained as a migration reference. User instructions and explicit publication
 authorization take precedence; do not ask again for an already approved action.
 
 ## Layout
@@ -18,7 +19,6 @@ authorization take precedence; do not ask again for an already approved action.
 Run from the repository root:
 
 ```sh
-rustup target add wasm32-unknown-unknown
 go run ./cmd/dagami-build audit
 go run ./cmd/dagami-build -test -source
 ```

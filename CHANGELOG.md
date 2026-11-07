@@ -1,5 +1,13 @@
 # Changelog
 
+## Native desktop windows and smaller builds
+
+- Make WinForms the primary Windows package. Use Win32, AppKit and GTK 3
+  controls for the portable client and remove the HTTP interface server.
+- Stream binary inspection through a 128 KiB buffer with Go's byte matcher.
+- Deliver WinForms journal updates on demand and refresh session status only
+  when a managed app is running and the window is visible.
+
 ## App routing and smaller desktop package
 
 - Add separate launch presets for Gemini Desktop, Codex Desktop, Claude Desktop

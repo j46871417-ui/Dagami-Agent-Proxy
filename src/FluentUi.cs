@@ -465,21 +465,23 @@ namespace DevProxyApp
             _pageControls = pages; _pageNames = names; _pageDescriptions = descriptions;
             apps.BringToFront();
             _proxyBox.TextChanged += (sender, e) => { _proxyCheckFailed = false; _proxyCheckMessage = null; UpdateNativeStatus(); };
-            _nativeLogTimer = new System.Windows.Forms.Timer { Interval = 650 };
-            _nativeLogTimer.Tick += (s, e) => {
-                List<string> messages; lock (_logLock) { messages = new List<string>(_logQueue); _logQueue.Clear(); }
-                if (_nativeLog.TextLength > 100000) _nativeLog.Clear();
-                foreach (string message in messages) _nativeLog.AppendText(DateTime.Now.ToString("HH:mm:ss") + " " + message + Environment.NewLine);
-                if (!_nativeBusy) {
-                    if (++_shortcutRefreshTicks % 10 == 0) UpdateNativeDetails();
-                    UpdateNativeStatus();
-                }
-            };
+            if (!_preview) {
+                _sessionRefreshTimer = new System.Windows.Forms.Timer { Interval = 2000 };
+                _sessionRefreshTimer.Tick += (s, e) => { if (!_nativeBusy) UpdateNativeStatus(); };
+                VisibleChanged += (s, e) => {
+                    if (!Visible) _sessionRefreshTimer.Stop();
+                    else { UpdateNativeStatus(); if (_showNativeLog) FlushNativeLog(); }
+                };
+            }
             Resize += (sender, e) => {
                 if (WindowState != FormWindowState.Minimized) _nativeRestoreState = WindowState;
+                if (_sessionRefreshTimer != null) {
+                    if (WindowState == FormWindowState.Minimized) _sessionRefreshTimer.Stop();
+                    else if (!_sessionRefreshTimer.Enabled && _nativeSessions.Count > 0) UpdateNativeStatus();
+                }
             };
             if (!_preview) {
-                _nativeLogTimer.Start();DnsProviders.Initialize();
+                DnsProviders.Initialize();
                 DateTime nextDiscovery=DateTime.UtcNow;
                 Activated+=(sender,e)=>{if(!_nativeBusy&&DateTime.UtcNow>=nextDiscovery){nextDiscovery=DateTime.UtcNow.AddSeconds(15);RefreshNativeTargets();QueueClientStatus(true);UpdateAppActionState();ReadStartupState();}};
             }
@@ -489,10 +491,11 @@ namespace DevProxyApp
         private void CheckFluentProxy()
         {
             if (!SaveNativeSettings()) return; int port = _bridgePort;
+            string service = _probeService == null ? "Antigravity" : _probeService.Text;
             _nativeBusy = true; SetNativeButtonsEnabled(false); _nativeStatus.Text = "Проверка TLS и доступности маршрута через Dagami…";
             if (_primaryAppAction != null) _primaryAppAction.Text = "Проверка…";
             System.Threading.ThreadPool.QueueUserWorkItem(o => {
-                var probe = ConnectionDiagnostics.Check(port);
+                var probe = ConnectionDiagnostics.CheckService(port, service);
                 try { BeginInvoke(new Action(() => {
                     _nativeBusy = false; SetNativeButtonsEnabled(true);
                     _proxyCheckFailed = !probe.Available;

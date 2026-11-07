@@ -190,37 +190,20 @@ func TestConnectRetriesOnlyTransient(t *testing.T) {
 		}
 	}
 }
-func TestLocalAPIAuthOriginAndPreview(t *testing.T) {
+func TestPreviewDoesNotWriteOrConnect(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "never-create")
-	c, e := NewController(dir, true)
-	if e != nil {
-		t.Fatal(e)
+	c, err := NewController(dir, true)
+	if err != nil {
+		t.Fatal(err)
 	}
-	s, e := StartServer(c)
-	if e != nil {
-		t.Fatal(e)
+	defer c.Close()
+	if _, err = c.Probe(context.Background(), "antigravity"); err == nil {
+		t.Fatal("preview enabled network probe")
 	}
-	defer s.Close()
-	client := &http.Client{Timeout: 3 * time.Second}
-	cases := []struct {
-		method, path, token, origin, host string
-		want                              int
-	}{{"GET", "/api/state", "", "", "", 403}, {"GET", "/api/state", s.Token, "https://example.test", "", 403}, {"GET", "/api/state", s.Token, "", "example.test", 403}, {"GET", "/api/state", s.Token, s.URL, "", 200}, {"POST", "/api/dns/reset", s.Token, s.URL, "", 400}}
-	for _, v := range cases {
-		r, _ := http.NewRequest(v.method, s.URL+v.path, strings.NewReader(`{"confirm":"RESET ALL DNS AND NRPT"}`))
-		r.Host = v.host
-		r.Header.Set("Origin", v.origin)
-		r.Header.Set("X-Dagami-Token", v.token)
-		res, e := client.Do(r)
-		if e != nil {
-			t.Fatal(e)
-		}
-		res.Body.Close()
-		if res.StatusCode != v.want {
-			t.Fatalf("%s %s: %d expected %d", v.method, v.path, res.StatusCode, v.want)
-		}
+	if _, err = c.DNSChange(context.Background(), "reset", "", ""); err == nil {
+		t.Fatal("preview enabled DNS changes")
 	}
-	if _, e = os.Stat(dir); !os.IsNotExist(e) {
+	if _, err = os.Stat(dir); !os.IsNotExist(err) {
 		t.Fatal("preview created state")
 	}
 }

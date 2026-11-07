@@ -15,6 +15,15 @@ namespace DevProxyApp {
  }
  // Availability of the selected bridge route, not just a separate upstream.
  public static class ConnectionDiagnostics {
+  public static ProxyProbeResult CheckService(int bridgePort,string service) {
+   if(service=="Antigravity")return Check(bridgePort);
+   if(bridgePort<=0)return new ProxyProbeResult{Message="Локальный мост не запущен."};
+   try {
+    return new ProxyProbeResult{Available=true,Message=AntigravityDiagnostics.ProbeService(bridgePort,service)};
+   }catch(Exception error) {
+    return new ProxyProbeResult{Message="Проверка "+service+" через Dagami не прошла: "+error.Message};
+   }
+  }
   public static ProxyProbeResult Check(int bridgePort,Func<int,string> probe=null){
    if(bridgePort<=0)return new ProxyProbeResult{Message="Локальный мост не запущен."};
    try {

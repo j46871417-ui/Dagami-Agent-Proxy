@@ -1,6 +1,6 @@
 # Third-party notices
 
-The portable build includes [wazero](https://github.com/tetratelabs/wazero)
-v1.9.0 (Apache License 2.0), Copyright Tetrate and the wazero contributors.
-The module license is included in binary packages as `LICENSE-wazero.txt`.
-The Rust byte matcher and the Go application are original project code.
+The macOS and Linux builds use [purego](https://github.com/ebitengine/purego)
+v0.10.0 (Apache License 2.0), Copyright the Ebitengine authors, to call
+the operating system's AppKit and GTK APIs. The module license is included
+in those binary packages as `LICENSE-purego.txt`.
