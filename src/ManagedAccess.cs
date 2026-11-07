@@ -2,6 +2,7 @@ using System;
 using System.Diagnostics;
 using System.IO;
 using System.Net;
+using System.Net.Sockets;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.RegularExpressions;
@@ -15,8 +16,14 @@ namespace DevProxyApp {
   public const string Profile = "Dagami (Telegram)";
   public const string BotChat = "https://t.me/bright26bot";
   public const string BotLink = BotChat + "?start=dagami_";
+  public const string BotKeyLink = BotChat + "?start=dagamikey";
+  public const string Bootstrap = "https://test-dns.dagami.ru:9443";
+  const string FallbackIp = "45.86.65.240";
+  static readonly Uri BootstrapUri = new Uri(Bootstrap);
+  static long fallbackUntil;
   static readonly byte[] Entropy=Encoding.UTF8.GetBytes("Dagami.Managed.Device.v1");
   static readonly Regex PairCode=new Regex(@"^[A-Za-z0-9_-]{43}$");
+  static readonly Regex AccessCode=new Regex(@"\ADAGAMI1-[A-Za-z0-9_-]{43}\z");
   static readonly string Folder=Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),"devproxy");
   static readonly string Pending=Path.Combine(Folder,"managed-pairing.dat");
   static readonly string Active=Path.Combine(Folder,"managed-access.dat");
@@ -26,6 +33,7 @@ namespace DevProxyApp {
   public static bool HasActiveDevice(){return File.Exists(Active);}
   public sealed class Stored {public string Endpoint {get;set;} public string Key {get;set;} }
   public sealed class Result { public bool active {get;set;} public string code {get;set;} }
+  sealed class Discovery { public string endpoint {get;set;} }
 
   ManagedAccess(Uri endpoint,byte[] key){Endpoint=endpoint;privateKey=key;}
   public static Uri ParseEndpoint(string raw) {
@@ -66,7 +74,7 @@ namespace DevProxyApp {
    return new ManagedAccess(ParseEndpoint(value.Endpoint),Convert.FromBase64String(value.Key));
   }
   public static ManagedAccess LoadActive(){var value=Load(Active);if(value==null)throw new InvalidOperationException("Сначала подтвердите Dagami через бота.");return value;}
-  public static string CurrentEndpoint(){var value=Load(Pending)??Load(Active);return value==null?Environment.GetEnvironmentVariable("DAGAMI_MANAGED_URL")??"":value.Endpoint.GetLeftPart(UriPartial.Authority);}
+  public static string CurrentEndpoint(){var value=Load(Pending)??Load(Active);return value==null?Environment.GetEnvironmentVariable("DAGAMI_MANAGED_URL")??Bootstrap:value.Endpoint.GetLeftPart(UriPartial.Authority);}
   static void Write(string file,byte[] data) {
    Directory.CreateDirectory(Folder);
    string temp=Path.Combine(Folder,".managed-"+Guid.NewGuid().ToString("N"));
@@ -95,21 +103,118 @@ namespace DevProxyApp {
   }
   public Result Request(bool start) {
    string method=start?"POST":"GET",path=start?"/v1/pair":"/v1/status";
-   var request=(HttpWebRequest)WebRequest.Create(new Uri(Endpoint,path));
-   request.Method=method;request.Timeout=10000;request.ReadWriteTimeout=10000;request.AllowAutoRedirect=false;request.Proxy=null;request.KeepAlive=false;
-   if(start)request.ContentLength=0;
-   request.Headers[HttpRequestHeader.Authorization]=Proof(Endpoint.Authority.ToLowerInvariant(),method,path);
-   using(var response=(HttpWebResponse)request.GetResponse()) {
-    if(response.StatusCode!=HttpStatusCode.OK)throw new IOException("Шлюз Dagami вернул HTTP "+(int)response.StatusCode+".");
-    using(var stream=response.GetResponseStream())
-    using(var reader=new StreamReader(stream,Encoding.UTF8)) {
-     char[] buffer=new char[1025];int size=reader.ReadBlock(buffer,0,buffer.Length);
-     if(size>1024)throw new IOException("Слишком длинный ответ шлюза.");
-     var value=new JavaScriptSerializer().Deserialize<Result>(new string(buffer,0,size));
-     if(value==null||(start&&!value.active&&!PairCode.IsMatch(value.code??"")))throw new IOException("Шлюз вернул неверный код привязки.");
-     return value;
+   var response=Send(Endpoint,method,path,Proof(Endpoint.Authority.ToLowerInvariant(),method,path),null);
+   if(response.Item1!=200)throw new IOException("Шлюз Dagami вернул HTTP "+response.Item1+".");
+   var value=new JavaScriptSerializer().Deserialize<Result>(response.Item2);
+   if(value==null||(start&&!value.active&&!PairCode.IsMatch(value.code??"")))throw new IOException("Шлюз вернул неверный код привязки.");
+   return value;
+  }
+
+  public static bool IsAccessCode(string code) { return AccessCode.IsMatch(code ?? ""); }
+
+  public static ManagedAccess Redeem(string code) {
+   if(!IsAccessCode(code))throw new ArgumentException("Вставьте полный ключ из команды /key.");
+   string custom=Environment.GetEnvironmentVariable("DAGAMI_MANAGED_URL");
+   Uri address;
+   if(string.IsNullOrWhiteSpace(custom)) {
+    var discovery=Send(BootstrapUri,"GET","/v1/config",null,null);
+    if(discovery.Item1==404) address=BootstrapUri;
+    else {
+     if(discovery.Item1!=200)throw new IOException("Не удалось получить адрес шлюза Dagami.");
+     var config=new JavaScriptSerializer().Deserialize<Discovery>(discovery.Item2);
+     address=ParseEndpoint(config==null?null:config.endpoint);
+    }
+   } else address=ParseEndpoint(custom);
+   var device=Pair(address,true);
+   const string path="/v1/redeem";
+   byte[] body=Encoding.UTF8.GetBytes(new JavaScriptSerializer().Serialize(new {code=code}));
+   var response=Send(address,"POST",path,device.Proof(address.Authority.ToLowerInvariant(),"POST",path),body);
+   if(response.Item1==410)throw new InvalidOperationException("Ключ истёк или уже использован. Получите новый через /key.");
+   if(response.Item1==409)throw new InvalidOperationException("Достигнут лимит устройств. Отзовите старые устройства в боте.");
+   if(response.Item1!=200)throw new IOException("Активация шлюза Dagami вернула HTTP "+response.Item1+".");
+   var result=new JavaScriptSerializer().Deserialize<Result>(response.Item2);
+   if(result==null||!result.active)throw new IOException("Шлюз не подтвердил привязку.");
+   return device;
+  }
+
+  static TcpClient Dial(string host,int port,int timeout) {
+   var tcp=new TcpClient{NoDelay=true};
+   try {
+    var result=tcp.BeginConnect(host,port,null,null);
+    using(result.AsyncWaitHandle) {
+     if(!result.AsyncWaitHandle.WaitOne(timeout))throw new TimeoutException("Истекло время подключения к шлюзу Dagami.");
+     tcp.EndConnect(result);
+    }
+    return tcp;
+   } catch {tcp.Close();throw;}
+  }
+  static TcpClient ConnectTcp(Uri address) {
+   if(!address.Equals(BootstrapUri))return Dial(address.IdnHost,address.Port,8000);
+   if(DateTime.UtcNow.Ticks<System.Threading.Interlocked.Read(ref fallbackUntil)) {
+    try {return Dial(FallbackIp,address.Port,2000);}
+    catch(SocketException){} catch(TimeoutException){}
+   }
+   try {return Dial(address.IdnHost,address.Port,2000);}
+   catch(SocketException){} catch(TimeoutException){}
+   var tcp=Dial(FallbackIp,address.Port,5000);
+   System.Threading.Interlocked.Exchange(ref fallbackUntil,DateTime.UtcNow.AddMinutes(1).Ticks);
+   return tcp;
+  }
+  internal TcpClient ConnectTls(out Stream stream) {
+   var tcp=ConnectTcp(Endpoint);
+   try {
+    stream=TlsDiagnostics.Connect(tcp.GetStream(),Endpoint.IdnHost,"managed-proxy",15000);
+    return tcp;
+   } catch {tcp.Close();throw;}
+  }
+  static Tuple<int,string> Send(Uri address,string method,string path,string proof,byte[] body) {
+   if(address.Equals(BootstrapUri))return SendBootstrap(address,method,path,proof,body);
+   var request=(HttpWebRequest)WebRequest.Create(new Uri(address,path));
+   request.Method=method;request.Timeout=10000;request.ReadWriteTimeout=8000;
+   request.AllowAutoRedirect=false;request.Proxy=null;request.KeepAlive=false;
+   if(proof!=null)request.Headers[HttpRequestHeader.Authorization]=proof;
+   if(method=="POST") {
+    request.ContentLength=body==null?0:body.Length;
+    if(body!=null) {
+     request.ContentType="application/json";
+     using(var output=request.GetRequestStream())output.Write(body,0,body.Length);
     }
    }
+   try {
+    using(var response=(HttpWebResponse)request.GetResponse())
+    using(var stream=response.GetResponseStream())
+     return Tuple.Create((int)response.StatusCode,ReadLimited(stream,1024));
+   } catch(WebException error) {
+    var response=error.Response as HttpWebResponse;
+    if(response==null)throw;
+    using(response)return Tuple.Create((int)response.StatusCode,"");
+   }
+  }
+  static Tuple<int,string> SendBootstrap(Uri address,string method,string path,string proof,byte[] body) {
+   using(var tcp=ConnectTcp(address))
+   using(var stream=TlsDiagnostics.Connect(tcp.GetStream(),address.IdnHost,"managed-activation",8000)) {
+    string headers=method+" "+path+" HTTP/1.1\r\nHost: "+address.Authority+"\r\nConnection: close\r\n";
+    if(proof!=null)headers+="Authorization: "+proof+"\r\n";
+    if(method=="POST")headers+="Content-Length: "+(body==null?0:body.Length)+"\r\nContent-Type: application/json\r\n";
+    byte[] request=Encoding.ASCII.GetBytes(headers+"\r\n");
+    stream.Write(request,0,request.Length);
+    if(body!=null)stream.Write(body,0,body.Length);
+    stream.Flush();
+    string response=ReadLimited(stream,8192);
+    int status,end=response.IndexOf("\r\n\r\n",StringComparison.Ordinal);
+    if(end<12||!response.StartsWith("HTTP/1.1 ",StringComparison.Ordinal)||!int.TryParse(response.Substring(9,3),out status))
+     throw new IOException("Шлюз вернул неверный ответ HTTP.");
+    return Tuple.Create(status,response.Substring(end+4));
+   }
+  }
+  static string ReadLimited(Stream stream,int max) {
+   byte[] buffer=new byte[max+1];int read,total=0;
+   while(total<buffer.Length&&(read=stream.Read(buffer,total,buffer.Length-total))>0)total+=read;
+   if(total>max)throw new IOException("Слишком длинный ответ шлюза.");
+   return Encoding.UTF8.GetString(buffer,0,total);
+  }
+  internal static void SelectProfile() {
+   ConfigManager.Instance.ChangeConnection(cfg=>{cfg.LastProxy=Profile;cfg.UseProxy=true;cfg.UseDagamiDns=false;});
   }
   public void Commit(Action commitConfig) {
    byte[] previous=File.Exists(Active)?File.ReadAllBytes(Active):null;

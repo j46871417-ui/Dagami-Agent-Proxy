@@ -84,6 +84,15 @@ class AdapterTests(unittest.TestCase):
         self.assertEqual(adapter.start_code("/start dagami_" + code), code)
         self.assertEqual(adapter.start_code("/start dagami_bad"), "")
         self.assertIsNone(adapter.start_code("/proxy"))
+        self.assertTrue(adapter.starts_key_flow("/start@bright26bot dagamikey"))
+        self.assertFalse(adapter.starts_key_flow("/start dagami_" + code))
+        online_key = "DAGAMI1-" + "A" * 43
+        with patch.object(adapter, "_post", return_value=online_key) as post:
+            self.assertEqual(adapter.issue_access(42, "fixture-login"), online_key)
+            post.assert_called_once_with("/private/issue-access", {"subject": "42", "login": "fixture-login"}, read_code=True)
+        content = repr(menu.screen(menu.Session(42, view="key"), {"access_code": online_key, "login": "fixture-login"}))
+        self.assertIn(online_key, content)
+        self.assertNotIn("fixture-login", content)
         for old_button in ("get_proxy_grant", "agw3:creds", "dagami_refresh:old"):
             self.assertEqual(menu.legacy_action(old_button), "home")
         self.assertEqual(menu.legacy_action("dagami_warp"), "warp")

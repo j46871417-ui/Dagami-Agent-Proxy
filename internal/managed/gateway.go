@@ -18,6 +18,7 @@ import (
 type Gateway struct {
 	registry *registry
 	audience string
+	endpoint string
 	dial     func(context.Context, string, string) (net.Conn, int)
 	replay   replayGuard
 	slots    chan struct{}
@@ -38,7 +39,7 @@ func OpenGateway(stateFile, endpoint, upstream, bridgeKey string) (*Gateway, err
 	if err != nil {
 		return nil, err
 	}
-	g := &Gateway{registry: r, audience: u.Host, slots: make(chan struct{}, 1024)}
+	g := &Gateway{registry: r, audience: u.Host, endpoint: u.String(), slots: make(chan struct{}, 1024)}
 	g.dial = func(ctx context.Context, login, target string) (net.Conn, int) {
 		return dialLegacy(ctx, upstream, "Dagami-Local "+bridgeKey+"."+login, target)
 	}
@@ -66,9 +67,21 @@ func (g *Gateway) Public(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(http.StatusBadRequest)
 			return
 		}
-	} else if r.URL.RawQuery != "" || r.Host != g.audience || (r.Method != http.MethodPost || target != "/v1/pair") && (r.Method != http.MethodGet || target != "/v1/status") {
-		w.WriteHeader(http.StatusNotFound)
-		return
+	} else {
+		if r.URL.RawQuery != "" || r.Host != g.audience {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		switch {
+		case r.Method == http.MethodGet && target == "/v1/config":
+			writeJSON(w, gatewayConfig{Endpoint: g.endpoint})
+			return
+		case r.Method == http.MethodGet && target == "/v1/status":
+		case r.Method == http.MethodPost && (target == "/v1/pair" || target == "/v1/redeem"):
+		default:
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
 	}
 	now := time.Now()
 	device := ""
@@ -94,6 +107,26 @@ func (g *Gateway) Public(w http.ResponseWriter, r *http.Request) {
 	case http.MethodGet:
 		writeJSON(w, PairStatus{Active: active})
 	case http.MethodPost:
+		if target == "/v1/redeem" {
+			var input struct {
+				Code string `json:"code"`
+			}
+			if !readJSON(w, r, &input) || !ValidAccessCode(input.Code) {
+				w.WriteHeader(http.StatusBadRequest)
+				return
+			}
+			switch g.registry.redeemAccess(input.Code, device, now) {
+			case nil:
+				writeJSON(w, PairStatus{Active: true})
+			case errPair:
+				w.WriteHeader(http.StatusGone)
+			case errLimit:
+				w.WriteHeader(http.StatusConflict)
+			default:
+				w.WriteHeader(http.StatusServiceUnavailable)
+			}
+			return
+		}
 		code, err := g.registry.pair(device, now)
 		if err != nil {
 			w.WriteHeader(http.StatusServiceUnavailable)
@@ -101,6 +134,10 @@ func (g *Gateway) Public(w http.ResponseWriter, r *http.Request) {
 		}
 		writeJSON(w, PairStatus{Active: code == "", Code: code})
 	}
+}
+
+type gatewayConfig struct {
+	Endpoint string `json:"endpoint"`
 }
 
 type PairStatus struct {
@@ -111,6 +148,13 @@ type PairStatus struct {
 func writeJSON(w http.ResponseWriter, value any) {
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(value)
+}
+
+func readJSON(w http.ResponseWriter, r *http.Request, input any) bool {
+	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1024))
+	dec.DisallowUnknownFields()
+	var extra any
+	return dec.Decode(input) == nil && dec.Decode(&extra) == io.EOF
 }
 
 // Private must be served only on a permission-restricted Unix socket.
@@ -124,11 +168,18 @@ func (g *Gateway) Private(w http.ResponseWriter, r *http.Request) {
 		Subject string `json:"subject"`
 		Login   string `json:"login"`
 	}
-	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1024))
-	dec.DisallowUnknownFields()
-	var extra any
-	if dec.Decode(&input) != nil || dec.Decode(&extra) != io.EOF {
+	if !readJSON(w, r, &input) {
 		w.WriteHeader(http.StatusBadRequest)
+		return
+	}
+	if r.URL.Path == "/private/issue-access" {
+		code, err := g.registry.issueAccess(binding{input.Subject, input.Login}, time.Now())
+		if err != nil {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			return
+		}
+		w.Header().Set("Cache-Control", "no-store")
+		writeJSON(w, PairStatus{Code: code})
 		return
 	}
 	if r.URL.Path == "/private/revoke" && subjectPattern.MatchString(input.Subject) {

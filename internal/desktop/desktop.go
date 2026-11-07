@@ -241,9 +241,33 @@ func (d *desktop) profiles(snapshot portable.Snapshot) {
 }
 
 func (d *desktop) managedPair() {
+	d.showPage(view{title: "Подключить Dagami", detail: "Получите ключ в Telegram через /key и вставьте его. Адрес шлюза определяется автоматически.",
+		fields: []field{{label: "Ключ из Telegram"}}, actions: []button{
+			action("Получить ключ", func() {
+				if err := openTelegram(managed.BotKeyURL); err != nil {
+					d.report("Ключ Dagami", managed.BotKeyURL)
+				}
+			}),
+			{"Активировать", func(_ int, values []string) {
+				d.run("Подключение Dagami", func() (string, error) {
+					result, err := d.controller.UseAccessCode(d.ctx, strings.TrimSpace(values[0]))
+					if err == nil && result.Active {
+						return "Устройство привязано. Маршрут Dagami включён.", nil
+					}
+					return "", err
+				})
+			}},
+			action("Привязка по ссылке", d.pairWithLink), action("Назад", d.render),
+		}})
+}
+
+func (d *desktop) pairWithLink() {
 	endpoint := d.controller.ManagedEndpoint()
 	if endpoint == "" {
 		endpoint = os.Getenv("DAGAMI_MANAGED_URL")
+	}
+	if endpoint == "" {
+		endpoint = managed.Bootstrap
 	}
 	d.showManagedPair(endpoint, "Откройте Telegram, подтвердите устройство и вернитесь для проверки. Код действует 10 минут.", "")
 }

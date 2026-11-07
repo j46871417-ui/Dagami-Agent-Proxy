@@ -7,6 +7,7 @@ import (
 	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/tls"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net"
@@ -163,6 +164,86 @@ func TestWindowsProofInteroperability(t *testing.T) {
 		guard.verify(header, "gateway.test:50443", "CONNECT", "example.test:443", now) != "" {
 		t.Fatal("WinForms proof did not interoperate with the Go gateway")
 	}
+}
+
+func TestAccessCodeDiscoveryAndDeviceBinding(t *testing.T) {
+	var gateway *Gateway
+	public := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { gateway.Public(w, r) }))
+	endpoint, err := Endpoint("https://" + public.Listener.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	state := filepath.Join(t.TempDir(), "devices.json")
+	gateway, err = OpenGateway(state, endpoint.String(), "127.0.0.1:1", encoding.EncodeToString(make([]byte, 32)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	public.StartTLS()
+	defer public.Close()
+
+	discovery, err := public.Client().Get(endpoint.String() + "/v1/config")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var config gatewayConfig
+	err = json.NewDecoder(discovery.Body).Decode(&config)
+	discovery.Body.Close()
+	if discovery.StatusCode != 200 || err != nil || config.Endpoint != endpoint.String() {
+		t.Fatalf("unexpected discovery response: %d %+v %v", discovery.StatusCode, config, err)
+	}
+	admin := func(path, payload string, want int) PairStatus {
+		t.Helper()
+		request := httptest.NewRequest(http.MethodPost, path, strings.NewReader(payload))
+		response := httptest.NewRecorder()
+		gateway.Private(response, request)
+		if response.Code != want {
+			t.Fatalf("%s: HTTP %d; want %d", path, response.Code, want)
+		}
+		var result PairStatus
+		if want == 200 {
+			if err := json.Unmarshal(response.Body.Bytes(), &result); err != nil {
+				t.Fatal(err)
+			}
+		}
+		return result
+	}
+	issue := func() string {
+		t.Helper()
+		code := admin("/private/issue-access", `{"subject":"42","login":"agw_0123456789abcdef01234567"}`, 200).Code
+		if !ValidAccessCode(code) {
+			t.Fatal("issued code is malformed")
+		}
+		return code
+	}
+	generate := func() *ecdsa.PrivateKey {
+		t.Helper()
+		key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return key
+	}
+	device, other := generate(), generate()
+	redeem := func(key *ecdsa.PrivateKey, code string, want bool) {
+		t.Helper()
+		body, err := json.Marshal(map[string]string{"code": code})
+		if err != nil {
+			t.Fatal(err)
+		}
+		result, err := sendActivation(context.Background(), public.Client(), endpoint, key, http.MethodPost, "/v1/redeem", body)
+		if want && (err != nil || !result.Active) || !want && err == nil {
+			t.Fatalf("unexpected activation: active=%t err=%v want=%t", result.Active, err, want)
+		}
+	}
+	first, current := issue(), issue()
+	redeem(device, first, false)
+	redeem(device, current, true)
+	redeem(device, current, true)
+	redeem(other, current, false)
+	pending := issue()
+	admin("/private/revoke", `{"subject":"42"}`, 204)
+	redeem(device, current, false)
+	redeem(other, pending, false)
 }
 
 func TestPairExpiryAndDeviceLimit(t *testing.T) {

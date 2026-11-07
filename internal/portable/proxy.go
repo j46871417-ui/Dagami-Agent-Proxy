@@ -16,6 +16,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"dagami.local/agentproxy/internal/managed"
 )
 
 // Bridge is one bounded, loopback-only session. TLS payloads are opaque.
@@ -246,7 +248,13 @@ func (b *Bridge) dialOnce(ctx context.Context, host string, port int) (net.Conn,
 	}
 	u := b.upstream
 	endpoint := net.JoinHostPort(u.Hostname(), proxyPort(u))
-	c, e := d.DialContext(ctx, "tcp", endpoint)
+	var c net.Conn
+	var e error
+	if b.proof != nil {
+		c, e = managed.DialGateway(ctx, &d, "tcp", endpoint)
+	} else {
+		c, e = d.DialContext(ctx, "tcp", endpoint)
+	}
 	if e != nil {
 		return nil, e
 	}

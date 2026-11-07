@@ -15,6 +15,8 @@ import (
 )
 
 const pairLifetime = 10 * time.Minute
+const accessLifetime = 15 * time.Minute
+const AccessPrefix = "DAGAMI1-"
 
 var (
 	loginPattern   = regexp.MustCompile(`^agw_[a-f0-9]{24}$`)
@@ -33,16 +35,23 @@ type pendingPair struct {
 	Expires time.Time
 }
 
+type accessCode struct {
+	Binding binding
+	Expires time.Time
+	Device  string
+}
+
 type registry struct {
 	mu      sync.Mutex
 	file    string
 	devices map[string]binding
 	pending map[[32]byte]pendingPair
+	codes   map[[32]byte]accessCode
 	tunnels map[string]map[net.Conn]struct{}
 }
 
 func openRegistry(path string) (*registry, error) {
-	r := &registry{file: path, devices: map[string]binding{}, pending: map[[32]byte]pendingPair{}, tunnels: map[string]map[net.Conn]struct{}{}}
+	r := &registry{file: path, devices: map[string]binding{}, pending: map[[32]byte]pendingPair{}, codes: map[[32]byte]accessCode{}, tunnels: map[string]map[net.Conn]struct{}{}}
 	raw, err := os.ReadFile(path)
 	if errors.Is(err, os.ErrNotExist) {
 		return r, nil
@@ -118,6 +127,20 @@ func (r *registry) approve(code string, b binding, now time.Time) error {
 	if !exists || !now.Before(pending.Expires) || !subjectPattern.MatchString(b.Subject) || !loginPattern.MatchString(b.Login) {
 		return errPair
 	}
+	if err := r.bindLocked(pending.Device, b); err != nil {
+		return err
+	}
+	delete(r.pending, hash)
+	return nil
+}
+
+func (r *registry) bindLocked(device string, b binding) error {
+	if current, ok := r.devices[device]; ok {
+		if current == b {
+			return nil
+		}
+		return errPair
+	}
 	count := 0
 	for _, entry := range r.devices {
 		if entry.Subject == b.Subject {
@@ -128,11 +151,46 @@ func (r *registry) approve(code string, b binding, now time.Time) error {
 		return errLimit
 	}
 	devices := cloneBindings(r.devices)
-	devices[pending.Device] = b
-	if err := r.saveLocked(devices); err != nil {
+	devices[device] = b
+	return r.saveLocked(devices)
+}
+
+func (r *registry) issueAccess(b binding, now time.Time) (string, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if !subjectPattern.MatchString(b.Subject) || !loginPattern.MatchString(b.Login) {
+		return "", errPair
+	}
+	for hash, code := range r.codes {
+		if !now.Before(code.Expires) || code.Binding.Subject == b.Subject && code.Device == "" {
+			delete(r.codes, hash)
+		}
+	}
+	if len(r.codes) >= 2048 {
+		return "", errLimit
+	}
+	var random [32]byte
+	if _, err := rand.Read(random[:]); err != nil {
+		return "", err
+	}
+	code := AccessPrefix + encoding.EncodeToString(random[:])
+	r.codes[sha256.Sum256([]byte(code))] = accessCode{Binding: b, Expires: now.Add(accessLifetime)}
+	return code, nil
+}
+
+func (r *registry) redeemAccess(code, device string, now time.Time) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	hash := sha256.Sum256([]byte(code))
+	issued, exists := r.codes[hash]
+	if !exists || !now.Before(issued.Expires) || issued.Device != "" && issued.Device != device {
+		return errPair
+	}
+	if err := r.bindLocked(device, issued.Binding); err != nil {
 		return err
 	}
-	delete(r.pending, hash)
+	issued.Device = device
+	r.codes[hash] = issued
 	return nil
 }
 
@@ -160,11 +218,15 @@ func (r *registry) revoke(subject string) error {
 			delete(devices, id)
 		}
 	}
-	if len(devices) == len(r.devices) {
-		return nil
+	if len(devices) != len(r.devices) {
+		if err := r.saveLocked(devices); err != nil {
+			return err
+		}
 	}
-	if err := r.saveLocked(devices); err != nil {
-		return err
+	for hash, code := range r.codes {
+		if code.Binding.Subject == subject {
+			delete(r.codes, hash)
+		}
 	}
 	for id, tunnels := range r.tunnels {
 		if _, ok := devices[id]; !ok {

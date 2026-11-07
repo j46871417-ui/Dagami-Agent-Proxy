@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"net/url"
+	"os"
+	"strings"
 
 	"dagami.local/agentproxy/internal/managed"
 )
@@ -57,7 +59,21 @@ func (c *Controller) pairingFor(endpoint *url.URL, start bool) (pairing, error) 
 }
 
 func (c *Controller) ActivateManaged(ctx context.Context, raw string, start bool) (managed.PairStatus, error) {
+	return c.activateManaged(ctx, raw, start, "")
+}
+
+func (c *Controller) UseAccessCode(ctx context.Context, code string) (managed.PairStatus, error) {
+	if !managed.ValidAccessCode(code) {
+		return managed.PairStatus{}, errors.New("вставьте полный ключ из команды /key")
+	}
+	return c.activateManaged(ctx, strings.TrimSpace(os.Getenv("DAGAMI_MANAGED_URL")), true, code)
+}
+
+func (c *Controller) activateManaged(ctx context.Context, raw string, start bool, code string) (managed.PairStatus, error) {
 	endpoint, err := managed.Endpoint(raw)
+	if raw == "" {
+		endpoint, err = managed.Discover(ctx)
+	}
 	if err != nil {
 		return managed.PairStatus{}, err
 	}
@@ -73,7 +89,12 @@ func (c *Controller) ActivateManaged(ctx context.Context, raw string, start bool
 	if err != nil {
 		return managed.PairStatus{}, err
 	}
-	result, err := managed.Activation(ctx, endpoint, key, start)
+	var result managed.PairStatus
+	if code != "" {
+		result, err = managed.Redeem(ctx, endpoint, key, code)
+	} else {
+		result, err = managed.Activation(ctx, endpoint, key, start)
+	}
 	if err != nil || !result.Active {
 		return result, err
 	}

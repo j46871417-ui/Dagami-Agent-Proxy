@@ -3205,6 +3205,7 @@ namespace DevProxyApp
 
 
 
+            if (endpoint == null && _managed != null) return _managed.ConnectTls(out stream);
             var tcp = new TcpClient();
 
 

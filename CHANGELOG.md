@@ -1,5 +1,9 @@
 # Changelog
 
+- Activate the app and shared Dagami route with one Telegram access key.
+  Discover the gateway over HTTPS and preserve hostname verification when
+  dialing the bootstrap IP after a DNS failure.
+
 - Prepare the managed gateway for a parallel deployment with the legacy entry.
   Preserve existing bot administration and WARP while replacing proxy details
   with device approval.

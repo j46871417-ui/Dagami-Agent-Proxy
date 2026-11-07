@@ -8,6 +8,7 @@ import socket
 
 
 PAIR_CODE = re.compile(r"[A-Za-z0-9_-]{43}\Z")
+ACCESS_CODE = re.compile(r"DAGAMI1-[A-Za-z0-9_-]{43}\Z")
 
 
 def start_code(text):
@@ -18,6 +19,11 @@ def start_code(text):
     return None
 
 
+def starts_key_flow(text):
+    parts = (text or "").split()
+    return len(parts) == 2 and parts[0].split("@", 1)[0] == "/start" and parts[1] == "dagamikey"
+
+
 class _SocketConnection(http.client.HTTPConnection):
     def connect(self):
         self.sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
@@ -25,11 +31,18 @@ class _SocketConnection(http.client.HTTPConnection):
         self.sock.connect(os.environ.get("DAGAMI_MANAGED_BOT_SOCKET", "/run/dagami-managed/bot.sock"))
 
 
-def _post(path, fields):
+def _post(path, fields, read_code=False):
     connection = _SocketConnection("localhost", timeout=4)
     try:
         connection.request("POST", path, json.dumps(fields), {"Content-Type": "application/json"})
         response = connection.getresponse()
+        if read_code:
+            if response.status != 200:
+                raise RuntimeError("managed key issuance unavailable")
+            value = json.loads(response.read(1025)).get("code", "")
+            if not ACCESS_CODE.fullmatch(value):
+                raise RuntimeError("invalid managed key")
+            return value
         return response.status
     finally:
         connection.close()
@@ -56,3 +69,7 @@ def approve(code, user_id, login):
 def revoke(user_id):
     if _post("/private/revoke", {"subject": str(user_id)}) != 204:
         raise RuntimeError("managed gateway unavailable")
+
+
+def issue_access(user_id, login):
+    return _post("/private/issue-access", {"subject": str(user_id), "login": login}, read_code=True)

@@ -78,7 +78,7 @@ namespace DevProxyApp {
    _proxyBox=new TextBox{Dock=DockStyle.Fill,UseSystemPasswordChar=hasCreds,Text=ConfigManager.Instance.LastProxy,BorderStyle=BorderStyle.FixedSingle,AccessibleName="Адрес HTTP или HTTPS прокси",AccessibleDescription="Введите direct для системного маршрута или VPN."};rows.Controls.Add(_proxyBox,0,4);
    var reveal=new CheckBox{Text="Показать",AutoSize=true,Checked=!hasCreds,Margin=new Padding(12,3,0,0)};reveal.CheckedChanged+=(s,e)=>_proxyBox.UseSystemPasswordChar=!reveal.Checked;rows.Controls.Add(reveal,1,4);
    var actions=new FlowLayoutPanel{Dock=DockStyle.Fill,WrapContents=false};
-   AddNativeButton(actions,"Подключить через Telegram",()=>OpenManagedPair(false));
+   AddNativeButton(actions,"Подключить по ключу",OpenManagedKey);
    var pair=(FluentButton)_nativeButtons[_nativeButtons.Count-1];pair.Name="ManagedPairLink";pair.Primary=true;
    AddNativeButton(actions,"Проверить привязку",()=>OpenManagedPair(true));
    _nativeButtons[_nativeButtons.Count-1].Name="CheckManagedPairLink";
@@ -108,6 +108,14 @@ namespace DevProxyApp {
    _dnsBox=new TextBox{Text=ConfigManager.Instance.DnsHost,Width=450,BorderStyle=BorderStyle.FixedSingle,AccessibleName="Любой DNS: домен, IP:порт, https://.../dns-query или tls://..."};
    return card;
   }
+  void OpenManagedKey() {
+   if(_preview)return;
+   using(var dialog=new ActivationForm(()=>EnsureSessionsStoppedForRouteChange())) {
+    ShowThemedDialog(dialog);
+    if(dialog.DialogResult!=DialogResult.OK)return;
+   }
+   RefreshManagedRoute();
+  }
   void OpenManagedPair(bool check) {
    if(_preview)return;
    using(var dialog=new ManagedPairDialog(check)) {
@@ -122,8 +130,11 @@ namespace DevProxyApp {
      _connectionFeedback.Text="Устройство подтверждено. Чтобы применить новый маршрут, остановите активные сессии и повторите проверку.";
      return;
     }
-    dialog.Device.Commit(()=>ConfigManager.Instance.ChangeConnection(cfg=>{cfg.LastProxy=ManagedAccess.Profile;cfg.UseProxy=true;cfg.UseDagamiDns=false;}));
+    dialog.Device.Commit(ManagedAccess.SelectProfile);
    }
+   RefreshManagedRoute();
+  }
+  void RefreshManagedRoute() {
    _proxyBox.Text=ManagedAccess.Profile;
    _proxyBox.UseSystemPasswordChar=false;
    SyncRouteCheckboxes();

@@ -5,12 +5,14 @@ using System.Security.Cryptography;
 using System.Drawing;
 using System.Windows.Forms;
 using System.Diagnostics;
+using System.Threading.Tasks;
 
 namespace DevProxyApp {
     public static class LicenseManager {
         public const string Alphabet = "23456789ABCDEFGHJKLMNPQRSTUVWXYZ";
         public const string Salt = "DagamiAgentProxySecretSalt2026";
-        public const string BotUrl = "https://t.me/bright26bot?start=dagami";
+        public const string BotUrl = ManagedAccess.BotKeyLink;
+        const string DeviceLicense = "DAGAMI-DEVICE-V1";
 
         static readonly byte[] Entropy = Encoding.UTF8.GetBytes("Dagami.License.v1");
 
@@ -60,7 +62,7 @@ namespace DevProxyApp {
 
         public static bool IsActivated() {
             string stored = GetStoredKey();
-            return !string.IsNullOrEmpty(stored) && ValidateKey(stored);
+            return stored == DeviceLicense ? ManagedAccess.HasActiveDevice() : ValidateKey(stored);
         }
 
         public static string GetStoredKey() {
@@ -78,6 +80,7 @@ namespace DevProxyApp {
         public static string GetMaskedKey() {
             string stored = GetStoredKey();
             if (string.IsNullOrEmpty(stored)) return null;
+            if (stored == DeviceLicense) return "Устройство Dagami";
             string normalized = NormalizeKey(stored);
             if (normalized.Length != 21) return "DAGAMI-****-****-****";
             return "DAGAMI-****-****-" + normalized.Substring(normalized.Length - 4);
@@ -85,24 +88,45 @@ namespace DevProxyApp {
 
         public static bool Activate(string key, out string error) {
             string normalized = NormalizeKey(key);
-            if (!ValidateKey(normalized)) {
+            bool managed = ManagedAccess.IsAccessCode((key ?? "").Trim());
+            if (!managed && !ValidateKey(normalized)) {
                 error = "Неверный ключ доступа. Проверьте правильность ввода.";
                 return false;
             }
             try {
-                byte[] plain = Encoding.UTF8.GetBytes(normalized);
-                byte[] encrypted = ProtectedData.Protect(plain, Entropy, DataProtectionScope.CurrentUser);
-                string path = LicenseFilePath;
-                string temp = path + "." + Guid.NewGuid().ToString("N") + ".tmp";
-                File.WriteAllBytes(temp, encrypted);
-                if (File.Exists(path)) File.Replace(temp, path, null);
-                else File.Move(temp, path);
+                if (managed) ActivateDevice(ManagedAccess.Redeem(key.Trim()));
+                else SaveLicense(normalized);
                 error = null;
                 return true;
             } catch (Exception ex) {
-                error = "Ошибка сохранения лицензии: " + ex.Message;
+                error = ex.Message;
                 return false;
             }
+        }
+
+        internal static void ActivateDevice(ManagedAccess device) {
+            string previous = GetStoredKey();
+            device.Commit(() => {
+                SaveLicense(DeviceLicense);
+                try { ManagedAccess.SelectProfile(); }
+                catch {
+                    if (previous == null) File.Delete(LicenseFilePath);
+                    else SaveLicense(previous);
+                    throw;
+                }
+            });
+        }
+
+        static void SaveLicense(string key) {
+            byte[] plain = Encoding.UTF8.GetBytes(key);
+            byte[] encrypted = ProtectedData.Protect(plain, Entropy, DataProtectionScope.CurrentUser);
+            string path = LicenseFilePath;
+            string temp = path + "." + Guid.NewGuid().ToString("N") + ".tmp";
+            try {
+                File.WriteAllBytes(temp, encrypted);
+                if (File.Exists(path)) File.Replace(temp, path, null);
+                else File.Move(temp, path);
+            } finally { if (File.Exists(temp)) File.Delete(temp); }
         }
 
         public static void Deactivate() {
@@ -119,9 +143,13 @@ namespace DevProxyApp {
         readonly Button _activateBtn;
         readonly Button _botBtn;
         readonly Button _exitBtn;
+        readonly Func<bool> _canChangeRoute;
 
-        public ActivationForm() {
-            Text = Brand.Name + " — Активация";
+        public ActivationForm() : this(null) { }
+
+        internal ActivationForm(Func<bool> canChangeRoute) {
+            _canChangeRoute = canChangeRoute;
+            Text = Brand.Name + (canChangeRoute == null ? " — Активация" : " — Подключить Dagami");
             FormBorderStyle = FormBorderStyle.FixedDialog;
             MaximizeBox = false;
             MinimizeBox = false;
@@ -155,7 +183,7 @@ namespace DevProxyApp {
                 AutoSize = true,
                 Font = new Font("Segoe UI", 10, FontStyle.Regular),
                 ForeColor = FluentTheme.Accent,
-                Text = "Первый запуск · Активация"
+                Text = canChangeRoute == null ? "Активация Dagami" : "Общий маршрут"
             };
             Controls.Add(subLabel);
 
@@ -164,7 +192,7 @@ namespace DevProxyApp {
                 Size = new Size(456, 42),
                 Font = new Font("Segoe UI", 9.5f),
                 ForeColor = FluentTheme.Muted,
-                Text = "Для продолжения работы введите ключ доступа.\nКлючи бесплатно выдаются в официальном Telegram-боте выдачи."
+                Text = "Получите ключ через /key в Telegram и вставьте его.\nАдрес шлюза определяется автоматически."
             };
             Controls.Add(descLabel);
 
@@ -187,11 +215,11 @@ namespace DevProxyApp {
             _keyBox = new TextBox {
                 Location = new Point(16, 36),
                 Size = new Size(424, 28),
-                Font = new Font("Consolas", 12.5f, FontStyle.Bold),
+                Font = new Font("Consolas", 10),
                 ForeColor = FluentTheme.Text,
-                BackColor = Color.FromArgb(248, 250, 254),
+                BackColor = FluentTheme.Background,
                 BorderStyle = BorderStyle.FixedSingle,
-                CharacterCasing = CharacterCasing.Upper
+                MaxLength = 96
             };
             _keyBox.KeyDown += (s, e) => {
                 if (e.KeyCode == Keys.Enter) {
@@ -206,13 +234,13 @@ namespace DevProxyApp {
                 AutoSize = true,
                 Font = new Font("Segoe UI", 8),
                 ForeColor = FluentTheme.Muted,
-                Text = "Формат: DAGAMI-XXXX-XXXX-XXXX"
+                Text = "Ключ для подключения начинается с DAGAMI1-"
             };
             card.Controls.Add(hintLabel);
 
             _errorLabel = new Label {
                 Location = new Point(16, 92),
-                AutoSize = true,
+                Size = new Size(424, 32),
                 Font = new Font("Segoe UI", 8.5f, FontStyle.Bold),
                 ForeColor = Color.FromArgb(255, 107, 107),
                 Text = ""
@@ -260,7 +288,7 @@ namespace DevProxyApp {
                 BackColor = Color.Transparent,
                 ForeColor = FluentTheme.Muted,
                 Font = new Font("Segoe UI", 8.5f),
-                Text = "Выйти из приложения",
+                Text = canChangeRoute == null ? "Выйти из приложения" : "Отмена",
                 Cursor = Cursors.Hand
             };
             _exitBtn.FlatAppearance.BorderSize = 0;
@@ -274,7 +302,8 @@ namespace DevProxyApp {
             CancelButton = _exitBtn;
         }
 
-        void DoActivate() {
+        async void DoActivate() {
+            if (!_activateBtn.Enabled) return;
             string raw = _keyBox.Text.Trim();
             if (string.IsNullOrEmpty(raw)) {
                 _errorLabel.ForeColor = Color.FromArgb(255, 107, 107);
@@ -282,27 +311,37 @@ namespace DevProxyApp {
                 _keyBox.Focus();
                 return;
             }
-            string err;
-            if (LicenseManager.Activate(raw, out err)) {
-                _errorLabel.ForeColor = Color.FromArgb(47, 222, 196);
-                _errorLabel.Text = "✓ Ключ успешно активирован! Запуск приложения…";
-                _activateBtn.Enabled = false;
-                _botBtn.Enabled = false;
-                _keyBox.Enabled = false;
-                _exitBtn.Enabled = false;
-                var timer = new System.Windows.Forms.Timer { Interval = 600 };
-                timer.Tick += (s, ev) => {
-                    timer.Stop();
-                    timer.Dispose();
-                    DialogResult = DialogResult.OK;
-                    Close();
-                };
-                timer.Start();
-            } else {
+            _activateBtn.Enabled = _keyBox.Enabled = false;
+            try {
+                if (ManagedAccess.IsAccessCode(raw)) {
+                    _errorLabel.ForeColor = FluentTheme.Muted;
+                    _errorLabel.Text = "Подключаем устройство к шлюзу Dagami…";
+                    var device = await Task.Run(() => ManagedAccess.Redeem(raw));
+                    if (IsDisposed || Disposing || !Visible) return;
+                    if (_canChangeRoute != null && !_canChangeRoute()) {
+                        _errorLabel.Text = "Остановите активные сессии и повторите активацию.";
+                        return;
+                    }
+                    LicenseManager.ActivateDevice(device);
+                } else {
+                    if (_canChangeRoute != null) throw new ArgumentException("Для прокси получите ключ DAGAMI1- через /key.");
+                    string error;
+                    if (!LicenseManager.Activate(raw, out error)) throw new InvalidOperationException(error);
+                }
+                DialogResult = DialogResult.OK;
+                Close();
+            } catch (Exception error) {
+                if (IsDisposed || Disposing || !Visible) return;
                 _errorLabel.ForeColor = Color.FromArgb(255, 107, 107);
-                _errorLabel.Text = err;
-                _keyBox.Focus();
-                _keyBox.SelectAll();
+                _errorLabel.Text = error is System.Net.Sockets.SocketException || error is TimeoutException
+                    ? "Шлюз Dagami недоступен. Проверьте подключение и повторите."
+                    : error.Message;
+            } finally {
+                if (!IsDisposed && !Disposing && Visible) {
+                    _activateBtn.Enabled = _keyBox.Enabled = true;
+                    _keyBox.Focus();
+                    _keyBox.SelectAll();
+                }
             }
         }
     }

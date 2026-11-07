@@ -26,7 +26,7 @@ namespace DevProxyApp {
             }
             if(command=="--brand-info") { using(var icon=Brand.LoadIcon()) Console.WriteLine(new JavaScriptSerializer().Serialize(new{name=Brand.Name,iconWidth=icon.Width,iconHeight=icon.Height})); return true; }
             if(command=="activate") {
-                if(args.Length!=2)throw new ArgumentException("activate DAGAMI-XXXX-XXXX-XXXX");
+                if(args.Length!=2)throw new ArgumentException("activate КЛЮЧ_ИЗ_TELEGRAM");
                 string err;
                 if(LicenseManager.Activate(args[1],out err)){
                     Console.WriteLine("Ключ успешно активирован. Dagami Agent Proxy готов к работе.");
