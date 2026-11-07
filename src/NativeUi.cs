@@ -832,21 +832,6 @@ namespace DevProxyApp
             Logger.Log("[✓] Приложение удалено из списка: " + target.DisplayName);
         }
 
-        private void ApplyNativeTargets(bool restore)
-        {
-            var targets = new List<AppTarget>();
-            foreach (ListViewItem item in _targetList.CheckedItems) targets.Add((AppTarget)item.Tag);
-            if (targets.Count == 0) throw new InvalidOperationException("Отметьте приложения флажками в списке.");
-            if (!restore && !SaveNativeSettings()) return;
-            foreach (AppTarget target in targets) {
-                string message;
-                bool ok = restore ? ProxyEngine.RestoreTarget(target, out message) : ProxyEngine.ApplyProxyToTarget(target, GetIdeProxyUrl(), out message);
-                Logger.Log((ok ? "[✓] " : "[-] ") + target.DisplayName + ": " + message);
-            }
-            if (restore) ProxyEngine.ClearSystemEnvironment();
-            else if (ConfigManager.Instance.SetSystemEnv) ProxyEngine.ApplySystemEnvironment(GetIdeProxyUrl());
-        }
-
         private void ShowNativeWindow()
         {
             if (!_preview && !LicenseManager.IsActivated()) {

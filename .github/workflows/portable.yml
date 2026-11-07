@@ -12,7 +12,6 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
-      - run: rustup target add wasm32-unknown-unknown
       - run: go run ./cmd/dagami-build audit
       - name: Build and test portable client
         if: runner.os != 'Windows'

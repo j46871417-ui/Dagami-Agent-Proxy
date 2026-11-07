@@ -1,33 +1,29 @@
 # Source files in Git
 
-Keep code, tests, build recipes and required assets in Git. Put ready-made
-packages in Releases. Keep keys, cookies, sessions, databases, logs, build
-output, private notes and backup copies out of Git.
+Keep code, tests, build recipes and required assets in Git. Store binaries in
+GitHub Releases. Credentials, databases, logs, caches and build output belong
+outside tracked source.
 
-Before a commit, run `python tools/check_source_hygiene.py`. To run the
-same check on every local commit, use `git config core.hooksPath .githooks`.
-The check reads the Git index, so a changed working copy cannot hide a
-staged secret. CI also runs Gitleaks on all fetched Git history. Neither
-check prints secret values. Duplicate install assets must be listed in
-`tools/source-policy.json`; new unexplained copies fail the check.
+Run the index audit before committing.
 
-License issuance tools belong outside this public repository. The source
-policy rejects the former `generate_license_key.py` path and the private
-`license-issuer/` directory even when force-added. The application needs
-license validation, not a key issuer. The legacy checksum validator remains
-public for compatibility; removing an issuer script does not secure that
-scheme or revoke keys. Old commits, tags and release archives may still
-contain the removed script.
+```sh
+go run ./cmd/dagami-build audit
+```
 
-The source ZIP includes only the native build's C# file list, the shared
-Python entry point, current guides, tests, named assets and an explicit list
-of public bug-report service/frontend sources. Runtime data is excluded. Unused root C#
-files and arbitrary image exports are not included automatically.
+For local commit checks, use `git config core.hooksPath .githooks`. The hook
+and GitHub Actions use the same Go audit. It checks staged blobs for ignored
+files, duplicate content, missing source and recognized secret formats.
+GitHub Actions also runs Gitleaks against fetched history. Values are redacted.
 
-`.gitignore` does not untrack existing files. Use `git rm --cached` after
-review; keep local files if needed. Never force-add a live credential.
-Use placeholder values in `.env.example` and secrets in the CI secret store.
+The desktop source ZIP uses the native C# allowlist, Go source and explicitly
+listed guides and assets. Update `cmd/dagami-build/main.go` when moving source
+or resources. Server source lives in `deployment/managed` and `bug_reports`.
 
-If a real key leaks, revoke it. History cleanup cannot revoke access or
-remove other people's clones and GitHub's cached views. After a history
-rewrite, clone again rather than merging the old history back.
+The previous Python desktop implementation and packaging scripts are retained
+in Git history through `v0.5.0-beta`. Python still supports the working bot,
+bug-report service and Windows test runner.
+
+License issuers and private keys stay outside this repository. Legacy offline
+keys remain compatible with the client. Managed proxy access requires a
+registered device. Removing files from the current tree does not revoke leaked
+credentials or remove copies from old tags and releases.

@@ -1,14 +1,16 @@
 # Native fixture checks
 
-Application sources and resources are in `src/`; the build script is in `tools/`.
+Application sources are in `src/`, desktop artwork is in `assets/`, and
+the build entry point is `cmd/dagami-build`.
 From the repository root on Windows:
 
 ```powershell
-python tools/build_native_app.py --output-dir dist-portable/windows
-python tools/run_native_checks.py --assembly dist-portable/windows/DagamiAgentProxy.exe --output-dir dist-portable/checks
+go run ./cmd/dagami-build -test -source -windows-native -native-checks
+python tools/run_native_checks.py --assembly dist-portable/native-next/DagamiAgentProxy.exe --output-dir "$env:TEMP/DagamiNativeChecks"
 ```
 
-The runner compiles fixture executables against the built application and runs an
+The Go builder runs its selected native fixtures. The extended Python runner
+compiles fixture executables against the built application and runs an
 explicit safe suite list. It uses a dedicated TEMP/TMP directory and preserves
 check output there. `LicenseChecks` and live DNS/update-installation tests are not
 included. SystemDnsChecks.ps1 resolves its default engine at `../../src/SystemDns.ps1`;

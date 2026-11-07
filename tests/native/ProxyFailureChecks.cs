@@ -47,7 +47,7 @@ class ProxyFailureChecks {
   Assert(!UpstreamProxyDiagnostics.IsDnsEndpointMistakenForProxy("http://dns.dagami.ru:pw@proxy.example:8080"),"Username mistaken for DNS proxy host");
   Assert(!UpstreamProxyDiagnostics.IsDnsEndpointMistakenForProxy("http://dns.dagami.ru.evil.example:8080"),"DNS hostname substring matched");
   var destination=(Uri)typeof(LocalProxyBridge).GetMethod("HttpDestination",BindingFlags.Static|BindingFlags.NonPublic).Invoke(null,new object[]{"GET","http://example.test:8080/a?q=1","GET http://example.test:8080/a?q=1 HTTP/1.1\r\nHost: example.test\r\nProxy-Authorization: Basic secret\r\n\r\n"});
-  string direct=(string)typeof(LocalProxyBridge).GetMethod("LoopbackRequest",BindingFlags.Static|BindingFlags.NonPublic).Invoke(null,new object[]{"GET http://example.test:8080/a?q=1 HTTP/1.1\r\nHost: example.test\r\nProxy-Authorization: Basic secret\r\n\r\n",destination});
+  string direct=HttpWire.RequestHeaders("GET http://example.test:8080/a?q=1 HTTP/1.1\r\nHost: example.test\r\nProxy-Authorization: Basic secret\r\n\r\n",destination,false,null);
   Assert(destination.Host=="example.test"&&destination.Port==8080&&direct.StartsWith("GET /a?q=1 HTTP/1.1")&&!direct.Contains("secret")&&!direct.Contains("Proxy-Authorization"),"Direct request leaked proxy credentials or used wrong target");
   foreach(string bad in new[]{"socks5://127.0.0.1:1","http://user:bad#password@127.0.0.1:1","http://127.0.0.1:1/path","http://127.0.0.1:1/?token=fixture"}) {
    var result=UpstreamProxyDiagnostics.Check(bad);Assert(!result.Available&&result.Status==0,"Malformed proxy URL accepted");

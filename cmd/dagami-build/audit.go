@@ -54,6 +54,7 @@ func auditIndex() error {
 		"AGENTS.md", "CHANGELOG.md", "go.mod", "src/DevProxyApp.cs", "src/app.manifest", "src/SystemDns.ps1",
 		"cmd/dagami/main.go", "cmd/dagami-build/main.go", "internal/desktop/desktop.go",
 		"internal/desktop/window_windows.go", "internal/desktop/window_darwin.go", "internal/desktop/window_linux.go",
+		"assets/dagami-agent-proxy.ico", "assets/icon-64.png",
 	} {
 		if !present[name] {
 			return fmt.Errorf("missing staged source: %s", name)

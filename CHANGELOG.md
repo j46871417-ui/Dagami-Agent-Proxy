@@ -1,5 +1,18 @@
 # Changelog
 
+## Source maintenance after 0.5.0 beta
+
+- Remove the retired Python/Tk desktop client, its packaging/install scripts
+  and tests, unused artwork and the source-only TUN experiment.
+- Move current desktop artwork into assets and use the Go builder and index
+  audit as the maintained build and source-policy entry points.
+- Consolidate current installation and application guidance. Remove empty
+  agent templates and obsolete native UI/session fixtures.
+- Remove the unused bulk checkbox action and old HTTP-header helper. The
+  transport regression fixture now exercises the production HttpWire path.
+- Collapse 5,240 redundant blank lines in the Windows core while preserving
+  code tokens, string literals and comments.
+
 ## 0.5.0 beta
 
 - Merge the published 0.4.1 beta security baseline before release. Preserve

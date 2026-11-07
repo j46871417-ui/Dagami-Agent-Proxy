@@ -1,48 +1,49 @@
 # Repository guidance
 
-Dagami Agent Proxy is a Windows native C# application with portable Python sources
-and a separate bug-report service. The desktop build uses WinForms on Windows and
-Go with native toolkit bindings for the portable client. Older Python sources are retained as a migration reference. User instructions and explicit publication
-authorization take precedence; do not ask again for an already approved action.
+Dagami Agent Proxy uses C# WinForms on Windows and Go with native toolkit
+bindings for macOS and Linux. The Go gateway, existing bot adapters and
+bug-report service are separate components.
 
 ## Layout
 
-- `src/`: native application C#, `app.manifest`, embedded `SystemDns.ps1`.
-- `devproxy_pkg/`: portable Python application; `devproxy_gui.py` is its entry point.
-- `tools/`: build/install scripts and source-policy checks.
-- `tests/native/`: native fixture checks; `tests/test_*.py`: Python tests.
-- `bug_reports/`: public service/frontend sources. Production admin access is SSH-only.
-- `.agents/`: project guidance and configuration templates, without credentials.
+- `src/` contains the Windows client, manifest and embedded SystemDns.ps1.
+- `cmd/` and `internal/` contain the Go client, gateway and build tool.
+- `assets/` contains the icons and logo used by the desktop build and README.
+- `tests/native/` and Go test files contain current desktop fixtures.
+- `tools/run_native_checks.py` runs the extended Windows fixture suite.
+- `deployment/managed/` contains working bot/controller adapters.
+- `bug_reports/` contains the service and public form. Admin access is SSH-only.
 
 ## Validation
 
-Run from the repository root:
+Run from the repository root.
 
 ```sh
 go run ./cmd/dagami-build audit
 go run ./cmd/dagami-build -test -source
 ```
 
-On Windows add `-windows-native -native-checks`. The desktop source archive and
-binary packages exclude the legacy Python tree. The legacy tests remain useful
-when changing legacy behavior. The bug-report service has its own requirements.
+On Windows add `-windows-native -native-checks`. The desktop build needs no
+Python. Some extended fixtures use Python to provide loopback test services.
 
-Use fixtures and loopback traffic. Do not run `LicenseChecks` against the real user
-activation or change live DNS, shortcuts, accounts or installed application binaries
-for verification. Inspect additional test suites before enabling them.
+Use fixtures and loopback traffic. Do not run LicenseChecks against real
+activation or change live DNS, shortcuts, accounts or installed binaries for
+verification. Inspect additional suites before enabling them.
 
 ## Changes and source policy
 
-Keep builds, logs, reports, databases, cookies, keys and server access details out
-of Git. Keep the native source allowlist and source ZIP allowlist current when
-moving files. Update `CHANGELOG.md` and relevant guides for user-visible changes.
-Keep rollback behavior explicit: managed proxy fields overwrite manual changes;
-unrelated settings must be preserved. Unknown binary signatures must not be patched.
+Keep build output, logs, databases, credentials and server access details out
+of Git. Keep native source and source ZIP allowlists current when moving files.
+Update CHANGELOG.md and affected guides for user-visible changes.
 
-Do not make public admin routes or expose ports 3091/3093 on external interfaces.
-Use SSH tunnelling for administration. Website changes need a configuration/data
-backup, targeted checks and rollback; avoid restarting unrelated services.
+Preserve caller behavior when removing duplicate code. Keep rollback ownership
+explicit: managed proxy fields overwrite manual changes, while unrelated
+settings must be preserved. Unknown binaries must not be patched.
 
-The JSON files in `.agents/` are empty templates. They do not install hooks or MCP
-servers automatically. Never put real tokens into tracked configuration. Delegate
-only when the user or applicable instructions explicitly request parallel agents.
+Do not expose public admin routes or ports 3091/3093. Use SSH tunnelling for
+administration. Website changes require a configuration/data backup, targeted
+checks and rollback. Avoid restarting unrelated services.
+
+User instructions and explicit publication authorization take precedence.
+Delegate only when the user or applicable instructions explicitly request
+parallel agents.

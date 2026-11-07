@@ -52,7 +52,7 @@ func run() error {
 	check := flag.Bool("test", false, "run Go fixtures before packaging")
 	native := flag.Bool("windows-native", false, "also export the standalone WinForms EXE")
 	nativeChecks := flag.Bool("native-checks", false, "run selected WinForms preview/fixture checks")
-	source := flag.Bool("source", false, "also package desktop source without the legacy Python application")
+	source := flag.Bool("source", false, "also package desktop source and build instructions")
 	routing := flag.Bool("routing-only", false, "build only app routing and connectivity checks, without DNS changes or binary inspection")
 	signTool := flag.String("sign-tool", "", "path to Windows SDK SignTool.exe")
 	thumbprint := flag.String("sign-thumbprint", "", "thumbprint of a code signing certificate in the current user's store")
@@ -299,7 +299,7 @@ func buildWindows(dir string, sign func(string) error) (string, error) {
 	for _, file := range nativeSources {
 		args = append(args, filepath.Join("src", file))
 	}
-	args = append(args, "/win32manifest:src/app.manifest", "/win32icon:devproxy_pkg/assets/dagami-agent-proxy.ico", "/resource:devproxy_pkg/assets/dagami-agent-proxy.ico,Dagami.AgentProxy.ico", "/resource:devproxy_pkg/assets/icon-64.png,Dagami.AgentProxy.png", "/resource:src/SystemDns.ps1,DevProxy.SystemDns.ps1")
+	args = append(args, "/win32manifest:src/app.manifest", "/win32icon:assets/dagami-agent-proxy.ico", "/resource:assets/dagami-agent-proxy.ico,Dagami.AgentProxy.ico", "/resource:assets/icon-64.png,Dagami.AgentProxy.png", "/resource:src/SystemDns.ps1,DevProxy.SystemDns.ps1")
 	if e = execRun(compiler(), nil, args...); e != nil {
 		return "", e
 	}
@@ -416,13 +416,15 @@ func zipText(z *zip.Writer, name, text string) error {
 	return e
 }
 func sourceZip(path string) error {
-	names := []string{"go.mod", "go.sum", "LICENSE", "NATIVE_NEXT.md", "APP_ROUTING.md", "MANAGED_ACCESS.md", "RELEASE_NOTES.md", "THIRD_PARTY_NOTICES.md", "CHANGELOG.md", "src/SystemDns.ps1", "src/app.manifest", "devproxy_pkg/assets/dagami-agent-proxy.ico", "devproxy_pkg/assets/icon-64.png"}
+	names := []string{"go.mod", "go.sum", "LICENSE", "README.md", "NATIVE_NEXT.md", "APPLICATIONS.md", "APP_ROUTING.md", "MANAGED_ACCESS.md", "RELEASE_NOTES.md", "STARTUP.md", "SYSTEM_DNS.md", "BUG_REPORTS.md", "SOURCE_POLICY.md", "SECURITY_FIXES.md", "SIGNED_LICENSES.md", "THIRD_PARTY_NOTICES.md", "CHANGELOG.md", "src/SystemDns.ps1", "src/app.manifest", "assets/dagami-agent-proxy.ico", "assets/icon-64.png", "assets/dagami-logo.jpg", "tools/run_native_checks.py", "tests/native/README.md", "tests/native/SystemDnsChecks.ps1"}
 	for _, s := range nativeSources {
 		names = append(names, "src/"+s)
 	}
-	for _, name := range []string{"SecurityReviewChecks", "LocalUiChecks", "ConnectionRecoveryChecks", "SystemDnsUiChecks", "AntigravityPatchChecks", "ManagedAccessChecks"} {
-		names = append(names, "tests/native/"+name+".cs")
+	fixtures, e := filepath.Glob("tests/native/*.cs")
+	if e != nil {
+		return e
 	}
+	names = append(names, fixtures...)
 	for _, dir := range []string{"cmd", "internal"} {
 		e := filepath.WalkDir(dir, func(p string, d fs.DirEntry, e error) error {
 			if e != nil {
