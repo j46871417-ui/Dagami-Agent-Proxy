@@ -99,28 +99,30 @@ namespace DevProxyApp {
             }
             if(command=="proxy") {
                 if(args.Length==2&&args[1]=="status") {
-                    if(ManagedAccess.IsProfile(ConfigManager.Instance.EffectiveProxy)) {
+                    string activeProxy=ConfigManager.Instance.EffectiveProxy;
+                    if(ManagedAccess.IsProfile(activeProxy)) {
                         Console.WriteLine(ManagedAccess.HasActiveDevice()?"Прокси Dagami: устройство привязано.":"Прокси Dagami: привяжите устройство через Telegram.");return true;
                     }
-                    if(MainForm.IsDirectProxyValue(ConfigManager.Instance.LastProxy)){Console.WriteLine("Прямой маршрут Windows/VPN.");return true;}
-                    Uri proxy;if(!Uri.TryCreate(ConfigManager.Instance.LastProxy,UriKind.Absolute,out proxy)){Console.WriteLine("Прокси не настроен.");return true;}
+                    if(MainForm.IsDirectProxyValue(activeProxy)){Console.WriteLine("Прямой маршрут Windows/VPN.");return true;}
+                    Uri proxy;if(!Uri.TryCreate(activeProxy,UriKind.Absolute,out proxy)){Console.WriteLine("Прокси не настроен.");return true;}
                     var safe=new UriBuilder(proxy){UserName="",Password=""};Console.WriteLine(safe.Uri.AbsoluteUri);return true;
                 }
                 if(args.Length!=2||args[1]!="set")throw new ArgumentException("proxy set — скрытый ввод URL; proxy status — состояние.");
-                using(var mutex=new System.Threading.Mutex(false,@"Local\"+NativeLaunchBroker.UserName)){
-                    bool owns=false;try{try{owns=mutex.WaitOne(0);}catch(System.Threading.AbandonedMutexException){owns=true;}
-                    if(!owns)throw new InvalidOperationException("Для смены подключения сначала завершите Dagami Agent Proxy через «Выход» в трее. Активные сессии используют прежний профиль.");
-                    }finally{if(owns)mutex.ReleaseMutex();}
-                }
                 Console.Write("HTTP/HTTPS прокси или direct для Windows/VPN (ввод скрыт): ");var text=new System.Text.StringBuilder();
                 if(Console.IsInputRedirected)text.Append(Console.ReadLine());
                 else {while(true){var key=Console.ReadKey(true);if(key.Key==ConsoleKey.Enter)break;if(key.Key==ConsoleKey.Backspace){if(text.Length>0)text.Length--;continue;}if(!char.IsControl(key.KeyChar))text.Append(key.KeyChar);}}
-                Console.WriteLine();Uri value;
-                string input=text.ToString().Trim();
-                bool direct=MainForm.IsDirectProxyValue(input);
-                if(!direct&&!UpstreamProxyDiagnostics.TryParse(input,out value))throw new ArgumentException("Нужен корректный HTTP/HTTPS URL или direct.");
-                string normalized=direct?"direct":new Uri(input).AbsoluteUri;
-                ConfigManager.Instance.ChangeConnection(cfg=>cfg.LastProxy=normalized);Console.WriteLine("Подключение сохранено для CLI и Windows GUI.");return true;
+                Console.WriteLine();
+                string normalized=MainForm.NormalizeCustomProxy(text.ToString(),0);
+                using(var mutex=new System.Threading.Mutex(false,@"Local\"+NativeLaunchBroker.UserName)){
+                    bool owns=false;
+                    try {
+                        try {owns=mutex.WaitOne(0);}
+                        catch(System.Threading.AbandonedMutexException){owns=true;}
+                        if(!owns)throw new InvalidOperationException("Для смены подключения сначала завершите Dagami Agent Proxy через «Выход» в трее. Активные сессии используют прежний профиль.");
+                        ConfigManager.Instance.SelectCustomRoute(normalized);
+                    }finally{if(owns)mutex.ReleaseMutex();}
+                }
+                Console.WriteLine("Подключение сохранено для CLI и Windows GUI.");return true;
             }
             if(command=="dns"){
                 if(args.Length==2&&args[1]=="refresh"){DnsProviders.Refresh();Console.WriteLine(new JavaScriptSerializer().Serialize(new{endpoints=DnsProviders.Snapshot(),checkedUtc=DnsProviders.LastCheckedUtc,error=DnsProviders.LastError}));return true;}

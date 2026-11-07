@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 
+	"dagami.local/agentproxy/internal/buildinfo"
 	"dagami.local/agentproxy/internal/desktop"
 	"dagami.local/agentproxy/internal/portable"
 )
@@ -47,11 +48,16 @@ func run() error {
 	preview := flags.Bool("preview", false, "демо без записи настроек и запуска приложений")
 	page := flags.String("page", "apps", "открыть раздел apps, connection, dns или journal")
 	probe := flags.Bool("doctor", false, "состояние, без изменения сети")
+	version := flags.Bool("version", false, "версия сборки")
 	if e := flags.Parse(os.Args[1:]); e != nil {
 		return e
 	}
 	if flags.NArg() != 0 {
 		return fmt.Errorf("неизвестная команда: %s", flags.Arg(0))
+	}
+	if *version {
+		fmt.Fprintln(os.Stdout, buildinfo.ReleaseTag)
+		return nil
 	}
 	c, e := portable.NewController(*dir, *preview)
 	if e != nil {

@@ -4282,6 +4282,17 @@ namespace DevProxyApp
 
 
         public string LastProxy { get; set; }
+        public string CustomProxy { get; set; }
+        public string SavedCustomProxy {
+            get { return ManagedAccess.IsProfile(LastProxy) || string.IsNullOrWhiteSpace(LastProxy) ? CustomProxy ?? "" : LastProxy; }
+        }
+        internal void SelectCustomRoute(string proxy) {
+            ChangeConnection(cfg => {
+                cfg.LastProxy = cfg.CustomProxy = proxy;
+                cfg.UseProxy = true;
+                cfg.UseDagamiDns = false;
+            });
+        }
         public bool UseProxy { get; set; }
         public string EffectiveProxy { get { return UseProxy ? LastProxy : "direct"; } }
 
@@ -4593,6 +4604,9 @@ namespace DevProxyApp
 
 
                 sb.AppendFormat("  \"last_proxy_protected\": \"{0}\",\n", EscapeJson(ProtectString(LastProxy)));
+                string customProxy = SavedCustomProxy;
+                if (!string.IsNullOrEmpty(customProxy) && customProxy != LastProxy)
+                    sb.AppendFormat("  \"custom_proxy_protected\": \"{0}\",\n", EscapeJson(ProtectString(customProxy)));
 
 
 
@@ -4830,14 +4844,14 @@ namespace DevProxyApp
         }
         public void ChangeConnection(Action<ConfigManager> update)
         {
-            string proxy = LastProxy, dns = DnsHost, dpiMode = DpiDesyncMode;
+            string proxy = LastProxy, customProxy = CustomProxy, dns = DnsHost, dpiMode = DpiDesyncMode;
             bool useProxy = UseProxy, useDns = UseDagamiDns, obfuscation = DnsObfuscation, block = BlockAntigravityUpdates;
             bool prepare = PrepareAntigravityClient, systemEnv = SetSystemEnv;
             try {
                 update(this);
                 if (!Save()) throw new IOException(LastSaveError);
             } catch {
-                LastProxy = proxy; DnsHost = dns; DpiDesyncMode = dpiMode;
+                LastProxy = proxy; CustomProxy = customProxy; DnsHost = dns; DpiDesyncMode = dpiMode;
                 UseProxy = useProxy; UseDagamiDns = useDns; DnsObfuscation = obfuscation; BlockAntigravityUpdates = block;
                 PrepareAntigravityClient = prepare; SetSystemEnv = systemEnv;
                 throw;
@@ -4891,6 +4905,8 @@ namespace DevProxyApp
 
 
 
+            Match customProxy = Regex.Match(json, @"\""custom_proxy_protected\""\s*:\s*\""([^\""]*)\""");
+            if (customProxy.Success) CustomProxy = UnprotectString(UnescapeJson(customProxy.Groups[1].Value));
             // set_system_env
 
 
@@ -8950,8 +8966,8 @@ namespace DevProxyApp
 
 
 
-            if (_preview) BeginInvoke(new Action(RefreshNativeTargets));
-            else if (_startInTray) Hide();
+            if (_startInTray) Hide();
+            else if (_preview) BeginInvoke(new Action(RefreshNativeTargets));
             else if (!_shortcutSession) BeginInvoke(new Action(InitializeBackgroundWork));
 
 

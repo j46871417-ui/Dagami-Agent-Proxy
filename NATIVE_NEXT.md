@@ -2,10 +2,11 @@
 
 ## Какую сборку открыть
 
-- **Windows:** основной `Dagami-Desktop-windows-amd64.zip` и отдельный
-  `windows-native/DagamiAgentProxy.exe` с WinForms. Сохранены прямые разделы
+- **Windows:** основной `Dagami-Agent-Proxy-v0.5.0-beta-windows.zip` и
+  отдельный `DagamiAgentProxy.exe` с WinForms. Сохранены прямые разделы
   «Приложения», «Подключение», «DNS и сброс», «Журнал» и «Диагностика».
-  Ручной DNS и сброс NRPT доступны на странице DNS.
+  Свой HTTP/HTTPS-прокси задаётся на странице подключения. Ручной DNS
+  и сброс NRPT доступны на странице DNS.
 - **macOS и Linux:** `Dagami-Portable-<система>-<архитектура>.zip`. Окно
   использует системные контролы AppKit на macOS или GTK 3 на Linux.
 - **Только маршрутизация:** `Dagami-Routing-<система>-<архитектура>.zip`.

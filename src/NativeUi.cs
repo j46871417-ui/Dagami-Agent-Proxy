@@ -332,7 +332,7 @@ namespace DevProxyApp
         private void PatchSelectedNativeTarget()
         {
             if (!ConfigManager.Instance.UseProxy && !ConfigManager.Instance.UseDagamiDns) { MessageBox.Show(this, "Включите хотя бы один режим работы: «Работать через прокси» или «Работать через DNS» (или оба одновременно).", "Режим подключения", MessageBoxButtons.OK, MessageBoxIcon.Information); return; }
-            if (!HasConfiguredConnection(_proxyBox.Text.Trim(), _dnsEnabled.Checked, ConfigManager.Instance.UseProxy)) { ShowFluentPage(1); return; }
+            if (!HasConfiguredConnection(ConfigManager.Instance.LastProxy, ConfigManager.Instance.UseDagamiDns, ConfigManager.Instance.UseProxy)) { ShowFluentPage(1); return; }
             var target = SelectedNativeTarget(); if (!EnsureSessionStoppedForPatch(target, "Настройка обычного запуска (патч)")) return; if (!SaveNativeSettings()) return;
             string manager = System.Diagnostics.Process.GetCurrentProcess().MainModule.FileName;
             _nativeBusy = true; _patchInProgress = true; SetNativeButtonsEnabled(false); _patchMenuItem.Text = "Подготовка…";
@@ -514,11 +514,24 @@ namespace DevProxyApp
             return proxy;
         }
 
+        internal static string NormalizeCustomProxy(string raw, int bridgePort)
+        {
+            string value = (raw ?? "").Trim();
+            if (IsDirectProxyValue(value)) return "direct";
+            if (!value.Contains("://") && value.Contains(":")) value = "http://" + value;
+            Uri proxy;
+            if (value.Length > 2048 || !TryParseSupportedProxy(value, out proxy) || UpstreamProxyDiagnostics.IsDnsEndpointMistakenForProxy(value))
+                throw new ArgumentException("Укажите адрес HTTP/HTTPS-прокси, например 127.0.0.1:7897, или введите direct для системного VPN.");
+            if (LocalProxyBridge.IsBridgeEndpoint(proxy, bridgePort))
+                throw new ArgumentException("Этот порт занят мостом Dagami. Введите порт вашего прокси.");
+            return value;
+        }
+
         private bool SaveNativeSettings()
         {
             bool useProxy = _useProxyCheckBox != null ? _useProxyCheckBox.Checked : ConfigManager.Instance.UseProxy;
             bool useDns = _dnsEnabled.Checked;
-            string proxy = NormalizeSavedProxy(_proxyBox.Text, useProxy, useDns);
+            string proxy = NormalizeSavedProxy(ConfigManager.Instance.LastProxy, useProxy, useDns);
             if (useProxy && ManagedAccess.IsProfile(proxy)) useDns = false;
             string dns = _dnsBox.Text.Trim().TrimEnd('.');
             if (string.IsNullOrEmpty(dns)) dns = "dns.dagami.ru";
@@ -578,6 +591,31 @@ namespace DevProxyApp
 
         private bool _targetScanRunning, _targetScanAgain, _startupStatusLoaded;
         private string _targetSelectionAfterScan;
+        private Dictionary<string, Bitmap> _nativeAppIcons = new Dictionary<string, Bitmap>(StringComparer.OrdinalIgnoreCase);
+
+        private static Dictionary<string, Bitmap> LoadNativeAppIcons(List<AppTarget> targets)
+        {
+            var icons = new Dictionary<string, Bitmap>(StringComparer.OrdinalIgnoreCase);
+            foreach (AppTarget target in targets) {
+                string path = target.ExePath;
+                if (string.IsNullOrEmpty(path) || !path.EndsWith(".exe", StringComparison.OrdinalIgnoreCase) || icons.ContainsKey(path))
+                    continue;
+                try {
+                    if (!target.IsInstalled) continue;
+                    using (var icon = Icon.ExtractAssociatedIcon(path)) {
+                        if (icon != null) icons.Add(path, icon.ToBitmap());
+                    }
+                } catch (Exception) { /* The row uses its initial if the shell cannot provide an icon. */ }
+            }
+            return icons;
+        }
+
+        private static void DisposeNativeAppIcons(Dictionary<string, Bitmap> icons)
+        {
+            if (icons == null) return;
+            foreach (var image in icons.Values) image.Dispose();
+            icons.Clear();
+        }
 
         private void RefreshNativeTargets() { RefreshNativeTargets(null); }
 
@@ -588,7 +626,7 @@ namespace DevProxyApp
             if (_targetScanRunning) { _targetScanAgain = true; return; }
             if (_preview) {
                 var targets = ProxyEngine.ScanAllTargets();
-                RenderNativeTargets(targets, new HashSet<string>(targets.FindAll(IsTargetPatched).ConvertAll(target => target.Id)));
+                RenderNativeTargets(targets, new HashSet<string>(targets.FindAll(IsTargetPatched).ConvertAll(target => target.Id)), LoadNativeAppIcons(targets));
                 return;
             }
             _targetScanRunning = true;
@@ -600,25 +638,28 @@ namespace DevProxyApp
             var worker = new System.Threading.Thread(() => {
                 List<AppTarget> targets = null;
                 HashSet<string> patched = null;
+                Dictionary<string, Bitmap> icons = null;
                 try {
                     targets = ProxyEngine.ScanAllTargets(custom);
                     patched = new HashSet<string>(targets.FindAll(IsTargetPatched).ConvertAll(target => target.Id));
+                    icons = LoadNativeAppIcons(targets);
                 } catch (Exception error) { Logger.Log("[Detect] " + error.GetType().Name); }
                 try { BeginInvoke(new Action(() => {
                     _targetScanRunning = false;
                     if (_targetScanAgain) {
+                        DisposeNativeAppIcons(icons);
                         _targetScanAgain = false;
                         RefreshNativeTargets();
-                    } else if (patched != null) RenderNativeTargets(targets, patched);
+                    } else if (patched != null) RenderNativeTargets(targets, patched, icons);
                     else { UpdateNativeStatus(); _nativeStatus.Text = "Не удалось найти приложения. Повторите поиск через «Добавить»."; }
-                })); } catch (InvalidOperationException) { }
+                })); } catch (InvalidOperationException) { DisposeNativeAppIcons(icons); }
             });
             worker.IsBackground = true;
             worker.SetApartmentState(System.Threading.ApartmentState.STA);
             worker.Start();
         }
 
-        private void RenderNativeTargets(List<AppTarget> targets, HashSet<string> patched)
+        private void RenderNativeTargets(List<AppTarget> targets, HashSet<string> patched, Dictionary<string, Bitmap> icons)
         {
             string selectedId = _targetSelectionAfterScan ?? (_targetList.SelectedItems.Count > 0 ? ((AppTarget)_targetList.SelectedItems[0].Tag).Id : null);
             _targetSelectionAfterScan = null;
@@ -626,6 +667,8 @@ namespace DevProxyApp
             _refreshingTargets = true;
             _targetList.BeginUpdate();
             try {
+                DisposeNativeAppIcons(_nativeAppIcons);
+                _nativeAppIcons = icons ?? new Dictionary<string, Bitmap>(StringComparer.OrdinalIgnoreCase);
                 _targetList.Items.Clear();
                 foreach (AppTarget target in _cachedTargets) {
                     var item = new ListViewItem(target.DisplayName) { Tag = target };
@@ -673,12 +716,14 @@ namespace DevProxyApp
             if (_connectionSummary != null) {
                 var config = ConfigManager.Instance;
                 bool managed = ManagedAccess.IsProfile(config.EffectiveProxy);
-                bool needsPairing = managed && !ManagedAccess.HasActiveDevice();
+                bool paired = ManagedAccess.HasActiveDevice();
+                bool needsPairing = managed && !paired;
                 string route = managed ? "Прокси Dagami" : config.UseProxy && !IsDirectProxyValue(config.LastProxy)
                     ? "Свой прокси" : config.UseDagamiDns ? "Smart DNS" : "Системный маршрут / VPN";
                 string routeState = route + (needsPairing ? " · ожидает привязки в Telegram" : _bridgePort > 0 ? " · мост запущен" : "");
-                _connectionSummary.Text = routeState + "\nОдин маршрут для всех запусков через Dagami.";
+                _connectionSummary.Text = routeState + " · для всех запусков через Dagami";
                 if (_connectionRouteStatus != null) _connectionRouteStatus.Text = routeState;
+                if (_managedRouteAction != null) _managedRouteAction.Text = paired && !managed ? "Использовать Dagami" : "Подключить по ключу";
                 _connectionAction.Text = needsPairing ? "Подключить" : "Настройки";
             }
 

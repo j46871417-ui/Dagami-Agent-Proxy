@@ -214,7 +214,11 @@ namespace DevProxyApp {
    return Encoding.UTF8.GetString(buffer,0,total);
   }
   internal static void SelectProfile() {
-   ConfigManager.Instance.ChangeConnection(cfg=>{cfg.LastProxy=Profile;cfg.UseProxy=true;cfg.UseDagamiDns=false;});
+   ConfigManager.Instance.ChangeConnection(ApplyProfileSettings);
+  }
+  internal static void ApplyProfileSettings(ConfigManager cfg) {
+   cfg.CustomProxy=cfg.SavedCustomProxy;
+   cfg.LastProxy=Profile;cfg.UseProxy=true;cfg.UseDagamiDns=false;
   }
   public void Commit(Action commitConfig) {
    byte[] previous=File.Exists(Active)?File.ReadAllBytes(Active):null;

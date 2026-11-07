@@ -221,8 +221,8 @@ func (d *desktop) profiles(snapshot portable.Snapshot) {
 		withProfile("Выбрать", func(p portable.Profile) {
 			d.run("Выбор профиля", func() (string, error) { return "", d.controller.SelectProfile(p.ID) })
 		}),
-		action("Новый профиль", func() {
-			d.showPage(view{title: "Новый профиль", detail: "Реквизиты хранятся в системном хранилище.", fields: []field{{label: "Название"}, {label: "Адрес прокси"}},
+		action("Свой прокси", func() {
+			d.showPage(view{title: "Свой прокси", detail: "Введите HTTP, HTTPS или SOCKS5 URL. Реквизиты сохраняются в системном хранилище.", fields: []field{{label: "Название", value: "Свой прокси"}, {label: "Адрес прокси"}},
 				actions: []button{{"Сохранить", func(_ int, values []string) {
 					d.run("Сохранение профиля", func() (string, error) {
 						return "", d.controller.SaveProfile(strings.TrimSpace(values[0]), strings.TrimSpace(values[1]))

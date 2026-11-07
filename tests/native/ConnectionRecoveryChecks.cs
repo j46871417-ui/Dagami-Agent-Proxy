@@ -29,6 +29,16 @@ class ConnectionRecoveryChecks {
    var legacy=Config(Path.Combine(root,"legacy"));
    var normalize=typeof(MainForm).GetMethod("NormalizeSavedProxy",BindingFlags.NonPublic|BindingFlags.Static);
    string savedProxy="http://fixture-user:fixture-password@proxy.invalid:8080";
+   var custom=typeof(MainForm).GetMethod("NormalizeCustomProxy",BindingFlags.NonPublic|BindingFlags.Static);
+   Assert((string)custom.Invoke(null,new object[]{"127.0.0.1:7897",53200})=="http://127.0.0.1:7897","Bare host and port did not select HTTP");
+   Assert((string)custom.Invoke(null,new object[]{"https://user:p%40ss@[::1]:8443",53200})=="https://user:p%40ss@[::1]:8443","Escaped credentials or IPv6 were changed");
+   Assert((string)custom.Invoke(null,new object[]{"direct",53200})=="direct","System route was rejected");
+   foreach(string invalid in new[]{"",ManagedAccess.Profile,"http://127.0.0.1:53200","https://dns.dagami.ru/dns-query","http://proxy.invalid/path"}){
+    bool rejected=false;
+    try {custom.Invoke(null,new object[]{invalid,53200});}
+    catch(TargetInvocationException error){rejected=error.InnerException is ArgumentException;}
+    Assert(rejected,"Invalid custom proxy was accepted: "+invalid);
+   }
    Assert((string)normalize.Invoke(null,new object[]{savedProxy,false,true})==savedProxy,"Saving DNS-only settings erased disabled proxy credentials");
    foreach(bool proxyEnabled in new[]{false,true})foreach(bool dnsEnabled in new[]{false,true}){
     legacy.LastProxy=savedProxy;legacy.UseProxy=proxyEnabled;legacy.UseDagamiDns=dnsEnabled;
@@ -38,6 +48,18 @@ class ConnectionRecoveryChecks {
     Parse(loaded,File.ReadAllText(Path.Combine(root,"legacy","config.json")));
     Assert(loaded.LastProxy==savedProxy&&loaded.UseProxy==proxyEnabled&&loaded.UseDagamiDns==dnsEnabled,"Saved flags lost the original proxy");
    }
+   var select=typeof(ManagedAccess).GetMethod("ApplyProfileSettings",BindingFlags.NonPublic|BindingFlags.Static);
+   legacy.ChangeConnection(cfg=>select.Invoke(null,new object[]{cfg}));
+   Assert(legacy.EffectiveProxy==ManagedAccess.Profile&&legacy.SavedCustomProxy==savedProxy,"Selecting Dagami erased the manual proxy");
+   var reloaded=Config(Path.Combine(root,"legacy"));
+   string serialized=File.ReadAllText(Path.Combine(root,"legacy","config.json"));
+   Assert(!serialized.Contains("fixture-password"),"Manual proxy credentials were written in plaintext");
+   Parse(reloaded,serialized);
+   Assert(reloaded.EffectiveProxy==ManagedAccess.Profile&&reloaded.SavedCustomProxy==savedProxy,"Manual proxy was lost after restarting on Dagami");
+   reloaded.UseProxy=false;reloaded.UseDagamiDns=true;
+   var useCustom=typeof(ConfigManager).GetMethod("SelectCustomRoute",Private);
+   useCustom.Invoke(reloaded,new object[]{reloaded.SavedCustomProxy});
+   Assert(reloaded.EffectiveProxy==savedProxy&&reloaded.UseProxy&&!reloaded.UseDagamiDns,"Selecting custom kept a disabled proxy or a Smart DNS bypass");
    Parse(legacy,"{\"use_dagami_dns\":true,\"dns_host\":\"dns.dagami.ru\",\"dns_obfuscation\":true,\"block_antigravity_updates\":true}");
    Assert(!legacy.DnsObfuscation&&!legacy.BlockAntigravityUpdates&&legacy.UseDagamiDns,"Unsafe legacy flags survived migration or DNS was disabled");
    Parse(legacy,"{\"connection_policy_version\":1,\"dns_obfuscation\":true,\"block_antigravity_updates\":true}");
@@ -50,9 +72,9 @@ class ConnectionRecoveryChecks {
     Assert(!legacy.Save()&&!string.IsNullOrEmpty(legacy.LastSaveError),"Atomic replacement failure was reported as saved");
     Assert(File.ReadAllText(file)==before,"Failed save truncated/overwrote the active configuration");
     Assert(!File.Exists(Path.Combine(root,"legacy","fallback","config.json")),"Failed save created a stale fallback");
-    bool failed=false;string oldDns=legacy.DnsHost;bool oldFlag=legacy.UseDagamiDns;
-    try{legacy.ChangeConnection(cfg=>{cfg.DnsHost="fixture.invalid";cfg.UseDagamiDns=false;cfg.LastProxy="http://fixture.invalid:8080";});}catch(IOException){failed=true;}
-    Assert(failed&&legacy.DnsHost==oldDns&&legacy.UseDagamiDns==oldFlag&&legacy.LastProxy=="direct","Failed save changed effective connection settings");
+    bool failed=false;string oldDns=legacy.DnsHost,oldCustom=legacy.CustomProxy;bool oldFlag=legacy.UseDagamiDns;
+    try{legacy.ChangeConnection(cfg=>{cfg.DnsHost="fixture.invalid";cfg.UseDagamiDns=false;cfg.LastProxy=cfg.CustomProxy="http://fixture.invalid:8080";});}catch(IOException){failed=true;}
+    Assert(failed&&legacy.DnsHost==oldDns&&legacy.UseDagamiDns==oldFlag&&legacy.LastProxy=="direct"&&legacy.CustomProxy==oldCustom,"Failed save changed effective connection settings");
    }
    Assert(Directory.GetFiles(Path.GetDirectoryName(file),"*.tmp").Length==0,"Failed config save leaked temp files");
    string folder=Path.Combine(root,"editor");Directory.CreateDirectory(folder);

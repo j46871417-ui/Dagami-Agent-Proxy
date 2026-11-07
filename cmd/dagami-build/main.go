@@ -17,7 +17,10 @@ import (
 	"path/filepath"
 	"regexp"
 	"runtime"
+	"sort"
 	"strings"
+
+	"dagami.local/agentproxy/internal/buildinfo"
 )
 
 const nativeExe = "DagamiAgentProxy.exe"
@@ -115,7 +118,7 @@ func run() error {
 	if !*routing && (runtime.GOOS == "windows" && (*target == "all" || *target == "windows/amd64") || *native || *nativeChecks) {
 		windowsDir := filepath.Join(tmp, "winforms")
 		if *native || *nativeChecks {
-			windowsDir = filepath.Join(dir, "windows-native")
+			windowsDir = dir
 		}
 		windowsBinary, e = buildWindows(windowsDir, sign)
 		if e != nil {
@@ -171,7 +174,19 @@ func run() error {
 		}
 	}
 	data, _ := json.MarshalIndent(manifest, "", "  ")
-	return os.WriteFile(filepath.Join(dir, "SHA256SUMS.json"), append(data, '\n'), 0644)
+	if e = os.WriteFile(filepath.Join(dir, "SHA256SUMS.json"), append(data, '\n'), 0644); e != nil {
+		return e
+	}
+	names := make([]string, 0, len(manifest))
+	for name := range manifest {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	var sums strings.Builder
+	for _, name := range names {
+		fmt.Fprintf(&sums, "%s  %s\n", manifest[name], name)
+	}
+	return os.WriteFile(filepath.Join(dir, "SHA256SUMS.txt"), []byte(sums.String()), 0644)
 }
 func execRun(name string, env []string, args ...string) error {
 	cmd := exec.Command(name, args...)
@@ -210,13 +225,16 @@ func buildPortable(tmp, out, osName, arch string, routing bool, winForms string,
 		}
 	}
 	archive := filepath.Join(out, "Dagami-"+variant+"-"+label+".zip")
+	if variant == "Desktop" {
+		archive = filepath.Join(out, "Dagami-Agent-Proxy-"+buildinfo.ReleaseTag+"-windows.zip")
+	}
 	e := writeZIP(archive, func(z *zip.Writer) error {
 		if osName == "darwin" {
 			base := "Dagami Agent Proxy.app/Contents/"
 			if e := zipFile(z, path, base+"MacOS/"+binary, 0755); e != nil {
 				return e
 			}
-			if e := zipText(z, base+"Info.plist", `<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd"><plist version="1.0"><dict><key>CFBundleIdentifier</key><string>ru.dagami.portable</string><key>CFBundleExecutable</key><string>DagamiAgentProxy</string><key>CFBundleName</key><string>Dagami Agent Proxy</string><key>CFBundlePackageType</key><string>APPL</string><key>CFBundleVersion</key><string>1</string><key>LSMinimumSystemVersion</key><string>13.0</string></dict></plist>`); e != nil {
+			if e := zipText(z, base+"Info.plist", fmt.Sprintf(`<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd"><plist version="1.0"><dict><key>CFBundleIdentifier</key><string>ru.dagami.portable</string><key>CFBundleExecutable</key><string>DagamiAgentProxy</string><key>CFBundleName</key><string>Dagami Agent Proxy</string><key>CFBundlePackageType</key><string>APPL</string><key>CFBundleShortVersionString</key><string>%[1]s</string><key>CFBundleVersion</key><string>%[1]s</string><key>LSMinimumSystemVersion</key><string>13.0</string></dict></plist>`, buildinfo.Version)); e != nil {
 				return e
 			}
 		} else {
@@ -224,7 +242,20 @@ func buildPortable(tmp, out, osName, arch string, routing bool, winForms string,
 				return e
 			}
 		}
-		for _, name := range []string{"NATIVE_NEXT.md", "APP_ROUTING.md", "MANAGED_ACCESS.md", "LICENSE", "THIRD_PARTY_NOTICES.md"} {
+		if variant == "Desktop" {
+			hashes := map[string]string{}
+			if e := addHash(hashes, path); e != nil {
+				return e
+			}
+			data, err := json.MarshalIndent(hashes, "", "  ")
+			if err != nil {
+				return err
+			}
+			if e := zipText(z, "SHA256-native.json", string(data)+"\n"); e != nil {
+				return e
+			}
+		}
+		for _, name := range []string{"NATIVE_NEXT.md", "APP_ROUTING.md", "MANAGED_ACCESS.md", "RELEASE_NOTES.md", "LICENSE", "THIRD_PARTY_NOTICES.md"} {
 			if e := zipFile(z, name, name, 0644); e != nil {
 				return e
 			}
@@ -385,7 +416,7 @@ func zipText(z *zip.Writer, name, text string) error {
 	return e
 }
 func sourceZip(path string) error {
-	names := []string{"go.mod", "go.sum", "LICENSE", "NATIVE_NEXT.md", "APP_ROUTING.md", "MANAGED_ACCESS.md", "THIRD_PARTY_NOTICES.md", "CHANGELOG.md", "src/SystemDns.ps1", "src/app.manifest", "devproxy_pkg/assets/dagami-agent-proxy.ico", "devproxy_pkg/assets/icon-64.png"}
+	names := []string{"go.mod", "go.sum", "LICENSE", "NATIVE_NEXT.md", "APP_ROUTING.md", "MANAGED_ACCESS.md", "RELEASE_NOTES.md", "THIRD_PARTY_NOTICES.md", "CHANGELOG.md", "src/SystemDns.ps1", "src/app.manifest", "devproxy_pkg/assets/dagami-agent-proxy.ico", "devproxy_pkg/assets/icon-64.png"}
 	for _, s := range nativeSources {
 		names = append(names, "src/"+s)
 	}

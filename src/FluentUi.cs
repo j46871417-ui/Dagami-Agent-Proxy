@@ -287,13 +287,18 @@ namespace DevProxyApp
                     e.Graphics.SmoothingMode = SmoothingMode.AntiAlias;
                     using (var shape = FluentTheme.Rounded(tile, 9))
                     using (var brush = new SolidBrush(FluentTheme.Pick(0xeff2f8,0x323d51))) e.Graphics.FillPath(brush, shape);
-                    TextRenderer.DrawText(e.Graphics, e.Item.Text.Length == 0 ? "A" : e.Item.Text.Substring(0, 1), titleFont, tile, FluentTheme.Accent, TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
+                    var target = e.Item.Tag as AppTarget;
+                    Bitmap icon;
+                    if (target != null && target.ExePath != null && _nativeAppIcons.TryGetValue(target.ExePath, out icon))
+                        e.Graphics.DrawImage(icon, Rectangle.Inflate(tile, -2, -2));
+                    else
+                        TextRenderer.DrawText(e.Graphics, e.Item.Text.Length == 0 ? "A" : e.Item.Text.Substring(0, 1), titleFont, tile, FluentTheme.Accent, TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
                     bounds.X += 42; bounds.Width -= 42;
                     TextRenderer.DrawText(e.Graphics, e.SubItem.Text, titleFont, bounds, FluentTheme.Text, TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis);
                     if (selected && list.Focused) ControlPaint.DrawFocusRectangle(e.Graphics, Rectangle.Inflate(e.Item.Bounds, -2, -2));
                 } else TextRenderer.DrawText(e.Graphics, e.SubItem.Text, list.Font, bounds, FluentTheme.Muted, TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis);
             };
-            list.Disposed += (sender, e) => titleFont.Dispose();
+            list.Disposed += (sender, e) => { titleFont.Dispose(); DisposeNativeAppIcons(_nativeAppIcons); };
         }
         private Panel _fluentPages;
         private Label _fluentHeading;
@@ -516,7 +521,9 @@ namespace DevProxyApp
             _targetList.Columns.Add("Приложение", 205);
             _targetList.Columns.Add("Статус", 130);
             _targetList.Columns.Add("Расположение", 600);
-            _targetList.SmallImageList = new ImageList { ImageSize = new Size(1, 42) };
+            var rowHeightImages = new ImageList { ImageSize = new Size(1, 42) };
+            _targetList.SmallImageList = rowHeightImages;
+            _targetList.Disposed += (sender, e) => rowHeightImages.Dispose();
             StyleMacAppList(_targetList);
             _targetList.SizeChanged += (sender, e) => FitNativeListColumns();
             _targetList.HandleCreated += (sender, e) => FitNativeListColumns();

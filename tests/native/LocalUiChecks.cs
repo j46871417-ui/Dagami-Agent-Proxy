@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Drawing;
 using System.IO;
 using System.Reflection;
@@ -36,10 +37,18 @@ class LocalUiChecks {
     foreach(ToolStripItem item in menu.Items)Assert(item.Text!="Найти или создать ярлык","Partial duplicate shortcut action remains");
     bool notice = false; foreach (ToolStripItem item in menu.Items) { var parent = item as ToolStripMenuItem; if (parent == null) continue; foreach (ToolStripItem entry in parent.DropDownItems) if (entry.Text.Contains("заменить ручные правки")) notice = true; }
     Assert(notice, "Restore overwrite notice missing");
-    typeof(MainForm).GetField("_shortcutIssue", Private).SetValue(form, "Ярлык удалён");
-    Call(form, "UpdateAppActionState");
     var list = (ListView)Get(form, "_targetList");
-    if(list.SelectedItems.Count>0&&((AppTarget)list.SelectedItems[0].Tag).IsInstalled){var cfg=ConfigManager.Instance;string oldProxy=cfg.LastProxy;try{cfg.LastProxy="http://127.0.0.1:1234";Call(form,"UpdateAppActionState");Assert(((Button)Get(form,"_primaryAppAction")).Text=="Запустить через Dagami","Direct launch incorrectly requires shortcut setup");}finally{cfg.LastProxy=oldProxy;}}
+    string installedPath=typeof(MainForm).Assembly.Location;
+    var fixtures=new List<AppTarget>{
+     new AppTarget{Id="icon-fixture",DisplayName="Dagami · тестовый EXE",ExePath=installedPath},
+     new AppTarget{Id="missing-icon-fixture",DisplayName="Приложение без файла",ExePath=Path.Combine(Path.GetTempPath(),"missing-"+Guid.NewGuid()+".exe")}
+    };
+    var iconLoader=typeof(MainForm).GetMethod("LoadNativeAppIcons",BindingFlags.Static|BindingFlags.NonPublic);
+    var icons=(Dictionary<string,Bitmap>)iconLoader.Invoke(null,new object[]{fixtures});
+    Assert(icons.Count==1&&icons.ContainsKey(installedPath),"Installed executable did not supply a cached icon");
+    Call(form,"RenderNativeTargets",fixtures,new HashSet<string>(),icons);
+    typeof(MainForm).GetField("_shortcutIssue", Private).SetValue(form, "Ярлык удалён");
+    if(list.SelectedItems.Count>0&&((AppTarget)list.SelectedItems[0].Tag).IsInstalled){var cfg=ConfigManager.Instance;string oldProxy=cfg.LastProxy;bool oldFlag=cfg.UseProxy;try{cfg.LastProxy="http://127.0.0.1:1234";cfg.UseProxy=true;Call(form,"UpdateAppActionState");Assert(((Button)Get(form,"_primaryAppAction")).Text=="Запустить через Dagami","Direct launch incorrectly requires shortcut setup");}finally{cfg.LastProxy=oldProxy;cfg.UseProxy=oldFlag;}}
     if (list.SelectedItems.Count > 0 && ((AppTarget)list.SelectedItems[0].Tag).IsInstalled)
      Assert(((ToolStripMenuItem)Get(form, "_patchMenuItem")).Enabled, "Repair disabled by stale shortcut issue");
     Assert(form.Controls.Find("ShortcutStateLabel",true).Length==1,"Shortcut state missing");
@@ -96,15 +105,21 @@ class LocalUiChecks {
     wholeNetwork.Checked=true;Application.DoEvents();Bounds(form);wholeNetwork.Checked=false;
     advanced.PerformClick();Application.DoEvents();
     form.Size = form.MinimumSize; Application.DoEvents();
-    var manual=(LinkLabel)form.Controls.Find("ManualRouteLink",true)[0];
-    var clickLink=typeof(LinkLabel).GetMethod("OnLinkClicked",Private);
+    var custom=(TextBox)form.Controls.Find("CustomProxyAddress",true)[0];
+    var reveal=(CheckBox)form.Controls.Find("ShowCustomProxy",true)[0];
+    Assert(custom.Visible&&!ManagedAccess.IsProfile(custom.Text),"Custom proxy input is unavailable or displays the managed profile");
+    Assert(form.Controls.Find("UseCustomProxyButton",true)[0].Visible,"Custom route action is buried");
+    custom.Text="https://fixture-user:fixture-password@127.0.0.1:7897";
+    Assert(custom.UseSystemPasswordChar,"Pasting proxy credentials exposed them");
+    reveal.Checked=true;
+    Assert(!custom.UseSystemPasswordChar,"Cannot show proxy credentials explicitly");
+    reveal.Checked=false;
     for(int attempt=0;attempt<3;attempt++) {
-     clickLink.Invoke(manual,new object[]{new LinkLabelLinkClickedEventArgs(manual.Links[0])});Application.DoEvents();Bounds(form);
-     Assert(form.Controls.Find("UseProxyCheckBox",true)[0].Visible,"Manual route did not expand");
-     clickLink.Invoke(manual,new object[]{new LinkLabelLinkClickedEventArgs(manual.Links[0])});Application.DoEvents();
      Call(form,"ShowFluentPage",4);Call(form,"ShowFluentPage",1);
-     Assert(!form.Controls.Find("UseProxyCheckBox",true)[0].Visible,"Manual route reopened after navigation");
+     Assert(custom.Visible&&custom.Text.Contains("fixture-user")&&custom.UseSystemPasswordChar,"Custom proxy draft or masking was lost during navigation");
+     Bounds(form);
     }
+    custom.Clear();
     for(int index=0;index<5;index++){Call(form,"ShowFluentPage",index);Bounds(form);Picture(form,"local-page-"+index+"-min.png");}
 
    }

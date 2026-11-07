@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.5.0 beta
+
+- Keep a separate, protected custom proxy address in the Windows connection
+  page. Use explicit route selection and preserve unsaved edits across tabs.
+- Restore Windows application icons with loading on the app discovery worker.
+- Build updater-compatible Windows ZIPs, publishable SHA-256 manifests and
+  versioned Windows and portable clients.
+
 - Activate the app and shared Dagami route with one Telegram access key.
   Discover the gateway over HTTPS and preserve hostname verification when
   dialing the bootstrap IP after a DNS failure.
