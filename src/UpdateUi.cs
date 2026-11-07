@@ -29,7 +29,7 @@ namespace DevProxyApp {
    if(NativeUpdates.CliBusy())return "Работает CLI через Dagami. Завершите его перед установкой.";
    return null;
   }
-  void OpenUpdates(){using(var form=new UpdateForm(CanInstallUpdate,value=>_updatePreparing=value,()=>BeginInvoke(new Action(ExitApplication))))form.ShowDialog(this);ShowUpdateNotice(NativeUpdates.Cache()==null?null:NativeUpdates.Cache().Release);}
+  void OpenUpdates(){using(var form=new UpdateForm(CanInstallUpdate,value=>_updatePreparing=value,()=>BeginInvoke(new Action(ExitApplication))))ShowThemedDialog(form);ShowUpdateNotice(NativeUpdates.Cache()==null?null:NativeUpdates.Cache().Release);}
  }
  public sealed class UpdateForm : Form {
   readonly Label version=new Label{AutoSize=false,Dock=DockStyle.Fill};

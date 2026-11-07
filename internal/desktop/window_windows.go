@@ -60,6 +60,15 @@ func wide(s string) *uint16 {
 	return p
 }
 
+func openTelegram(link string) error {
+	shell := syscall.NewLazyDLL("shell32.dll").NewProc("ShellExecuteW")
+	value, _, _ := shell.Call(0, uintptr(unsafe.Pointer(wide("open"))), uintptr(unsafe.Pointer(wide(link))), 0, 0, 1)
+	if value <= 32 {
+		return errors.New("Windows не смогла открыть ссылку Telegram")
+	}
+	return nil
+}
+
 func runWindow(ready func(window)) error {
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()

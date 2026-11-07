@@ -3,18 +3,121 @@ using System.Collections.Generic;
 using System.Drawing;
 using System.IO;
 using System.Drawing.Drawing2D;
+using System.Runtime.InteropServices;
 using System.Windows.Forms;
+using Microsoft.Win32;
 
 namespace DevProxyApp
 {
     internal static class FluentTheme
     {
-        internal static readonly Color Background = Color.FromArgb(245, 246, 248);
-        internal static readonly Color Surface = Color.White;
-        internal static readonly Color Text = Color.FromArgb(30, 32, 38);
-        internal static readonly Color Muted = Color.FromArgb(100, 106, 117);
-        internal static readonly Color Border = Color.FromArgb(228, 230, 235);
-        internal static readonly Color Accent = Color.FromArgb(30, 107, 235);
+        private static readonly Color[] Light = { Color.FromArgb(245,246,248), Color.White, Color.FromArgb(239,240,244), Color.FromArgb(30,32,38), Color.FromArgb(100,106,117), Color.FromArgb(228,230,235), Color.FromArgb(30,107,235) };
+        private static readonly Color[] Dark = { Color.FromArgb(23,25,30), Color.FromArgb(33,36,43), Color.FromArgb(28,31,37), Color.FromArgb(235,238,246), Color.FromArgb(174,185,202), Color.FromArgb(59,67,81), Color.FromArgb(139,182,255) };
+        private static Color[] Palette { get { return IsDark ? Dark : Light; } }
+        internal static bool IsDark { get; private set; }
+        internal static Color Background { get { return Palette[0]; } }
+        internal static Color Surface { get { return Palette[1]; } }
+        internal static Color Sidebar { get { return Palette[2]; } }
+        internal static Color Text { get { return Palette[3]; } }
+        internal static Color Muted { get { return Palette[4]; } }
+        internal static Color Border { get { return Palette[5]; } }
+        internal static Color Accent { get { return Palette[6]; } }
+        internal static Color Primary { get { return Pick(0x1e6beb,0x245cc4); } }
+
+        internal static Color Pick(int light, int dark) { return Color.FromArgb(unchecked((int)0xff000000) | (IsDark ? dark : light)); }
+        private static string PreferencePath { get { return Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "devproxy", "appearance.txt"); } }
+        internal static string ReadMode() {
+            try { string value = File.ReadAllText(PreferencePath).Trim(); return value == "dark" || value == "light" ? value : "system"; }
+            catch (IOException) { return "system"; } catch (UnauthorizedAccessException) { return "system"; }
+        }
+        internal static void SaveMode(string mode) { Directory.CreateDirectory(Path.GetDirectoryName(PreferencePath)); File.WriteAllText(PreferencePath, mode); }
+        internal static bool SetMode(string mode) {
+            bool previous = IsDark;
+            IsDark = mode == "dark" || mode == "system" && SystemDark();
+            return previous;
+        }
+        private static bool SystemDark() {
+            if (SystemInformation.HighContrast) return false;
+            try { return (int)Registry.GetValue(@"HKEY_CURRENT_USER\Software\Microsoft\Windows\CurrentVersion\Themes\Personalize", "AppsUseLightTheme", 1) == 0; }
+            catch (Exception) { return false; }
+        }
+
+        [DllImport("dwmapi.dll")] private static extern int DwmSetWindowAttribute(IntPtr window, int attribute, ref int value, int size);
+        [DllImport("uxtheme.dll", CharSet=CharSet.Unicode)] private static extern int SetWindowTheme(IntPtr window, string application, string classes);
+        internal static void Apply(Control root, bool previousDark) {
+            foreach (Control child in root.Controls) Apply(child, previousDark);
+            root.BackColor = Translate(root.BackColor, previousDark, false);
+            root.ForeColor = Translate(root.ForeColor, previousDark, true);
+            var link = root as LinkLabel;
+            if (link != null) {
+                link.LinkColor = Translate(link.LinkColor, previousDark, true);
+                link.ActiveLinkColor = Accent;
+                link.VisitedLinkColor = Accent;
+                link.DisabledLinkColor = Muted;
+            }
+            var menu = root.ContextMenuStrip;
+            if (menu != null) ApplyMenu(menu);
+            var combo = root as ComboBox;
+            if (combo != null) {
+                combo.DrawItem -= DrawComboItem;
+                combo.DrawMode = IsDark ? DrawMode.OwnerDrawFixed : DrawMode.Normal;
+                if (IsDark) combo.DrawItem += DrawComboItem;
+            }
+            var scroll = root as ScrollableControl;
+            if (combo != null || root is ListView || root is TextBoxBase || scroll != null && scroll.AutoScroll) {
+                root.HandleCreated -= ThemeControlHandle;
+                root.HandleCreated += ThemeControlHandle;
+                if (root.IsHandleCreated) ThemeControlHandle(root, EventArgs.Empty);
+            }
+            if (root is Form && root.IsHandleCreated) {
+                int enabled = IsDark ? 1 : 0;
+                DwmSetWindowAttribute(root.Handle, 20, ref enabled, 4);
+            }
+            root.Invalidate();
+        }
+        private static void ThemeControlHandle(object sender, EventArgs e) {
+            var control = (Control)sender;
+            SetWindowTheme(control.Handle, IsDark ? (control is ComboBox ? "DarkMode_CFD" : "DarkMode_Explorer") : null, null);
+        }
+        private static void DrawComboItem(object sender, DrawItemEventArgs e) {
+            var box = (ComboBox)sender;
+            bool selected = (e.State & DrawItemState.Selected) != 0 && (e.State & DrawItemState.ComboBoxEdit) == 0;
+            using (var brush = new SolidBrush(selected ? Pick(0xe1ebfc,0x32476c) : Surface))
+                e.Graphics.FillRectangle(brush, e.Bounds);
+            if (e.Index >= 0 && e.Index < box.Items.Count)
+                TextRenderer.DrawText(e.Graphics, box.GetItemText(box.Items[e.Index]), box.Font, e.Bounds, box.Enabled ? Text : Muted,
+                    TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPrefix);
+            e.DrawFocusRectangle();
+        }
+        internal static void ApplyMenu(ToolStrip menu) {
+            menu.Renderer = IsDark ? new ToolStripProfessionalRenderer(new DarkMenuColors()) : new ToolStripProfessionalRenderer();
+            menu.BackColor = Surface;
+            menu.ForeColor = Text;
+            foreach (ToolStripItem item in menu.Items) {
+                item.ForeColor = Text;
+                var nested = item as ToolStripDropDownItem;
+                if (nested != null && nested.HasDropDownItems) ApplyMenu(nested.DropDown);
+            }
+        }
+        private sealed class DarkMenuColors : ProfessionalColorTable {
+            public override Color ToolStripDropDownBackground { get { return Surface; } }
+            public override Color ImageMarginGradientBegin { get { return Surface; } }
+            public override Color ImageMarginGradientMiddle { get { return Surface; } }
+            public override Color ImageMarginGradientEnd { get { return Surface; } }
+            public override Color MenuItemSelected { get { return Pick(0xe1ebfc,0x32476c); } }
+            public override Color MenuBorder { get { return Border; } }
+            public override Color MenuItemBorder { get { return Border; } }
+        }
+        private static Color Translate(Color value, bool fromDark, bool foreground) {
+            Color[] previous = fromDark ? Dark : Light;
+            for (int i = foreground ? 3 : 0; i < (foreground ? previous.Length : 3); i++)
+                if (previous[i].ToArgb() == value.ToArgb()) return Palette[i];
+            if (foreground) {
+                if (value.IsSystemColor && value != SystemColors.HighlightText || value == Color.Black) return Text;
+                if (value == Color.Gray || value == Color.DimGray) return Muted;
+            } else if (value.IsSystemColor) return value == SystemColors.Window ? Surface : Background;
+            return value;
+        }
 
         internal static GraphicsPath Rounded(Rectangle bounds, int radius)
         {
@@ -103,10 +206,10 @@ namespace DevProxyApp
             using (var background = new SolidBrush(Parent == null ? FluentTheme.Background : Parent.BackColor))
                 e.Graphics.FillRectangle(background, e.ClipRectangle);
             e.Graphics.SmoothingMode = SmoothingMode.AntiAlias;
-            Color fill = Primary ? FluentTheme.Accent : NavigationSelected ? Color.FromArgb(225, 235, 252) : BackColor;
-            if (_hover && Enabled) fill = Primary ? Color.FromArgb(24, 91, 213) : Color.FromArgb(235, 240, 247);
-            if (_pressed && Enabled) fill = Primary ? Color.FromArgb(20, 76, 180) : Color.FromArgb(219, 229, 242);
-            if (!Enabled) fill = Color.FromArgb(238, 240, 243);
+            Color fill = Primary ? FluentTheme.Primary : NavigationSelected ? FluentTheme.Pick(0xe1ebfc,0x2b4063) : BackColor;
+            if (_hover && Enabled) fill = Primary ? FluentTheme.Pick(0x185bd5,0x2a67d0) : FluentTheme.Pick(0xebf0f7,0x303949);
+            if (_pressed && Enabled) fill = Primary ? FluentTheme.Pick(0x144cb4,0x2151a6) : FluentTheme.Pick(0xdbe5f2,0x3c4d67);
+            if (!Enabled) fill = FluentTheme.Pick(0xeef0f3,0x292d37);
             using (var path = FluentTheme.Rounded(new Rectangle(0, 0, Width - 1, Height - 1), 10))
             using (var brush = new SolidBrush(fill))
             using (var pen = new Pen(Primary || NavigationSelected || NavigationGlyph >= 0 ? fill : FluentTheme.Border)) {
@@ -126,7 +229,7 @@ namespace DevProxyApp
     {
         internal static void Draw(Graphics g, int kind, Rectangle box)
         {
-            Color color = kind == 0 ? FluentTheme.Accent : kind == 2 ? Color.FromArgb(24, 141, 146) : kind == 3 ? Color.FromArgb(191, 118, 32) : Color.FromArgb(112, 119, 132);
+            Color color = kind == 0 ? FluentTheme.Primary : kind == 2 ? Color.FromArgb(24, 141, 146) : kind == 3 ? Color.FromArgb(191, 118, 32) : Color.FromArgb(112, 119, 132);
             using (var path = FluentTheme.Rounded(box, 7))
             using (var brush = new SolidBrush(color)) g.FillPath(brush, path);
             var saved = g.Save(); g.TranslateTransform(box.Left, box.Top); g.ScaleTransform(box.Width / 25f, box.Height / 25f);
@@ -157,7 +260,7 @@ namespace DevProxyApp
             if (Width < 44 || Height < 44) return;
             e.Graphics.SmoothingMode = SmoothingMode.AntiAlias;
             using (var path = FluentTheme.Rounded(new Rectangle(0, 0, Width - 1, Height - 1), 22))
-            using (var brush = new LinearGradientBrush(ClientRectangle, Color.FromArgb(30, 110, 242), Color.FromArgb(67, 80, 210), 20f)) e.Graphics.FillPath(brush, path);
+            using (var brush = new LinearGradientBrush(ClientRectangle, FluentTheme.Pick(0x1e6ef2,0x234b96), FluentTheme.Pick(0x4350d2,0x363778), 20f)) e.Graphics.FillPath(brush, path);
         }
     }
 
@@ -174,8 +277,8 @@ namespace DevProxyApp
             list.DrawItem += (sender, e) => { if (list.View != View.Details) e.DrawDefault = true; };
             list.DrawSubItem += (sender, e) => {
                 bool selected = e.Item.Selected;
-                using (var brush = new SolidBrush(selected ? Color.FromArgb(231, 239, 253) : FluentTheme.Surface)) e.Graphics.FillRectangle(brush, e.Bounds);
-                using (var pen = new Pen(Color.FromArgb(240, 241, 244))) e.Graphics.DrawLine(pen, e.Bounds.Left, e.Bounds.Bottom - 1, e.Bounds.Right, e.Bounds.Bottom - 1);
+                using (var brush = new SolidBrush(selected ? FluentTheme.Pick(0xe7effd,0x2b4063) : FluentTheme.Surface)) e.Graphics.FillRectangle(brush, e.Bounds);
+                using (var pen = new Pen(FluentTheme.Pick(0xf0f1f4,0x363d4a))) e.Graphics.DrawLine(pen, e.Bounds.Left, e.Bounds.Bottom - 1, e.Bounds.Right, e.Bounds.Bottom - 1);
                 var bounds = Rectangle.Inflate(e.Bounds, -12, 0);
                 if (e.ColumnIndex == 0) {
                     var target = e.Item.Tag as AppTarget;
@@ -189,7 +292,7 @@ namespace DevProxyApp
                     var tile = new Rectangle(bounds.Left, bounds.Top + (bounds.Height - 30) / 2, 30, 30);
                     e.Graphics.SmoothingMode = SmoothingMode.AntiAlias;
                     using (var shape = FluentTheme.Rounded(tile, 9))
-                    using (var brush = new SolidBrush(Color.FromArgb(239, 242, 248))) e.Graphics.FillPath(brush, shape);
+                    using (var brush = new SolidBrush(FluentTheme.Pick(0xeff2f8,0x323d51))) e.Graphics.FillPath(brush, shape);
                     if (artwork != null) e.Graphics.DrawImage(artwork, Rectangle.Inflate(tile, -4, -4));
                     else TextRenderer.DrawText(e.Graphics, e.Item.Text.Length == 0 ? "A" : e.Item.Text.Substring(0, 1), list.Font, tile, FluentTheme.Accent, TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
                     bounds.X += 42; bounds.Width -= 42;
@@ -203,6 +306,8 @@ namespace DevProxyApp
         private Label _fluentHeading;
         private Label _fluentSubtitle;
         private Label _connectionSummary;
+        private LinkLabel _themeLink;
+        private string _themeMode;
         private readonly List<FluentButton> _navigation = new List<FluentButton>();
 
         private Label FluentLabel(string text, float size, bool bold)
@@ -216,7 +321,48 @@ namespace DevProxyApp
 
         private void OpenBugReport()
         {
-            using (var dialog = new BugReportDialog()) dialog.ShowDialog(this);
+            using (var dialog = new BugReportDialog()) ShowThemedDialog(dialog);
+        }
+
+        private void ShowThemedDialog(Form dialog) {
+            if (FluentTheme.IsDark) {
+                FluentTheme.Apply(dialog, false);
+                dialog.HandleCreated += (s,e) => FluentTheme.Apply(dialog, true);
+            }
+            dialog.ShowDialog(this);
+        }
+
+        private void ApplyThemeChoice(string mode) {
+            if (!_preview) FluentTheme.SaveMode(mode);
+            _themeMode = mode;
+            bool previous = FluentTheme.SetMode(mode);
+            FluentTheme.Apply(this, previous);
+            if (_appActions != null) FluentTheme.ApplyMenu(_appActions);
+            _themeLink.Text = "Тема: " + (mode == "dark" ? "тёмная" : mode == "light" ? "светлая" : "системная");
+        }
+
+        protected override void WndProc(ref Message message) {
+            base.WndProc(ref message);
+            if (_themeMode == "system" && _themeLink != null && (message.Msg == 0x001a || message.Msg == 0x031a)) {
+                bool previous = FluentTheme.SetMode("system");
+                if (previous != FluentTheme.IsDark) {
+                    FluentTheme.Apply(this, previous);
+                    if (_appActions != null) FluentTheme.ApplyMenu(_appActions);
+                }
+            }
+        }
+
+        private void ShowThemeMenu() {
+            var menu = new ContextMenuStrip();
+            foreach (string[] entry in new[]{new[]{"system","Системная"},new[]{"light","Светлая"},new[]{"dark","Тёмная"}}) {
+                string mode = entry[0];
+                var option = new ToolStripMenuItem(entry[1]) { Checked = mode == _themeMode };
+                option.Click += (s,e) => ExecuteNativeAction(() => ApplyThemeChoice(mode));
+                menu.Items.Add(option);
+            }
+            FluentTheme.ApplyMenu(menu);
+            menu.Closed += (s,e) => menu.Dispose();
+            menu.Show(_themeLink, 0, _themeLink.Height);
         }
 
         private void SaveJournalToFile()
@@ -238,6 +384,8 @@ namespace DevProxyApp
 
         private void BuildFluentUi()
         {
+            _themeMode = _preview ? "light" : FluentTheme.ReadMode();
+            FluentTheme.SetMode(_themeMode);
             DoubleBuffered = true;
             SetStyle(ControlStyles.ResizeRedraw | ControlStyles.AllPaintingInWmPaint, true);
             Text = Brand.Name + " — приложения и подключения";
@@ -262,7 +410,7 @@ namespace DevProxyApp
             Controls.Add(shell);
             var sidebar = new FluentLayout {
                 Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 3,
-                Padding = new Padding(14, 28, 12, 16), BackColor = Color.FromArgb(239, 240, 244)
+                Padding = new Padding(14, 28, 12, 16), BackColor = FluentTheme.Sidebar
             };
             sidebar.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
             sidebar.RowStyles.Add(new RowStyle(SizeType.Absolute, 82));
@@ -280,6 +428,9 @@ namespace DevProxyApp
             var nav = new FlowLayoutPanel { Dock = DockStyle.Fill, FlowDirection = FlowDirection.TopDown, WrapContents = false, Margin = Padding.Empty };
             sidebar.Controls.Add(nav, 0, 1);
             var footer = new FlowLayoutPanel { Dock = DockStyle.Fill, FlowDirection = FlowDirection.TopDown, WrapContents = false, Margin = Padding.Empty };
+            _themeLink = new LinkLabel { Name = "AppearanceMenuLink", AutoSize = true, LinkColor = FluentTheme.Accent, Margin = new Padding(0,0,0,7), AccessibleName = "Выбрать цветовую тему" };
+            _themeLink.LinkClicked += (s,e) => ShowThemeMenu();
+            footer.Controls.Add(_themeLink);
             _updateLink = new LinkLabel { Text = "Обновления\n"+Brand.ReleaseTag, Size = new Size(168,38), AutoSize=false, Font=new Font("Segoe UI",9), LinkColor=FluentTheme.Muted, LinkBehavior=LinkBehavior.HoverUnderline, AccessibleName="Обновления GitHub; установлено "+Brand.ReleaseTag, Margin=new Padding(0,0,0,8) };
             _updateLink.LinkClicked+=(sender,e)=>ExecuteNativeAction(OpenUpdates);
             footer.Controls.Add(_updateLink);
@@ -293,10 +444,6 @@ namespace DevProxyApp
                 link.LinkClicked += (sender, e) => ExecuteNativeAction(() => OpenCommunityLink(address));
                 footer.Controls.Add(link);
             }
-            var proxyOffer = FluentLabel("Получить прокси\nКодовое слово «DAGAMI»", 9, false);
-            proxyOffer.AutoSize = false; proxyOffer.Size = new Size(168, 54);
-            proxyOffer.AccessibleName = "Получить прокси. Кодовое слово DAGAMI";
-            footer.Controls.Add(proxyOffer);
             sidebar.Controls.Add(footer, 0, 2);
 
             var main = new FluentLayout {
@@ -486,6 +633,11 @@ namespace DevProxyApp
                 Activated+=(sender,e)=>{if(!_nativeBusy&&DateTime.UtcNow>=nextDiscovery){nextDiscovery=DateTime.UtcNow.AddSeconds(15);RefreshNativeTargets();QueueClientStatus(true);UpdateAppActionState();ReadStartupState();}};
             }
             RefreshNativeTargets();
+            bool dark = FluentTheme.IsDark;
+            FluentTheme.Apply(this, dark);
+            if (_appActions != null) FluentTheme.ApplyMenu(_appActions);
+            _themeLink.Text = "Тема: " + (_themeMode == "dark" ? "тёмная" : _themeMode == "light" ? "светлая" : "системная");
+            HandleCreated += (s,e) => FluentTheme.Apply(this, FluentTheme.IsDark);
         }
 
         private void CheckFluentProxy()

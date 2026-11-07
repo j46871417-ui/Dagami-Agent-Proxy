@@ -1,5 +1,12 @@
 # Changelog
 
+## Native appearance and managed Dagami access
+
+- Add system, light and dark appearance modes to the WinForms client.
+- Pair an installation in Telegram and sign each managed proxy connection
+  with the device key. Add a Go gateway and adapters for the existing bot
+  and policy controller. See [MANAGED_ACCESS.md](MANAGED_ACCESS.md).
+
 ## Native desktop windows and smaller builds
 
 - Make WinForms the primary Windows package. Use Win32, AppKit and GTK 3

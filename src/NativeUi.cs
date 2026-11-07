@@ -81,6 +81,11 @@ namespace DevProxyApp
         internal void ApplyRouteFlagsChange(bool useProxy, bool useDns)
         {
             if (_updatingRouteFlags || _preview) return;
+            if (useProxy && useDns && ManagedAccess.IsProfile(ConfigManager.Instance.LastProxy)) {
+                SyncRouteCheckboxes();
+                MessageBox.Show(this,"Профиль Dagami через Telegram использует маршрут шлюза.","Dagami",MessageBoxButtons.OK,MessageBoxIcon.Information);
+                return;
+            }
             try {
                 if ((useProxy != ConfigManager.Instance.UseProxy || useDns != ConfigManager.Instance.UseDagamiDns) && !EnsureSessionsStoppedForRouteChange()) {
                     SyncRouteCheckboxes(); return;
@@ -298,7 +303,7 @@ namespace DevProxyApp
         internal static bool HasConfiguredConnection(string proxyValue, bool smartDnsEnabled, bool useProxy = true)
         {
             Uri parsed;
-            if (useProxy && (TryParseSupportedProxy(proxyValue, out parsed) || IsDirectProxyValue(proxyValue))) return true;
+            if (useProxy && (ManagedAccess.IsProfile(proxyValue) || TryParseSupportedProxy(proxyValue, out parsed) || IsDirectProxyValue(proxyValue))) return true;
             if (smartDnsEnabled) return true;
             return false;
         }
@@ -484,6 +489,7 @@ namespace DevProxyApp
             proxy = (proxy ?? "").Trim();
             // Disabling a route must not erase its saved address/credentials.
             if (!useProxy) return proxy;
+            if (ManagedAccess.IsProfile(proxy)) return ManagedAccess.Profile;
             if (IsDirectProxyValue(proxy) || (string.IsNullOrEmpty(proxy) && useDns)) return "direct";
             Uri parsed;
             if (!TryParseSupportedProxy(proxy, out parsed))
@@ -498,6 +504,7 @@ namespace DevProxyApp
             bool useProxy = _useProxyCheckBox != null ? _useProxyCheckBox.Checked : ConfigManager.Instance.UseProxy;
             bool useDns = _dnsEnabled.Checked;
             string proxy = NormalizeSavedProxy(_proxyBox.Text, useProxy, useDns);
+            if (useProxy && ManagedAccess.IsProfile(proxy)) useDns = false;
             string dns = _dnsBox.Text.Trim().TrimEnd('.');
             if (string.IsNullOrEmpty(dns)) dns = "dns.dagami.ru";
             if (!DnsProviders.IsValidSpec(dns))

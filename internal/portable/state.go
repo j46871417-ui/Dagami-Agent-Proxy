@@ -28,9 +28,11 @@ type Profile struct {
 	ID        string `json:"id"`
 	Name      string `json:"name"`
 	Proxy     string `json:"proxy"`
+	Managed   bool   `json:"managed,omitempty"`
 	Protected string `json:"protected,omitempty"`
 }
 type State struct {
+	Pairing  pairing   `json:"pairing,omitempty"`
 	Version  int       `json:"version"`
 	Profiles []Profile `json:"profiles"`
 	Apps     []App     `json:"apps"`
@@ -149,8 +151,10 @@ func (c *Controller) saveLocked() error {
 
 var redactURL = regexp.MustCompile(`(?i)(https?|socks5h?)://[^\s/@]+@`)
 var oauthURL = regexp.MustCompile(`https://accounts\.google\.com/[^\s]+`)
+var managedSecret = regexp.MustCompile(`(?i)(?:dagami v1\.[a-z0-9_.-]+|dagami_[a-z0-9_-]{43})`)
 
 func Redact(s string) string {
+	s = managedSecret.ReplaceAllString(s, "[Dagami proof hidden]")
 	return oauthURL.ReplaceAllString(redactURL.ReplaceAllString(s, "$1://[hidden]@"), "[OAuth URL hidden]")
 }
 func (c *Controller) eventLocked(s string) {
@@ -173,6 +177,7 @@ func (c *Controller) Snapshot() Snapshot {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	state := c.state
+	state.Pairing = pairing{}
 	state.Profiles = append([]Profile(nil), state.Profiles...)
 	for i := range state.Profiles {
 		state.Profiles[i].Protected = ""
@@ -366,15 +371,11 @@ func (c *Controller) Launch(id string) error {
 			return errors.New("приложение уже запущено через Dagami")
 		}
 	}
-	raw := profile.Proxy
-	if profile.Protected != "" {
-		v, e := unprotectSecret(profile.ID, profile.Protected)
-		if e != nil {
-			return e
-		}
-		raw = v
+	route, e := routeForProfile(profile)
+	if e != nil {
+		return e
 	}
-	bridge, e := StartBridge(raw)
+	bridge, e := route.start()
 	if e != nil {
 		return e
 	}
@@ -425,11 +426,11 @@ func (c *Controller) RunAttached(id string, args []string, input io.Reader, outp
 	if c.preview || app.Path == "" {
 		return errors.New("сначала добавьте исполняемый файл в список приложений")
 	}
-	raw, err := c.profileProxy()
+	route, err := c.activeRoute()
 	if err != nil {
 		return err
 	}
-	bridge, err := StartBridge(raw)
+	bridge, err := route.start()
 	if err != nil {
 		return err
 	}
@@ -469,16 +470,13 @@ func (c *Controller) Close() {
 		}
 	}
 }
-func (c *Controller) profileProxy() (string, error) {
+func (c *Controller) activeRoute() (*Bridge, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	for _, p := range c.state.Profiles {
 		if p.ID == c.state.Active {
-			if p.Protected != "" {
-				return unprotectSecret(p.ID, p.Protected)
-			}
-			return p.Proxy, nil
+			return routeForProfile(p)
 		}
 	}
-	return "", fmt.Errorf("профиль не выбран")
+	return nil, fmt.Errorf("профиль не выбран")
 }

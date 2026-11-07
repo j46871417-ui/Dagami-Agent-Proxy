@@ -1569,6 +1569,7 @@ namespace DevProxyApp
 
 
         private string _authHeader;
+        private ManagedAccess _managed;
 
 
 
@@ -1630,6 +1631,11 @@ namespace DevProxyApp
 
 
 
+                _managed = ManagedAccess.IsProfile(proxyUrl) ? ManagedAccess.LoadActive() : null;
+                if (_managed != null) {
+                    proxyUrl = _managed.Endpoint.AbsoluteUri;
+                    dnsHost = null;
+                }
                 Uri u = null;
 
 
@@ -2706,6 +2712,7 @@ namespace DevProxyApp
 
 
 
+                        if (_managed != null) conBytes = Encoding.ASCII.GetBytes(_managed.ConnectRequest(target));
                         upstreamStream.Write(conBytes, 0, conBytes.Length);
 
 
@@ -2890,7 +2897,23 @@ namespace DevProxyApp
 
 
 
-                    if (isDirect)
+                    if (_managed != null)
+                    {
+                        Uri destination = HttpDestination(method, target, headerText);
+                        string authority = destination.IdnHost + ":" + destination.Port;
+                        byte[] connect = Encoding.ASCII.GetBytes(_managed.ConnectRequest(authority));
+                        upstreamStream.Write(connect, 0, connect.Length);
+                        upstreamStream.Flush();
+                        byte[] response = new byte[16384];
+                        int length = ReadConnectResponse(upstreamStream, response);
+                        int status = ConnectStatus(Encoding.ASCII.GetString(response, 0, length));
+                        if (status != 200) throw new UpstreamConnectException(status);
+                        byte[] header = Encoding.ASCII.GetBytes(LoopbackRequest(headerText, destination));
+                        sendBytes = new byte[header.Length + totalRead - bodyOffset];
+                        Array.Copy(header, sendBytes, header.Length);
+                        if (bodyOffset < totalRead) Array.Copy(buffer, bodyOffset, sendBytes, header.Length, totalRead - bodyOffset);
+                    }
+                    else if (isDirect)
 
 
 
@@ -9399,7 +9422,7 @@ namespace DevProxyApp
 
 
 
-                        if (!TryParseSupportedProxy(proxyUrl, out parsedProxy))
+                        if (!ManagedAccess.IsProfile(proxyUrl) && !TryParseSupportedProxy(proxyUrl, out parsedProxy))
 
 
 

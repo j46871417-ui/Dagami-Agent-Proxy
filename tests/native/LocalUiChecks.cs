@@ -53,6 +53,15 @@ class LocalUiChecks {
     Assert(VisibleButtons(form)<=10,"Main screen still has too many visible buttons");
     Assert(((Panel[])Get(form,"_pageControls")).Length==5,"Flat pages are missing");
     Assert(Get(form,"_sessionRefreshTimer")==null,"Static preview starts background polling");
+    Assert(form.Controls.Find("AppearanceMenuLink",true).Length==1,"Appearance menu missing");
+    Assert(form.Controls.Find("ManagedPairLink",true).Length==1,"Managed pairing entry missing");
+    Color light=form.BackColor;
+    Call(form,"ApplyThemeChoice","dark");
+    Assert(form.BackColor.GetBrightness()<0.2f&&form.ForeColor.GetBrightness()>0.8f,"Dark theme colors missing");
+    Bounds(form);Picture(form,"dark-apps.png");
+    Call(form,"ShowFluentPage",1);Bounds(form);Picture(form,"dark-connection.png");
+    Call(form,"ApplyThemeChoice","light");
+    Assert(form.BackColor.ToArgb()==light.ToArgb(),"Switching back did not restore the light theme");
     for(int index=0;index<5;index++){Call(form,"ShowFluentPage",index);Bounds(form);Picture(form,"local-page-"+index+".png");}
     Call(form,"ShowFluentPage",1);((CheckBox)Get(form,"_wholeNetworkDns")).Checked=true;Application.DoEvents();Bounds(form);((CheckBox)Get(form,"_wholeNetworkDns")).Checked=false;
     form.Size = form.MinimumSize; Application.DoEvents();

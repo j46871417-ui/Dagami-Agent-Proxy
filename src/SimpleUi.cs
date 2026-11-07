@@ -63,7 +63,9 @@ namespace DevProxyApp {
    var page=new FluentLayout{Dock=DockStyle.Fill,ColumnCount=1,RowCount=2,Padding=new Padding(12)};
    page.RowStyles.Add(new RowStyle(SizeType.Absolute,220));page.RowStyles.Add(new RowStyle(SizeType.Percent,100));page.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,100));
    var card=new FluentCard{Dock=DockStyle.Fill,Padding=new Padding(16,12,16,12)};var rows=new FluentLayout{Dock=DockStyle.Fill,ColumnCount=2,RowCount=5};rows.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,100));rows.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute,135));foreach(int height in new[]{38,28,38,42})rows.RowStyles.Add(new RowStyle(SizeType.Absolute,height));rows.RowStyles.Add(new RowStyle(SizeType.Percent,100));
-   rows.Controls.Add(FluentLabel("Подключение к прокси",15,true),0,0);rows.SetColumnSpan(rows.GetControlFromPosition(0,0),2);
+   rows.Controls.Add(FluentLabel("Подключение к прокси",15,true),0,0);
+   var pairLink=new LinkLabel{Name="ManagedPairLink",Text="Dagami через бота",AutoSize=true,Anchor=AnchorStyles.Top|AnchorStyles.Right,LinkColor=FluentTheme.Accent,LinkBehavior=LinkBehavior.HoverUnderline,AccessibleName="Привязать устройство через Telegram",Margin=new Padding(0,4,0,0)};
+   pairLink.LinkClicked+=(s,e)=>ExecuteNativeAction(OpenManagedPair);rows.Controls.Add(pairLink,1,0);
    rows.Controls.Add(FluentLabel("Адрес HTTP / HTTPS прокси",10,false),0,1);
    bool hasCreds=(ConfigManager.Instance.LastProxy??"").Contains("@");
    _proxyBox=new TextBox{Dock=DockStyle.Fill,UseSystemPasswordChar=hasCreds,Text=ConfigManager.Instance.LastProxy,BorderStyle=BorderStyle.FixedSingle,AccessibleName="Адрес HTTP или HTTPS прокси"};rows.Controls.Add(_proxyBox,0,2);
@@ -77,6 +79,19 @@ namespace DevProxyApp {
    _dnsObfuscation=new CheckBox{Text="Экспериментальное разделение TLS и DNS",AutoSize=true,Checked=ConfigManager.Instance.DnsObfuscation};
    _dnsBox=new TextBox{Text=ConfigManager.Instance.DnsHost,Width=450,BorderStyle=BorderStyle.FixedSingle,AccessibleName="Любой DNS: домен, IP:порт, https://.../dns-query или tls://..."};
    return page;
+  }
+  void OpenManagedPair() {
+   if(_preview)return;
+   using(var dialog=new ManagedPairDialog()) {
+    ShowThemedDialog(dialog);
+    if(dialog.Device==null||!EnsureSessionsStoppedForRouteChange())return;
+    dialog.Device.Commit(()=>ConfigManager.Instance.ChangeConnection(cfg=>{cfg.LastProxy=ManagedAccess.Profile;cfg.UseProxy=true;cfg.UseDagamiDns=false;}));
+   }
+   _proxyBox.Text=ManagedAccess.Profile;
+   _proxyBox.UseSystemPasswordChar=false;
+   SyncRouteCheckboxes();
+   RestartRescueBridge();
+   UpdateNativeStatus();
   }
   Panel BuildAdvancedSettings(){
    var page=new Panel{Dock=DockStyle.Fill,AutoScroll=true,Padding=new Padding(16)};
@@ -229,7 +244,7 @@ namespace DevProxyApp {
   }
   void OpenSystemDns(bool reset){
    if(_preview)return;
-   using(var dialog=new SystemDnsForm(_dnsBox.Text.Trim(),reset,false))dialog.ShowDialog(this);
+   using(var dialog=new SystemDnsForm(_dnsBox.Text.Trim(),reset,false))ShowThemedDialog(dialog);
    _nextDnsUiRead=DateTime.MinValue;UpdateNativeStatus();
   }
   void SaveDnsPreference(){

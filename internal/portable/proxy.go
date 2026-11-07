@@ -22,6 +22,7 @@ import (
 type Bridge struct {
 	listener net.Listener
 	upstream *url.URL
+	proof    func(string) (string, error)
 	slots    chan struct{}
 	mu       sync.Mutex
 	peers    map[net.Conn]bool
@@ -69,11 +70,15 @@ func StartBridge(raw string) (*Bridge, error) {
 	if e != nil {
 		return nil, e
 	}
+	return (&Bridge{upstream: u}).start()
+}
+
+func (b *Bridge) start() (*Bridge, error) {
 	l, e := net.Listen("tcp4", "127.0.0.1:0")
 	if e != nil {
 		return nil, e
 	}
-	b := &Bridge{listener: l, upstream: u, slots: make(chan struct{}, 128), peers: make(map[net.Conn]bool)}
+	b.listener, b.slots, b.peers = l, make(chan struct{}, 128), make(map[net.Conn]bool)
 	b.wg.Add(1)
 	go b.accept()
 	return b, nil
@@ -264,7 +269,7 @@ func (b *Bridge) dialOnce(ctx context.Context, host string, port int) (net.Conn,
 	if strings.HasPrefix(u.Scheme, "socks") {
 		e = socksConnect(c, u, host, port)
 	} else {
-		e = httpConnect(c, u, host, port)
+		e = httpConnect(c, u, host, port, b.proof)
 	}
 	if e != nil {
 		return nil, e
@@ -278,10 +283,16 @@ type connectStatus int
 
 func (s connectStatus) Error() string { return fmt.Sprintf("CONNECT rejected (%d)", s) }
 
-func httpConnect(c net.Conn, u *url.URL, host string, port int) error {
+func httpConnect(c net.Conn, u *url.URL, host string, port int, proof func(string) (string, error)) error {
 	authority := net.JoinHostPort(host, strconv.Itoa(port))
 	auth := ""
-	if u.User != nil {
+	if proof != nil {
+		header, err := proof(authority)
+		if err != nil {
+			return err
+		}
+		auth = "Proxy-Authorization: " + header + "\r\n"
+	} else if u.User != nil {
 		p, _ := u.User.Password()
 		auth = "Proxy-Authorization: Basic " + base64.StdEncoding.EncodeToString([]byte(u.User.Username()+":"+p)) + "\r\n"
 	}

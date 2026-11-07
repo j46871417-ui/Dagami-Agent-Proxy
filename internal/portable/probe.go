@@ -44,15 +44,10 @@ func (c *Controller) Probe(parent context.Context, service string) ([]ProbeResul
 	if len(hosts) == 0 {
 		return nil, errors.New("выберите сервис для проверки")
 	}
-	raw, e := c.profileProxy()
+	bridge, e := c.activeRoute()
 	if e != nil {
 		return nil, e
 	}
-	upstream, e := ParseProxy(raw)
-	if e != nil {
-		return nil, e
-	}
-	bridge := &Bridge{upstream: upstream}
 	results := make([]ProbeResult, len(hosts))
 	var wg sync.WaitGroup
 	for i, host := range hosts {

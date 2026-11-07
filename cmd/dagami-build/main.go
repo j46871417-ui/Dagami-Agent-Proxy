@@ -22,7 +22,7 @@ import (
 
 const nativeExe = "DagamiAgentProxy.exe"
 
-var nativeSources = strings.Fields(`DevProxyApp.cs NativeUi.cs FluentUi.cs SimpleUi.cs AntigravityIntegration.cs CliRegionGate.cs ProxyDiagnostics.cs DnsProviders.cs DnsTransport.cs DnsAgent.cs DpiDesync.cs AntigravityUi.cs AntigravityLogin.cs NativeShortcuts.cs NativeLaunchBroker.cs NativeSessions.cs SystemDnsManager.cs NativeCli.cs Brand.cs LicenseManager.cs AppProxyPolicy.cs ApplicationSupport.cs JetBrainsProxySettings.cs ApplicationDiscovery.cs NativeCliApps.cs BugReports.cs NativeUpdates.cs UpdateInstaller.cs UpdateUi.cs NativeStartup.cs`)
+var nativeSources = strings.Fields(`DevProxyApp.cs NativeUi.cs FluentUi.cs SimpleUi.cs AntigravityIntegration.cs CliRegionGate.cs ProxyDiagnostics.cs DnsProviders.cs DnsTransport.cs DnsAgent.cs DpiDesync.cs AntigravityUi.cs AntigravityLogin.cs NativeShortcuts.cs NativeLaunchBroker.cs NativeSessions.cs SystemDnsManager.cs NativeCli.cs Brand.cs LicenseManager.cs AppProxyPolicy.cs ApplicationSupport.cs JetBrainsProxySettings.cs ApplicationDiscovery.cs NativeCliApps.cs BugReports.cs NativeUpdates.cs UpdateInstaller.cs UpdateUi.cs NativeStartup.cs ManagedAccess.cs`)
 var references = strings.Fields("System.dll System.Core.dll System.Drawing.dll System.Windows.Forms.dll System.Security.dll System.Web.Extensions.dll System.IO.Compression.dll System.Xml.dll System.ServiceProcess.dll")
 var targets = []string{"windows/amd64", "darwin/amd64", "darwin/arm64", "linux/amd64", "linux/arm64"}
 var secretPatterns = map[string]*regexp.Regexp{
@@ -155,7 +155,7 @@ func run() error {
 		if e = os.MkdirAll(previews, 0755); e != nil {
 			return e
 		}
-		for _, image := range []string{"local-apps.png", "local-page-2.png"} {
+		for _, image := range []string{"local-apps.png", "local-page-2.png", "dark-apps.png", "dark-connection.png"} {
 			if e = copyFile(filepath.Join(checks, image), filepath.Join(previews, image), 0644); e != nil {
 				return e
 			}
@@ -224,7 +224,7 @@ func buildPortable(tmp, out, osName, arch string, routing bool, winForms string,
 				return e
 			}
 		}
-		for _, name := range []string{"NATIVE_NEXT.md", "APP_ROUTING.md", "LICENSE", "THIRD_PARTY_NOTICES.md"} {
+		for _, name := range []string{"NATIVE_NEXT.md", "APP_ROUTING.md", "MANAGED_ACCESS.md", "LICENSE", "THIRD_PARTY_NOTICES.md"} {
 			if e := zipFile(z, name, name, 0644); e != nil {
 				return e
 			}
@@ -291,7 +291,7 @@ func checkWindows(exe, dir string) error {
 	if e := copyFile(exe, lib, 0755); e != nil {
 		return e
 	}
-	for _, name := range []string{"LocalUiChecks", "SystemDnsUiChecks", "AntigravityPatchChecks"} {
+	for _, name := range []string{"LocalUiChecks", "SystemDnsUiChecks", "AntigravityPatchChecks", "ManagedAccessChecks"} {
 		out := filepath.Join(dir, name+".exe")
 		args := []string{"/nologo", "/target:exe", "/out:" + out, "/reference:" + lib}
 		for _, r := range references {
@@ -313,7 +313,7 @@ func checkWindows(exe, dir string) error {
 			return fmt.Errorf("%s did not report PASS", name)
 		}
 	}
-	return nil
+	return execRun("go", []string{"DAGAMI_NATIVE_MANAGED_CHECKS=" + filepath.Join(dir, "ManagedAccessChecks.exe")}, "test", "./internal/managed", "-run", "^TestWindowsProofInteroperability$", "-count=1")
 }
 func copyFile(from, to string, mode fs.FileMode) error {
 	data, e := os.ReadFile(from)
@@ -385,11 +385,11 @@ func zipText(z *zip.Writer, name, text string) error {
 	return e
 }
 func sourceZip(path string) error {
-	names := []string{"go.mod", "go.sum", "LICENSE", "NATIVE_NEXT.md", "APP_ROUTING.md", "THIRD_PARTY_NOTICES.md", "CHANGELOG.md", "src/SystemDns.ps1", "src/app.manifest", "devproxy_pkg/assets/dagami-agent-proxy.ico", "devproxy_pkg/assets/icon-64.png"}
+	names := []string{"go.mod", "go.sum", "LICENSE", "NATIVE_NEXT.md", "APP_ROUTING.md", "MANAGED_ACCESS.md", "THIRD_PARTY_NOTICES.md", "CHANGELOG.md", "src/SystemDns.ps1", "src/app.manifest", "devproxy_pkg/assets/dagami-agent-proxy.ico", "devproxy_pkg/assets/icon-64.png"}
 	for _, s := range nativeSources {
 		names = append(names, "src/"+s)
 	}
-	for _, name := range []string{"LocalUiChecks", "SystemDnsUiChecks", "AntigravityPatchChecks"} {
+	for _, name := range []string{"LocalUiChecks", "SystemDnsUiChecks", "AntigravityPatchChecks", "ManagedAccessChecks"} {
 		names = append(names, "tests/native/"+name+".cs")
 	}
 	for _, dir := range []string{"cmd", "internal"} {

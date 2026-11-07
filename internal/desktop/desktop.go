@@ -4,9 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
 	"strings"
 	"time"
 
+	"dagami.local/agentproxy/internal/managed"
 	"dagami.local/agentproxy/internal/portable"
 )
 
@@ -231,8 +233,41 @@ func (d *desktop) profiles(snapshot portable.Snapshot) {
 			})
 		}),
 		action("Проверить связь", d.probe),
+		action("Dagami через бота", d.managedPair),
 	}
 	d.showPage(v)
+}
+
+func (d *desktop) managedPair() {
+	endpoint := d.controller.ManagedEndpoint()
+	if endpoint == "" {
+		endpoint = os.Getenv("DAGAMI_MANAGED_URL")
+	}
+	activate := func(start bool) func(int, []string) {
+		return func(_ int, values []string) {
+			d.run("Привязка Dagami", func() (string, error) {
+				result, err := d.controller.ActivateManaged(d.ctx, strings.TrimSpace(values[0]), start)
+				if err != nil {
+					return "", err
+				}
+				if result.Active {
+					return "Профиль Dagami · Telegram выбран. Можно запускать приложения.", nil
+				}
+				if result.Code == "" {
+					return "Подтверждение ещё не получено. Проверьте привязку после подтверждения в боте.", nil
+				}
+				link := managed.BotURL + result.Code
+				if err = openTelegram(link); err != nil {
+					return "Откройте эту ссылку в Telegram:\n" + link, nil
+				}
+				return "Подтвердите привязку в Telegram. Код устройства заканчивается на " + result.Code[len(result.Code)-6:] + ". Затем нажмите «Проверить привязку».", nil
+			})
+		}
+	}
+	d.showPage(view{title: "Dagami через бота", detail: "Подтвердите устройство в Telegram. Код действует 10 минут.",
+		fields: []field{{label: "HTTPS-адрес шлюза Dagami", value: endpoint}}, actions: []button{
+			{"Открыть Telegram", activate(true)}, {"Проверить привязку", activate(false)}, action("Назад", d.render),
+		}})
 }
 
 func (d *desktop) probe() {

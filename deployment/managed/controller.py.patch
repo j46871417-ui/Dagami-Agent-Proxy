@@ -1,0 +1,60 @@
+--- a/controller.py
++++ b/controller.py
+@@ -54,6 +54,11 @@
+ class Controller:
+     def __init__(self, config):
+         self.config = config
++        key_path = os.environ.get('DAGAMI_MANAGED_BRIDGE_KEY_FILE')
++        self.managed_bridge_key = pathlib.Path(key_path).read_text().strip() if key_path else ''
++        self.managed_required = os.environ.get('DAGAMI_MANAGED_REQUIRE_DEVICE') == '1'
++        if self.managed_required and not self.managed_bridge_key:
++            raise ValueError('managed bridge key is required')
+         self.route_count = int(config.get('route_count', 3))
+         if self.route_count not in (1, 3) or self.route_count > len(config['nodes']):
+             raise ValueError('invalid route count')
+@@ -111,24 +116,31 @@
+
+     def authorize(self, header, target):
+         try:
+-            if len(header)>2048 or not header.lower().startswith("basic "):return 407,{}
+-            login,password=base64.b64decode(header[6:], validate=True).decode().split(":",1)
++            if len(header)>2048:return 407,{}
++            managed = header.startswith("Dagami-Local ")
++            if managed:
++                key, login = header[len("Dagami-Local "):].split(".", 1)
++                if not self.managed_bridge_key or not hmac.compare_digest(key, self.managed_bridge_key):return 407,{}
++            else:
++                if self.managed_required or not header.lower().startswith("basic "):return 407,{}
++                login,password=base64.b64decode(header[6:], validate=True).decode().split(":",1)
+             with self.lock:
+                 row=self.db.execute("SELECT hash,subject,allowed,preferred,fallback,scope,expires FROM accounts WHERE login=?",(login,)).fetchone()
+             if row is None or row[6] <= time.time():return 407,{}
+-            proof=(hashlib.sha256(header.encode()).digest(), row[0])
+-            with self.lock:
+-                cached=self.cache.get(proof)
+-                if self.bad_cache.get(proof,0)>time.time():return 407,{}
+-            if not cached or cached < time.time():
+-                if not hmac.compare_digest(password_hash(password,row[0].split(":")[0]),row[0]):
++            if not managed:
++                proof=(hashlib.sha256(header.encode()).digest(), row[0])
++                with self.lock:
++                    cached=self.cache.get(proof)
++                    if self.bad_cache.get(proof,0)>time.time():return 407,{}
++                if not cached or cached < time.time():
++                    if not hmac.compare_digest(password_hash(password,row[0].split(":")[0]),row[0]):
++                        with self.lock:
++                            if len(self.bad_cache)>10000:self.bad_cache.clear()
++                            self.bad_cache[proof]=time.time()+30
++                        return 407,{}
+                     with self.lock:
+-                        if len(self.bad_cache)>10000:self.bad_cache.clear()
+-                        self.bad_cache[proof]=time.time()+30
+-                    return 407,{}
+-                with self.lock:
+-                    if len(self.cache)>10000:self.cache.clear()
+-                    self.cache[proof]=time.time()+120
++                        if len(self.cache)>10000:self.cache.clear()
++                        self.cache[proof]=time.time()+120
+             if not self.allowed_target(target,row[5]):return 403,{}
+             allowed=json.loads(row[2])
+             with self.lock:

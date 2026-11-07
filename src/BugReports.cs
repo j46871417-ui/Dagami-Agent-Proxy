@@ -27,6 +27,7 @@ namespace DevProxyApp {
    if(string.IsNullOrEmpty(text))return "";
    text=Regex.Replace(text,@"(?im)\b(authorization|cookie|set-cookie)[""']?\s*[:=][^\r\n]*","$1=[removed]");
    text=Regex.Replace(text,@"(?i)\b(?:bearer|basic)\s+[a-z0-9+/_.=:-]+","[authorization removed]");
+   text=Regex.Replace(text,@"(?i)\b(?:dagami v1\.[a-z0-9_.-]+|dagami_[a-z0-9_-]{43})","[Dagami proof removed]");
    text=Regex.Replace(text,@"(?i)(?:https?|socks5h?)://[^\s<>""']+","[address removed]");
    text=Regex.Replace(text,@"(?i)\b(access_token|refresh_token|api[_-]?key|password|passwd|secret|token|state|code|code_verifier|license(?:key)?)\b[""']?\s*[:=]\s*(?:""[^""\r\n]*""|'[^'\r\n]*'|[^\s,;]+)","$1=[removed]");
    text=Regex.Replace(text,@"(?i)DAGAMI-(?:[A-Z0-9]+-)*[A-Z0-9]+","[license removed]");

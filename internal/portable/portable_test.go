@@ -220,9 +220,9 @@ func TestSettingsPersistAndRedact(t *testing.T) {
 	if e != nil {
 		t.Fatal(e)
 	}
-	raw, e := next.profileProxy()
-	if e != nil || raw != "http://127.0.0.1:18080" {
-		t.Fatalf("%q %v", raw, e)
+	route, e := next.activeRoute()
+	if e != nil || route.upstream.String() != "http://127.0.0.1:18080" {
+		t.Fatalf("route=%v error=%v", route, e)
 	}
 	next.state.Profiles[0].Protected = "encrypted-fixture"
 	dump, _ := json.Marshal(next.Snapshot())
