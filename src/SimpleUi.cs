@@ -7,6 +7,8 @@ using System.Windows.Forms;
 namespace DevProxyApp {
  public partial class MainForm {
   Label _dnsOverview,_dnsAddressDetails;
+  Label _connectionRouteStatus,_connectionFeedback;
+  readonly RowStyle _connectionCardHeight=new RowStyle(SizeType.Absolute,220);
   FluentButton _encryptedDnsAction;
   DateTime _nextDnsUiRead;
   bool _encryptedDnsActive,_encryptedDnsRunning,_changingDnsPreference,_probingDnsAddresses;
@@ -60,43 +62,66 @@ namespace DevProxyApp {
 
   static void PreventAccidentalScroll(ComboBox cb) { if (cb == null) return; cb.MouseWheel += (s, e) => { var box = s as ComboBox; if (box != null && !box.DroppedDown) ((HandledMouseEventArgs)e).Handled = true; }; }
   Panel BuildConnectionSettings(){
-   var page=new FluentLayout{Dock=DockStyle.Fill,ColumnCount=1,RowCount=2,Padding=new Padding(12)};
-   page.RowStyles.Add(new RowStyle(SizeType.Absolute,220));page.RowStyles.Add(new RowStyle(SizeType.Percent,100));page.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,100));
-   var card=new FluentCard{Dock=DockStyle.Fill,Padding=new Padding(16,12,16,12)};var rows=new FluentLayout{Dock=DockStyle.Fill,ColumnCount=2,RowCount=5};rows.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,100));rows.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute,135));foreach(int height in new[]{38,28,38,42})rows.RowStyles.Add(new RowStyle(SizeType.Absolute,height));rows.RowStyles.Add(new RowStyle(SizeType.Percent,100));
-   rows.Controls.Add(FluentLabel("Прокси Dagami",15,true),0,0);
-   var manual=new LinkLabel{AutoSize=true,Anchor=AnchorStyles.Top|AnchorStyles.Right,LinkColor=FluentTheme.Accent,LinkBehavior=LinkBehavior.HoverUnderline,Margin=new Padding(0,4,0,0)};
+   var card=new FluentCard{Dock=DockStyle.Fill,Padding=new Padding(16,12,16,12),Margin=new Padding(12)};
+   var rows=new FluentLayout{Dock=DockStyle.Fill,ColumnCount=2,RowCount=7};
+   rows.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,100));rows.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute,135));
+   foreach(int height in new[]{32,25,37,42,32,38})rows.RowStyles.Add(new RowStyle(SizeType.Absolute,height));
+   rows.RowStyles.Add(new RowStyle(SizeType.Percent,100));
+   rows.Controls.Add(FluentLabel("Общий маршрут",15,true),0,0);
+   var manual=new LinkLabel{Name="ManualRouteLink",AutoSize=true,Anchor=AnchorStyles.Top|AnchorStyles.Right,LinkColor=FluentTheme.Accent,LinkBehavior=LinkBehavior.HoverUnderline,Margin=new Padding(0,4,0,0)};
    rows.Controls.Add(manual,1,0);
-   var routeHint=new Label{Dock=DockStyle.Fill,ForeColor=FluentTheme.Muted,Text="Один маршрут для запуска из Dagami и настроенных ярлыков."};
-   rows.Controls.Add(routeHint,0,1);rows.SetColumnSpan(routeHint,2);
+   _connectionRouteStatus=new Label{Name="SharedRouteStatus",Dock=DockStyle.Fill,ForeColor=FluentTheme.Text};
+   rows.Controls.Add(_connectionRouteStatus,0,1);rows.SetColumnSpan(_connectionRouteStatus,2);
+   var routeHint=new Label{Dock=DockStyle.Fill,ForeColor=FluentTheme.Muted,Text="Для всех приложений, запущенных из Dagami или через настроенные ярлыки. Приложение должно поддерживать прокси."};
+   rows.Controls.Add(routeHint,0,2);rows.SetColumnSpan(routeHint,2);
    bool hasCreds=(ConfigManager.Instance.LastProxy??"").Contains("@");
-   _proxyBox=new TextBox{Dock=DockStyle.Fill,UseSystemPasswordChar=hasCreds,Text=ConfigManager.Instance.LastProxy,BorderStyle=BorderStyle.FixedSingle,AccessibleName="Адрес HTTP или HTTPS прокси"};rows.Controls.Add(_proxyBox,0,2);
-   var reveal=new CheckBox{Text="Показать",AutoSize=true,Checked=!hasCreds,Margin=new Padding(12,3,0,0)};reveal.CheckedChanged+=(s,e)=>_proxyBox.UseSystemPasswordChar=!reveal.Checked;rows.Controls.Add(reveal,1,2);
+   _proxyBox=new TextBox{Dock=DockStyle.Fill,UseSystemPasswordChar=hasCreds,Text=ConfigManager.Instance.LastProxy,BorderStyle=BorderStyle.FixedSingle,AccessibleName="Адрес HTTP или HTTPS прокси",AccessibleDescription="Введите direct для системного маршрута или VPN."};rows.Controls.Add(_proxyBox,0,4);
+   var reveal=new CheckBox{Text="Показать",AutoSize=true,Checked=!hasCreds,Margin=new Padding(12,3,0,0)};reveal.CheckedChanged+=(s,e)=>_proxyBox.UseSystemPasswordChar=!reveal.Checked;rows.Controls.Add(reveal,1,4);
    var actions=new FlowLayoutPanel{Dock=DockStyle.Fill,WrapContents=false};
-   AddNativeButton(actions,"Подключить через Telegram",OpenManagedPair);
+   AddNativeButton(actions,"Подключить через Telegram",()=>OpenManagedPair(false));
    var pair=(FluentButton)_nativeButtons[_nativeButtons.Count-1];pair.Name="ManagedPairLink";pair.Primary=true;
-   AddNativeButton(actions,"Проверить",CheckFluentProxy);
-   _probeService=new ComboBox{Width=112,DropDownStyle=ComboBoxStyle.DropDownList,AccessibleName="Сервис для проверки подключения",Margin=new Padding(4,4,0,0)};
-   _probeService.Items.AddRange(new object[]{"Antigravity","Gemini","Cursor","Codex","Claude"});_probeService.SelectedIndex=0;PreventAccidentalScroll(_probeService);actions.Controls.Add(_probeService);
-   _useProxyCheckBox=new CheckBox{Name="UseProxyCheckBox",Text="Использовать прокси",AutoSize=true,Checked=ConfigManager.Instance.UseProxy,Margin=new Padding(14,7,0,0),AccessibleName="Использовать указанный прокси"};_useProxyCheckBox.CheckedChanged+=(s,e)=>ApplyRouteFlagsChange(_useProxyCheckBox.Checked,ConfigManager.Instance.UseDagamiDns);actions.Controls.Add(_useProxyCheckBox);rows.Controls.Add(actions,0,3);rows.SetColumnSpan(actions,2);
-   var note=new Label{Dock=DockStyle.Fill,ForeColor=FluentTheme.Muted};rows.Controls.Add(note,0,4);rows.SetColumnSpan(note,2);card.Controls.Add(rows);page.Controls.Add(card,0,0);
+   AddNativeButton(actions,"Проверить привязку",()=>OpenManagedPair(true));
+   _nativeButtons[_nativeButtons.Count-1].Name="CheckManagedPairLink";
+   rows.Controls.Add(actions,0,3);rows.SetColumnSpan(actions,2);
+   var manualActions=new FlowLayoutPanel{Dock=DockStyle.Fill,WrapContents=false,Margin=Padding.Empty};
+   _useProxyCheckBox=new CheckBox{Name="UseProxyCheckBox",Text="Использовать прокси",AutoSize=true,Checked=ConfigManager.Instance.UseProxy,Margin=new Padding(4,7,8,0),AccessibleName="Использовать указанный прокси"};
+   _useProxyCheckBox.CheckedChanged+=(s,e)=>ApplyRouteFlagsChange(_useProxyCheckBox.Checked,ConfigManager.Instance.UseDagamiDns);
+   manualActions.Controls.Add(_useProxyCheckBox);
+   AddNativeButton(manualActions,"Сохранить маршрут",()=>{if(!_preview&&SaveNativeSettings())_connectionFeedback.Text="Общий маршрут сохранён.";});
+   rows.Controls.Add(manualActions,0,5);rows.SetColumnSpan(manualActions,2);
+   _connectionFeedback=new Label{Dock=DockStyle.Fill,ForeColor=FluentTheme.Muted};
+   rows.Controls.Add(_connectionFeedback,0,6);rows.SetColumnSpan(_connectionFeedback,2);card.Controls.Add(rows);
    bool showManual=false;
    Action renderManual=()=>{
-    manual.Text=showManual?"Скрыть адрес":"Свой маршрут";
-    _proxyBox.Visible=reveal.Visible=_useProxyCheckBox.Visible=showManual;
-    rows.RowStyles[2].Height=showManual?38:0;
-    note.Text=showManual?"Можно указать собственный HTTP/HTTPS-прокси или direct для VPN.":"Прокси включается для настроенных ярлыков и запуска из Dagami.";
+    rows.SuspendLayout();
+    try {
+     manual.Text=showManual?"Скрыть адрес":"Настроить вручную";
+     _proxyBox.Visible=reveal.Visible=manualActions.Visible=showManual;
+     rows.RowStyles[4].Height=showManual?32:0;
+     rows.RowStyles[5].Height=showManual?38:0;
+     _connectionCardHeight.Height=showManual?290:220;
+    } finally {rows.ResumeLayout(true);}
    };
    manual.LinkClicked+=(s,e)=>{showManual=!showManual;renderManual();};renderManual();
    _dnsEnabled=new CheckBox{Text="Шифрованный DNS для входа и приложений",AutoSize=true,Checked=ConfigManager.Instance.UseDagamiDns};
    _dnsObfuscation=new CheckBox{Text="Экспериментальное разделение TLS и DNS",AutoSize=true,Checked=ConfigManager.Instance.DnsObfuscation};
    _dnsBox=new TextBox{Text=ConfigManager.Instance.DnsHost,Width=450,BorderStyle=BorderStyle.FixedSingle,AccessibleName="Любой DNS: домен, IP:порт, https://.../dns-query или tls://..."};
-   return page;
+   return card;
   }
-  void OpenManagedPair() {
+  void OpenManagedPair(bool check) {
    if(_preview)return;
-   using(var dialog=new ManagedPairDialog()) {
+   using(var dialog=new ManagedPairDialog(check)) {
     ShowThemedDialog(dialog);
-    if(dialog.Device==null||!EnsureSessionsStoppedForRouteChange())return;
+    if(dialog.Device==null)return;
+    var config=ConfigManager.Instance;
+    if(ManagedAccess.IsProfile(config.EffectiveProxy)&&dialog.Device.IsCurrentDevice()) {
+     _connectionFeedback.Text="Привязка подтверждена. Профиль Dagami выбран для всех запусков через мост.";
+     return;
+    }
+    if(!EnsureSessionsStoppedForRouteChange()) {
+     _connectionFeedback.Text="Устройство подтверждено. Чтобы применить новый маршрут, остановите активные сессии и повторите проверку.";
+     return;
+    }
     dialog.Device.Commit(()=>ConfigManager.Instance.ChangeConnection(cfg=>{cfg.LastProxy=ManagedAccess.Profile;cfg.UseProxy=true;cfg.UseDagamiDns=false;}));
    }
    _proxyBox.Text=ManagedAccess.Profile;
@@ -104,6 +129,7 @@ namespace DevProxyApp {
    SyncRouteCheckboxes();
    RestartRescueBridge();
    UpdateNativeStatus();
+   _connectionFeedback.Text=_bridgePort>0?"Устройство привязано. Общий маршрут Dagami включён.":"Устройство привязано. Не удалось запустить локальный мост. Откройте журнал.";
   }
   Panel BuildAdvancedSettings(){
    var page=new Panel{Dock=DockStyle.Fill,AutoScroll=true,Padding=new Padding(16)};
@@ -203,19 +229,25 @@ namespace DevProxyApp {
    var rows=new FluentLayout{Dock=DockStyle.Top,AutoSize=true,AutoSizeMode=AutoSizeMode.GrowAndShrink,ColumnCount=1,RowCount=3,Margin=Padding.Empty};
    rows.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,100));
    var advancedHeight=new RowStyle(SizeType.Absolute,0);
-   rows.RowStyles.Add(new RowStyle(SizeType.Absolute,230));
+   rows.RowStyles.Add(_connectionCardHeight);
    rows.RowStyles.Add(new RowStyle(SizeType.Absolute,42));
    rows.RowStyles.Add(advancedHeight);
    var options=new FluentButton{Name="AdvancedConnectionButton",Text="Дополнительные настройки ▾",AutoSize=true,Margin=new Padding(12,0,0,0),Anchor=AnchorStyles.Left};
    bool expanded=false;
    var content=advanced.Controls[0];advanced.AutoScroll=false;
-   Action fit=()=>{advancedHeight.Height=expanded?content.Height+36:0;rows.PerformLayout();};
+   Action fit=()=>{
+    int height=expanded?content.Height+36:0;
+    if(advancedHeight.Height!=height)advancedHeight.Height=height;
+   };
    content.SizeChanged+=(s,e)=>fit();
    options.Click+=(s,e)=>{
     expanded=!expanded;
-    advanced.Visible=expanded;
-    options.Text=expanded?"Скрыть дополнительные настройки ▴":"Дополнительные настройки ▾";
-    fit();
+    rows.SuspendLayout();
+    try {
+     advanced.Visible=expanded;
+     options.Text=expanded?"Скрыть дополнительные настройки ▴":"Дополнительные настройки ▾";
+     fit();
+    } finally {rows.ResumeLayout(true);}
     if(expanded&&!_startupStatusLoaded){_startupStatusLoaded=true;ReadStartupState();}
    };
    advanced.Visible=false;

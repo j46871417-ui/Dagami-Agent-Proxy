@@ -82,6 +82,9 @@ func (c *Controller) ActivateManaged(ctx context.Context, raw string, start bool
 	if c.state.Pairing.ID != p.ID {
 		return result, errors.New("запрос привязки изменился")
 	}
+	if c.state.Active == p.ID {
+		return result, nil
+	}
 	if len(c.sessions) != 0 {
 		return result, errors.New("остановите активные сессии и проверьте привязку снова")
 	}

@@ -12,7 +12,8 @@ import (
 	"time"
 )
 
-const BotURL = "https://t.me/bright26bot?start=dagami_"
+const BotChat = "https://t.me/bright26bot"
+const BotURL = BotChat + "?start=dagami_"
 
 var activationClient = &http.Client{
 	Timeout:       10 * time.Second,

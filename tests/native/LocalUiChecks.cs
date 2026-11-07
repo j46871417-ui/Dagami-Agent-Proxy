@@ -39,7 +39,7 @@ class LocalUiChecks {
     typeof(MainForm).GetField("_shortcutIssue", Private).SetValue(form, "Ярлык удалён");
     Call(form, "UpdateAppActionState");
     var list = (ListView)Get(form, "_targetList");
-    if(list.SelectedItems.Count>0&&((AppTarget)list.SelectedItems[0].Tag).IsInstalled){var cfg=ConfigManager.Instance;string oldProxy=cfg.LastProxy;try{cfg.LastProxy="http://127.0.0.1:1234";typeof(MainForm).GetField("_proxyCheckFailed",Private).SetValue(form,true);Call(form,"UpdateAppActionState");Assert(((Button)Get(form,"_primaryAppAction")).Text=="Запустить через Dagami","Direct launch incorrectly requires shortcut setup");}finally{cfg.LastProxy=oldProxy;typeof(MainForm).GetField("_proxyCheckFailed",Private).SetValue(form,false);}}
+    if(list.SelectedItems.Count>0&&((AppTarget)list.SelectedItems[0].Tag).IsInstalled){var cfg=ConfigManager.Instance;string oldProxy=cfg.LastProxy;try{cfg.LastProxy="http://127.0.0.1:1234";Call(form,"UpdateAppActionState");Assert(((Button)Get(form,"_primaryAppAction")).Text=="Запустить через Dagami","Direct launch incorrectly requires shortcut setup");}finally{cfg.LastProxy=oldProxy;}}
     if (list.SelectedItems.Count > 0 && ((AppTarget)list.SelectedItems[0].Tag).IsInstalled)
      Assert(((ToolStripMenuItem)Get(form, "_patchMenuItem")).Enabled, "Repair disabled by stale shortcut issue");
     Assert(form.Controls.Find("ShortcutStateLabel",true).Length==1,"Shortcut state missing");
@@ -78,6 +78,12 @@ class LocalUiChecks {
     DismissThemeMenu(form,themeMenu);
     Bounds(form);Picture(form,"dark-apps.png");
     Call(form,"ShowFluentPage",1);Bounds(form);Picture(form,"dark-connection.png");
+    var pages=(Panel[])Get(form,"_pageControls");
+    Assert(pages[1].Controls.Find("ManagedPairLink",true)[0].Visible&&pages[1].Controls.Find("CheckManagedPairLink",true)[0].Visible,"Pairing actions are missing from the connection page");
+    Assert(pages[1].Controls.Find("ProbeServicePicker",true).Length==0,"Selecting a diagnostic service still looks like a connection setting");
+    Call(form,"ShowFluentPage",4);
+    Assert(pages[4].Controls.Find("ProbeServicePicker",true)[0].Visible,"Route diagnostics are missing from their own page");
+    Call(form,"ShowFluentPage",1);
     Call(form,"ApplyThemeChoice","light");
     Assert(form.BackColor.ToArgb()==light.ToArgb(),"Switching back did not restore the light theme");
     for(int index=0;index<5;index++){Call(form,"ShowFluentPage",index);Bounds(form);Picture(form,"local-page-"+index+".png");}
@@ -90,6 +96,15 @@ class LocalUiChecks {
     wholeNetwork.Checked=true;Application.DoEvents();Bounds(form);wholeNetwork.Checked=false;
     advanced.PerformClick();Application.DoEvents();
     form.Size = form.MinimumSize; Application.DoEvents();
+    var manual=(LinkLabel)form.Controls.Find("ManualRouteLink",true)[0];
+    var clickLink=typeof(LinkLabel).GetMethod("OnLinkClicked",Private);
+    for(int attempt=0;attempt<3;attempt++) {
+     clickLink.Invoke(manual,new object[]{new LinkLabelLinkClickedEventArgs(manual.Links[0])});Application.DoEvents();Bounds(form);
+     Assert(form.Controls.Find("UseProxyCheckBox",true)[0].Visible,"Manual route did not expand");
+     clickLink.Invoke(manual,new object[]{new LinkLabelLinkClickedEventArgs(manual.Links[0])});Application.DoEvents();
+     Call(form,"ShowFluentPage",4);Call(form,"ShowFluentPage",1);
+     Assert(!form.Controls.Find("UseProxyCheckBox",true)[0].Visible,"Manual route reopened after navigation");
+    }
     for(int index=0;index<5;index++){Call(form,"ShowFluentPage",index);Bounds(form);Picture(form,"local-page-"+index+"-min.png");}
 
    }

@@ -55,8 +55,8 @@ namespace DevProxyApp
         private ContextMenuStrip _appActions;
         private ToolStripMenuItem _stopAppItem, _removeAppItem, _restoreShortcutItem, _clientPreparationItem;
         private Panel[] _pageControls;
+        private int _activeFluentPage;
         private string[] _pageNames, _pageDescriptions;
-        private bool _proxyCheckFailed;
         private CheckBox _startWithWindows;
         private CheckBox _useProxyCheckBox;
         private bool _updatingRouteFlags;
@@ -119,6 +119,11 @@ namespace DevProxyApp
                     : NativeShortcuts.Current.VerifiedCount(target.Id, out issue);
                 if (count > 0 || !string.IsNullOrEmpty(issue)) return true;
             } catch { }
+            return HasPersistentAppChanges(target);
+        }
+
+        private static bool HasPersistentAppChanges(AppTarget target)
+        {
             try {
                 if (ApplicationSupport.SupportsSettings(target)) {
                     ApplicationSupport.ResolveSettings(target);
@@ -174,7 +179,7 @@ namespace DevProxyApp
         }
         private Label _startupStatus;
         private bool _updatingStartup;
-        private string _shortcutIssue, _proxyCheckMessage;
+        private string _shortcutIssue;
         private int _shortcutRecords;
         private string _clientStatusKey, _clientStatusText;
         private int _clientStatusRevision;
@@ -208,13 +213,21 @@ namespace DevProxyApp
 
         private void ShowFluentPage(int index)
         {
-            if (_pageControls == null) return;
-            for (int i = 0; i < _pageControls.Length; i++) {
-                _pageControls[i].Visible = i == index;
-                _navigation[i].NavigationSelected = i == index;
-                _navigation[i].Invalidate();
+            if (_pageControls == null || index == _activeFluentPage) return;
+            int previous = _activeFluentPage;
+            _activeFluentPage = index;
+            _fluentPages.SuspendLayout();
+            try {
+                _pageControls[previous].Hide();
+                _pageControls[index].Show();
+                _pageControls[index].BringToFront();
+            } finally {
+                _fluentPages.ResumeLayout(true);
             }
-            _pageControls[index].BringToFront();
+            _navigation[previous].NavigationSelected = false;
+            _navigation[index].NavigationSelected = true;
+            _navigation[previous].Invalidate();
+            _navigation[index].Invalidate();
             _fluentHeading.Text = _pageNames[index]; _fluentSubtitle.Text = _pageDescriptions[index];
             _showNativeLog = index == 3;
             if (_showNativeLog) FlushNativeLog();
@@ -287,6 +300,7 @@ namespace DevProxyApp
             if (!ok) throw new InvalidOperationException(message);
             if (!restore && ConfigManager.Instance.SetSystemEnv) ProxyEngine.ApplySystemEnvironment(GetIdeProxyUrl());
             // Restoring one application must not clear shared Windows environment for other apps.
+            UpdateNativeDetails();
             _appFeedback.Text = target.DisplayName + ": " + message;
         }
 
@@ -333,7 +347,7 @@ namespace DevProxyApp
                     Logger.Log("[Patch] " + target.DisplayName + ": " + result); success = true;
                 } catch (Exception ex) { result = ex.Message; Logger.Log("[Patch] " + ex.GetType().Name + ": " + result); }
                 try { BeginInvoke(new Action(() => {
-                    _nativeBusy = false; _patchInProgress = false; _patchMenuItem.Text = "Настроить обычный запуск"; _proxyCheckMessage = null;
+                    _nativeBusy = false; _patchInProgress = false; _patchMenuItem.Text = "Настроить обычный запуск";
                     SetNativeButtonsEnabled(true); UpdateNativeDetails(); QueueClientStatus(true);
                     if (success && !_preview && !NativeStartup.Current.IsEnabled()) { try { NativeStartup.Current.SetEnabled(true); ReadStartupState(); } catch { } }
                     _appFeedback.Text = success?"Настройка завершена — подробности в отчёте.":result;
@@ -410,7 +424,6 @@ namespace DevProxyApp
                     _appFeedback.Text = error ?? "Не удалось запустить приложение.";
                     return;
                 }
-                _proxyCheckMessage = null;
                 string notice;
                 _appFeedback.Text = _nativeClientNotices.TryGetValue(target.Id,out notice) ? "Приложение запущено через прокси. "+notice : "Приложение запущено. Закрытие окна Dagami Agent Proxy оставляет прокси в трее.";
             } catch (Exception ex) {
@@ -432,10 +445,8 @@ namespace DevProxyApp
             _primaryAppAction.Enabled = flagsActive && (!configured || (target != null && target.IsInstalled));
             _moreAppActions.Enabled = target != null;
             bool canPatch = target != null && target.IsInstalled;
-            bool hasSettingsBackup = false;
-            try { if (target != null && ApplicationSupport.SupportsSettings(target)) { ApplicationSupport.ResolveSettings(target); hasSettingsBackup = !string.IsNullOrEmpty(target.ConfigPath) && File.Exists(target.ConfigPath + ".devproxy.bak"); } } catch { }
             bool hasBinaryPatch = _clientStatusText != null && (_clientStatusText.StartsWith("Патч: применён", StringComparison.OrdinalIgnoreCase) || _clientStatusText.IndexOf("частично", StringComparison.OrdinalIgnoreCase) >= 0 || _clientStatusText.IndexOf("повторная подготовка",StringComparison.OrdinalIgnoreCase)>=0);
-            bool isPatched = target != null && (_shortcutRecords > 0 || _shortcutIssue != null || hasSettingsBackup || hasBinaryPatch || _selectedPersistentPatch);
+            bool isPatched = target != null && (_shortcutRecords > 0 || _shortcutIssue != null || hasBinaryPatch || _selectedPersistentPatch);
             bool canUnpatch = isPatched;
             _patchMenuItem.Visible = true;
             _patchMenuItem.Enabled = canPatch;
@@ -446,12 +457,11 @@ namespace DevProxyApp
             _clientPreparationItem.Enabled = target != null && target.IsInstalled && AntigravityIntegration.Supports(target.ExePath);
             string state = target == null ? "Выберите приложение" : !target.IsInstalled ? "Не установлено" :
                 running ? "Запущено через Dagami" : "Не запущено через Dagami";
-            string patchBadge = target == null || !target.IsInstalled ? "" : (isPatched ? "Пропатчено · " : "Не пропатчено · ");
             if (target != null && _targetList != null && _targetList.SelectedItems.Count > 0 && _targetList.SelectedItems[0].SubItems.Count > 1) {
-                string listStatus = !target.IsInstalled ? "Не найдено" : (isPatched ? "Пропатчено" : "Не пропатчено");
+                string listStatus = !target.IsInstalled ? "Не найдено" : (isPatched ? "Настроено" : "Готово к запуску");
                 if (_targetList.SelectedItems[0].SubItems[1].Text != listStatus) _targetList.SelectedItems[0].SubItems[1].Text = listStatus;
             }
-            _targetDetails.Text = _proxyCheckFailed ? state + ". Последняя проверка маршрута не прошла." : state;
+            _targetDetails.Text = state;
             _shortcutExplanation.Text = target == null ? "Выберите приложение, чтобы настроить его ярлыки." : _shortcutIssue != null ?
                 (_shortcutIssue.TrimEnd('.') + ". Выберите «Действия → Настроить обычный запуск».") :
                 (_shortcutRecords > 0 ? "Открывайте настроенный ярлык: Dagami запустится в фоне." :
@@ -469,7 +479,6 @@ namespace DevProxyApp
             if(cli&&_shortcutIssue==null)_shortcutExplanation.Text=_shortcutRecords>0?"Команда настроена. Перезапустите терминал; прямой путь к EXE обходит запускатель.":"Настройте обычную команду CLI, затем перезапустите терминал.";
             _restoreShortcutItem.Text=cli?"Восстановить прямой запуск команды":"Восстановить обычные ярлыки";
             if (running) _shortcutExplanation.Text = "Сессия активна (просто закрыть окно недостаточно — остаются фоновые процессы). Для отзыва или применения патча выберите «Действия → Остановить».";
-            if (_proxyCheckMessage != null) _appFeedback.Text = _proxyCheckMessage;
         }
 
 
@@ -647,7 +656,7 @@ namespace DevProxyApp
                 AppTarget target = (AppTarget)_targetList.SelectedItems[0].Tag;
                 try { _shortcutRecords = NativeCliApps.IsCommandTarget(target)?NativeCliApps.Current.VerifiedCount(target.Id,out _shortcutIssue):NativeShortcuts.Current.VerifiedCount(target.Id, out _shortcutIssue); }
                 catch (Exception) { _shortcutIssue = "Не удалось прочитать настройки ярлыков. Откройте журнал для проверки."; }
-                _selectedPersistentPatch=IsTargetPatched(target);
+                _selectedPersistentPatch=target.IsInstalled&&_shortcutRecords==0&&_shortcutIssue==null&&HasPersistentAppChanges(target);
             }
             QueueClientStatus();
             UpdateAppActionState();
@@ -660,17 +669,16 @@ namespace DevProxyApp
             foreach (var sessionEntry in _nativeSessions.Values) if (sessionEntry.RunningProcess != null) active++;
             _nativeStatus.Text = _cachedTargets.Count == 0 && (_targetScanRunning || !_backgroundWorkStarted)
                 ? "Ищем установленные приложения…" : "Приложений: "+_cachedTargets.Count+" · Запущено через Dagami: "+active;
-            // connection summary updated below
             SyncRouteCheckboxes();
-            // connection summary updated below
             if (_connectionSummary != null) {
                 var config = ConfigManager.Instance;
                 bool managed = ManagedAccess.IsProfile(config.EffectiveProxy);
                 bool needsPairing = managed && !ManagedAccess.HasActiveDevice();
                 string route = managed ? "Прокси Dagami" : config.UseProxy && !IsDirectProxyValue(config.LastProxy)
                     ? "Свой прокси" : config.UseDagamiDns ? "Smart DNS" : "Системный маршрут / VPN";
-                _connectionSummary.Text = needsPairing ? "Привяжите устройство через Telegram, чтобы начать работу."
-                    : route + (_bridgePort > 0 ? " · мост запущен" : "") + "\nДля запуска из Dagami и настроенных ярлыков.";
+                string routeState = route + (needsPairing ? " · ожидает привязки в Telegram" : _bridgePort > 0 ? " · мост запущен" : "");
+                _connectionSummary.Text = routeState + "\nОдин маршрут для всех запусков через Dagami.";
+                if (_connectionRouteStatus != null) _connectionRouteStatus.Text = routeState;
                 _connectionAction.Text = needsPairing ? "Подключить" : "Настройки";
             }
 

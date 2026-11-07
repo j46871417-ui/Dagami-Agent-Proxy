@@ -432,13 +432,13 @@ namespace DevProxyApp
             _updateLink.LinkClicked+=(sender,e)=>ExecuteNativeAction(OpenUpdates);
             footer.Controls.Add(_updateLink);
             var donate = new LinkLabel { Text = "Поддержать проект", AutoSize = true, LinkBehavior = LinkBehavior.HoverUnderline, LinkColor = FluentTheme.Accent, Margin = new Padding(0, 0, 0, 12), AccessibleName = "Поддержать проект — CloudTips" };
-            donate.LinkClicked += (sender, e) => ExecuteNativeAction(() => OpenCommunityLink("https://pay.cloudtips.ru/p/671fda86"));
+            donate.LinkClicked += (sender, e) => OpenCommunityLink("https://pay.cloudtips.ru/p/671fda86");
             footer.Controls.Add(donate);
-            foreach (var entry in new string[][] { new [] { "t.me/dagamvi", "https://t.me/dagamvi", "Паблик Dagamvi" }, new [] { "@bright26bot", "https://t.me/bright26bot", "Открыть бота bright26bot" } }) {
+            foreach (var entry in new string[][] { new [] { "Канал в Telegram", "https://t.me/dagamvi", "Паблик Dagamvi" }, new [] { "Бот @bright26bot", ManagedAccess.BotChat, "Открыть бота bright26bot" } }) {
                 string address = entry[1];
                 var link = new LinkLabel { Text = entry[0], Tag = address, AccessibleName = entry[2], AutoSize = true,
                     LinkColor = FluentTheme.Muted, LinkBehavior = LinkBehavior.HoverUnderline, ActiveLinkColor = FluentTheme.Text, Margin = new Padding(0, 0, 0, 10) };
-                link.LinkClicked += (sender, e) => ExecuteNativeAction(() => OpenCommunityLink(address));
+                link.LinkClicked += (sender, e) => OpenCommunityLink(address);
                 footer.Controls.Add(link);
             }
             sidebar.Controls.Add(footer, 0, 2);
@@ -521,7 +521,7 @@ namespace DevProxyApp
             _targetList.SizeChanged += (sender, e) => FitNativeListColumns();
             _targetList.HandleCreated += (sender, e) => FitNativeListColumns();
             _targetList.SelectedIndexChanged += (sender, e) => {
-                if (_appFeedback != null) _appFeedback.Text = _proxyCheckMessage ?? "Настройте один раз, затем запускайте приложение как обычно.";
+                if (_appFeedback != null) _appFeedback.Text = "Настройте один раз, затем запускайте приложение как обычно.";
                 UpdateNativeDetails();
             };
             listCard.Controls.Add(_targetList);
@@ -608,7 +608,6 @@ namespace DevProxyApp
             nav.Controls.Add(globalReport);
             _pageControls = pages; _pageNames = names; _pageDescriptions = descriptions;
             apps.BringToFront();
-            _proxyBox.TextChanged += (sender, e) => { _proxyCheckFailed = false; _proxyCheckMessage = null; UpdateNativeStatus(); };
             if (!_preview) {
                 _sessionRefreshTimer = new System.Windows.Forms.Timer { Interval = 2000 };
                 _sessionRefreshTimer.Tick += (s, e) => { if (!_nativeBusy) UpdateNativeStatus(); };
@@ -634,29 +633,40 @@ namespace DevProxyApp
 
         private void CheckFluentProxy()
         {
-            if (_useProxyCheckBox.Checked && ManagedAccess.IsProfile(_proxyBox.Text) && !ManagedAccess.HasActiveDevice()) {
-                OpenManagedPair();
+            var config = ConfigManager.Instance;
+            if (ManagedAccess.IsProfile(config.EffectiveProxy) && !ManagedAccess.HasActiveDevice()) {
+                _antigravityReport.Text = "Профиль Dagami ожидает привязки. Откройте вкладку «Подключение» и подтвердите устройство в Telegram.";
                 return;
             }
-            if (!SaveNativeSettings()) return; int port = _bridgePort;
-            string service = _probeService == null ? "Antigravity" : _probeService.Text;
-            _nativeBusy = true; SetNativeButtonsEnabled(false); _nativeStatus.Text = "Проверка TLS и доступности маршрута через Dagami…";
-            if (_primaryAppAction != null) _primaryAppAction.Text = "Проверка…";
+            int port = _bridgePort;
+            if (port <= 0) {
+                _antigravityReport.Text = "Локальный мост не запущен. Проверьте общий маршрут на вкладке «Подключение» и сообщения в журнале.";
+                return;
+            }
+            string service = _probeService.Text;
+            _nativeBusy = true;
+            SetNativeButtonsEnabled(false);
+            _probeService.Enabled = false;
+            _antigravityReport.Text = "Проверяем общий маршрут на сервисе " + service + "…";
             System.Threading.ThreadPool.QueueUserWorkItem(o => {
                 var probe = ConnectionDiagnostics.CheckService(port, service);
                 try { BeginInvoke(new Action(() => {
                     _nativeBusy = false; SetNativeButtonsEnabled(true);
-                    _proxyCheckFailed = !probe.Available;
-                    _proxyCheckMessage = probe.Message;
-                    if (_appFeedback != null) _appFeedback.Text = _proxyCheckMessage;
-                    Logger.Log((probe.Available ? "[✓] " : "[-] ") + probe.Message); UpdateNativeStatus();
+                    _probeService.Enabled = true;
+                    _antigravityReport.Text = service + "\r\n\r\n" + probe.Message;
+                    Logger.Log((probe.Available ? "[✓] " : "[-] ") + probe.Message);
                 })); } catch (InvalidOperationException) { }
             });
         }
 
         private void OpenCommunityLink(string address)
         {
-            System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(address) { UseShellExecute = true });
+            try {
+                using (System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(address) { UseShellExecute = true })) { }
+            } catch (System.ComponentModel.Win32Exception) {
+                MessageBox.Show(this, "Не удалось открыть ссылку в браузере.\r\n" + address, "Dagami Agent Proxy",
+                    MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            }
         }
     }
 }

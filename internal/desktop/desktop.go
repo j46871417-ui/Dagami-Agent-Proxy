@@ -196,7 +196,7 @@ func (d *desktop) appEditor(app portable.App) {
 }
 
 func (d *desktop) profiles(snapshot portable.Snapshot) {
-	v := view{title: "Подключение", detail: "Выберите маршрут или добавьте HTTP-, HTTPS- или SOCKS5-прокси."}
+	v := view{title: "Общий маршрут", detail: "Активный профиль применяется ко всем совместимым приложениям при запуске через Dagami."}
 	for i, profile := range snapshot.State.Profiles {
 		label := profile.Name
 		if profile.ID == snapshot.State.Active {
@@ -245,36 +245,74 @@ func (d *desktop) managedPair() {
 	if endpoint == "" {
 		endpoint = os.Getenv("DAGAMI_MANAGED_URL")
 	}
+	d.showManagedPair(endpoint, "Откройте Telegram, подтвердите устройство и вернитесь для проверки. Код действует 10 минут.", "")
+}
+
+func (d *desktop) showManagedPair(endpoint, detail, link string) {
 	activate := func(start bool) func(int, []string) {
 		return func(_ int, values []string) {
-			d.run("Привязка Dagami", func() (string, error) {
-				result, err := d.controller.ActivateManaged(d.ctx, strings.TrimSpace(values[0]), start)
-				if err != nil {
-					return "", err
+			address := strings.TrimSpace(values[0])
+			if d.preview {
+				d.showManagedPair(address, "Привязка доступна в обычном режиме.", "")
+				return
+			}
+			if address == "" && !start {
+				d.showManagedPair(address, "Укажите HTTPS-адрес шлюза Dagami для проверки привязки.", "")
+				return
+			}
+			progress := "Проверяем привязку устройства…"
+			if start {
+				progress = "Открываем Telegram…"
+				if address != "" {
+					progress = "Запрашиваем код привязки у шлюза…"
 				}
-				if result.Active {
-					return "Профиль Dagami · Telegram выбран. Можно запускать приложения.", nil
+			}
+			d.show(view{title: "Привязка Dagami", detail: progress})
+			go func() {
+				status, fallback := d.managedPairStatus(address, start)
+				if d.ctx.Err() == nil {
+					d.post(func() { d.showManagedPair(address, status, fallback) })
 				}
-				if result.Code == "" {
-					return "Подтверждение ещё не получено. Проверьте привязку после подтверждения в боте.", nil
-				}
-				link := managed.BotURL + result.Code
-				if err = openTelegram(link); err != nil {
-					return "Откройте эту ссылку в Telegram:\n" + link, nil
-				}
-				return "Подтвердите привязку в Telegram. Код устройства заканчивается на " + result.Code[len(result.Code)-6:] + ". Затем нажмите «Проверить привязку».", nil
-			})
+			}()
 		}
 	}
-	d.showPage(view{title: "Dagami через бота", detail: "Подтвердите устройство в Telegram. Код действует 10 минут.",
-		fields: []field{{label: "HTTPS-адрес шлюза Dagami", value: endpoint}}, actions: []button{
-			{"Открыть Telegram", activate(true)}, {"Проверить привязку", activate(false)}, action("Назад", d.render),
-		}})
+	fields := []field{{label: "HTTPS-адрес шлюза Dagami", value: endpoint}}
+	if link != "" {
+		fields = append(fields, field{label: "Ссылка для копирования", value: link})
+	}
+	d.showPage(view{title: "Dagami через бота", detail: detail, fields: fields, actions: []button{
+		{"Открыть Telegram", activate(true)}, {"Проверить привязку", activate(false)}, action("Назад", d.render),
+	}})
+}
+
+func (d *desktop) managedPairStatus(address string, start bool) (string, string) {
+	link := managed.BotChat
+	detail := "Чат Telegram открыт. Для кода привязки укажите HTTPS-адрес шлюза Dagami."
+	if address != "" {
+		result, err := d.controller.ActivateManaged(d.ctx, address, start)
+		if err != nil {
+			return portable.Redact(err.Error()), ""
+		}
+		if result.Active {
+			return "Привязка подтверждена. Профиль Dagami выбран для всех запусков через мост.", ""
+		}
+		if !start {
+			return "Подтверждение ещё не получено. Подтвердите устройство в боте и повторите проверку.", ""
+		}
+		link = managed.BotURL + result.Code
+		detail = "Подтвердите устройство с окончанием кода " + result.Code[len(result.Code)-6:] + " в Telegram и повторите проверку."
+	}
+	if d.ctx.Err() == nil {
+		if err := openTelegram(link); err != nil {
+			return "Скопируйте ссылку и откройте её в браузере.", link
+		}
+	}
+	return detail, ""
 }
 
 func (d *desktop) probe() {
 	ids := []string{"antigravity", "gemini", "cursor", "codex", "claude"}
-	d.showPage(view{title: "Проверка связи", detail: "TLS и HTTP через активный профиль. Без запросов к модели.", items: []string{"Antigravity", "Gemini", "Cursor", "Codex", "Claude"},
+	d.showPage(view{title: "Проверка общего маршрута", detail: "Выберите сервис для тестового запроса через активный профиль.", items: []string{"Antigravity", "Gemini", "Cursor", "Codex", "Claude"},
 		actions: []button{{"Проверить", func(i int, _ []string) {
 			if i < 0 || i >= len(ids) {
 				return

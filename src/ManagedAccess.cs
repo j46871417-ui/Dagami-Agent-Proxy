@@ -13,7 +13,8 @@ using System.Drawing;
 namespace DevProxyApp {
  public sealed class ManagedAccess {
   public const string Profile = "Dagami (Telegram)";
-  public const string BotLink = "https://t.me/bright26bot?start=dagami_";
+  public const string BotChat = "https://t.me/bright26bot";
+  public const string BotLink = BotChat + "?start=dagami_";
   static readonly byte[] Entropy=Encoding.UTF8.GetBytes("Dagami.Managed.Device.v1");
   static readonly Regex PairCode=new Regex(@"^[A-Za-z0-9_-]{43}$");
   static readonly string Folder=Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),"devproxy");
@@ -79,11 +80,18 @@ namespace DevProxyApp {
   public static ManagedAccess Pair(Uri endpoint,bool start) {
    var existing=Load(Pending);
    if(existing!=null&&existing.Endpoint.Equals(endpoint))return existing;
-   if(!start)throw new InvalidOperationException("Сначала начните привязку этого шлюза.");
    var device=Load(Active);
+   if(!start) {
+    if(device!=null&&device.Endpoint.Equals(endpoint))return device;
+    throw new InvalidOperationException("Сначала нажмите «Открыть Telegram» для этого шлюза.");
+   }
    if(device==null||!device.Endpoint.Equals(endpoint))device=new ManagedAccess(endpoint,Convert.FromBase64String(CreateKey()));
    Write(Pending,device.Protect());
    return device;
+  }
+  public bool IsCurrentDevice() {
+   var active=Load(Active);
+   return active!=null&&active.Endpoint.Equals(Endpoint)&&Convert.ToBase64String(active.privateKey)==Convert.ToBase64String(privateKey);
   }
   public Result Request(bool start) {
    string method=start?"POST":"GET",path=start?"/v1/pair":"/v1/status";
@@ -112,40 +120,115 @@ namespace DevProxyApp {
  }
 
  internal sealed class ManagedPairDialog : Form {
-  readonly TextBox endpoint=new TextBox{Dock=DockStyle.Top,AccessibleName="HTTPS-адрес шлюза Dagami"};
-  readonly Label status=new Label{Dock=DockStyle.Fill,AutoSize=false};
-  readonly FluentButton start=new FluentButton{Text="Открыть Telegram",AutoSize=true,Primary=true};
-  readonly FluentButton check=new FluentButton{Text="Проверить привязку",AutoSize=true};
-  public ManagedAccess Device {get;private set;}
+  readonly TextBox endpoint = new TextBox { Name="ManagedGatewayEndpoint", Dock=DockStyle.Fill, AccessibleName="HTTPS-адрес шлюза Dagami" };
+  readonly TextBox status = new TextBox { Name="ManagedPairStatus", Dock=DockStyle.Fill, ReadOnly=true,
+   Multiline=true, ScrollBars=ScrollBars.Vertical, BorderStyle=BorderStyle.None, AccessibleName="Результат проверки привязки", Margin=new Padding(3,8,3,3) };
+  readonly LinkLabel bot = new LinkLabel { AutoSize=true, Text="Открыть чат @bright26bot", LinkColor=FluentTheme.Accent };
+  readonly FluentButton start = new FluentButton { Name="OpenTelegramButton", Text="Открыть Telegram", AutoSize=true, Primary=true };
+  readonly FluentButton check = new FluentButton { Name="CheckManagedPairButton", Text="Проверить привязку", AutoSize=true };
+  readonly Func<Uri,bool,Task<Tuple<ManagedAccess,ManagedAccess.Result>>> request;
+  readonly Action<string> openLink;
+  string botAddress = ManagedAccess.BotChat;
+  public ManagedAccess Device { get; private set; }
 
-  public ManagedPairDialog() {
-   Text="Dagami через бота";StartPosition=FormStartPosition.CenterParent;MinimumSize=new Size(570,260);Size=new Size(570,260);
-   Padding=new Padding(18);Font=new Font("Segoe UI",10);FormBorderStyle=FormBorderStyle.FixedDialog;MaximizeBox=false;MinimizeBox=false;
-   endpoint.Text=ManagedAccess.CurrentEndpoint();
-   var caption=new Label{Text="HTTPS-адрес шлюза Dagami",Dock=DockStyle.Top,Height=25};
-   var actions=new FlowLayoutPanel{Dock=DockStyle.Bottom,Height=43,WrapContents=false};
-   var cancel=new FluentButton{Text="Закрыть",AutoSize=true,DialogResult=DialogResult.Cancel};CancelButton=cancel;
-   actions.Controls.Add(start);actions.Controls.Add(check);actions.Controls.Add(cancel);
-   status.Padding=new Padding(0,14,0,0);status.Text="Подтвердите привязку устройства в Telegram, затем проверьте её здесь. Код действует 10 минут.";
-   Controls.Add(status);Controls.Add(actions);Controls.Add(endpoint);Controls.Add(caption);
-   start.Click+=async(s,e)=>await Pair(true);
-   check.Click+=async(s,e)=>await Pair(false);
+  public ManagedPairDialog(bool checkOnOpen) : this(ManagedAccess.CurrentEndpoint(), checkOnOpen,
+   (address,begin) => Task.Run(() => {
+    var device = ManagedAccess.Pair(address,begin);
+    return Tuple.Create(device,device.Request(begin));
+   }),
+   address => { using (Process.Start(new ProcessStartInfo(address) { UseShellExecute=true })) { } }) { }
+
+  internal ManagedPairDialog(string address, bool checkOnOpen,
+   Func<Uri,bool,Task<Tuple<ManagedAccess,ManagedAccess.Result>>> request, Action<string> openLink) {
+   this.request = request;
+   this.openLink = openLink;
+   Text = "Привязка Dagami через Telegram";
+   StartPosition = FormStartPosition.CenterParent;
+   FormBorderStyle = FormBorderStyle.FixedDialog;
+   MaximizeBox = MinimizeBox = ShowInTaskbar = false;
+   Font = new Font("Segoe UI", 10);
+   AutoScaleMode = AutoScaleMode.Dpi;
+   ClientSize = new Size(550, 258);
+   Padding = new Padding(18);
+   endpoint.Text = address;
+   status.Text = string.IsNullOrWhiteSpace(address)
+    ? "Укажите HTTPS-адрес шлюза Dagami для привязки. Чат бота можно открыть и без адреса."
+    : "Откройте Telegram, подтвердите устройство в боте и вернитесь для проверки. Код действует 10 минут.";
+
+   var rows = new FluentLayout { Dock=DockStyle.Fill, ColumnCount=1, RowCount=5 };
+   rows.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,100));
+   rows.RowStyles.Add(new RowStyle(SizeType.Absolute,24));
+   rows.RowStyles.Add(new RowStyle(SizeType.Absolute,32));
+   rows.RowStyles.Add(new RowStyle(SizeType.Percent,100));
+   rows.RowStyles.Add(new RowStyle(SizeType.Absolute,28));
+   rows.RowStyles.Add(new RowStyle(SizeType.Absolute,42));
+   rows.Controls.Add(new Label { Text="HTTPS-адрес шлюза Dagami", AutoSize=true },0,0);
+   rows.Controls.Add(endpoint,0,1);
+   rows.Controls.Add(status,0,2);
+   rows.Controls.Add(bot,0,3);
+   var actions = new FlowLayoutPanel { Dock=DockStyle.Fill, WrapContents=false, Margin=Padding.Empty };
+   var cancel = new FluentButton { Text="Закрыть", AutoSize=true, DialogResult=DialogResult.Cancel };
+   actions.Controls.AddRange(new Control[] { start, check, cancel });
+   rows.Controls.Add(actions,0,4);
+   Controls.Add(rows);
+   CancelButton = cancel;
+   start.Click += async (s,e) => await Pair(true);
+   check.Click += async (s,e) => await Pair(false);
+   bot.LinkClicked += (s,e) => OpenBot();
+   endpoint.TextChanged += (s,e) => {
+    botAddress = ManagedAccess.BotChat;
+    bot.Text = "Открыть чат @bright26bot";
+   };
+   if(checkOnOpen) Shown += async (s,e) => await Pair(false);
   }
-  async Task Pair(bool begin) {
-   start.Enabled=check.Enabled=endpoint.Enabled=false;
-   status.Text="Связь со шлюзом…";
+
+  bool OpenBot() {
    try {
-    Uri address=ManagedAccess.ParseEndpoint(endpoint.Text);
-    var pending=await Task.Run(()=>{var device=ManagedAccess.Pair(address,begin);return Tuple.Create(device,device.Request(begin));});
-    if(IsDisposed)return;
-    if(pending.Item2.active) {Device=pending.Item1;DialogResult=DialogResult.OK;Close();return;}
-    string code=pending.Item2.code;
-    if(!string.IsNullOrEmpty(code)) {
-     status.Text="В Telegram подтвердите устройство с окончанием кода "+code.Substring(code.Length-6)+". Затем нажмите «Проверить привязку».";
-     Process.Start(new ProcessStartInfo(ManagedAccess.BotLink+code){UseShellExecute=true});
-    } else status.Text="Подтверждение ещё не получено. Проверьте привязку после подтверждения в боте.";
-   } catch(Exception error) {if(!IsDisposed)status.Text="Привязка не завершена. "+error.Message;}
-   finally {if(!IsDisposed)start.Enabled=check.Enabled=endpoint.Enabled=true;}
+    openLink(botAddress);
+    return true;
+   } catch (System.ComponentModel.Win32Exception) {
+    status.Text = "Не удалось открыть Telegram. Скопируйте ссылку и откройте её в браузере.\r\n" + botAddress;
+    return false;
+   }
+  }
+
+  async Task Pair(bool begin) {
+   if(!start.Enabled)return;
+   if(string.IsNullOrWhiteSpace(endpoint.Text)) {
+    if(begin) {
+     if(OpenBot()) status.Text = "Чат Telegram открыт. Чтобы создать код привязки, укажите HTTPS-адрес шлюза Dagami.";
+    } else status.Text = "Укажите HTTPS-адрес шлюза Dagami для проверки привязки.";
+    endpoint.Focus();
+    return;
+   }
+   start.Enabled = check.Enabled = endpoint.Enabled = false;
+   status.Text = begin ? "Запрашиваем код привязки у шлюза…" : "Проверяем привязку устройства…";
+   try {
+    var pending = await request(ManagedAccess.ParseEndpoint(endpoint.Text), begin);
+    if(IsDisposed || Disposing || !Visible)return;
+    if(pending.Item2.active) {
+     Device = pending.Item1;
+     DialogResult = DialogResult.OK;
+     Close();
+     return;
+    }
+    if(begin) {
+     string code = pending.Item2.code;
+     botAddress = ManagedAccess.BotLink + code;
+     bot.Text = "Снова открыть ссылку привязки";
+     if(OpenBot()) status.Text = "Подтвердите в Telegram устройство с окончанием кода " + code.Substring(code.Length-6) + ". Затем нажмите «Проверить привязку».";
+    } else status.Text = "Подтверждение ещё не получено. Подтвердите устройство в боте и повторите проверку.";
+   } catch(WebException error) {
+    using(var response = error.Response as HttpWebResponse) {
+     if(!IsDisposed && Visible) status.Text = response == null
+      ? "Не удалось связаться со шлюзом Dagami. Проверьте адрес и подключение.\r\n" + error.Message
+      : "Шлюз Dagami ответил HTTP " + (int)response.StatusCode + ". Проверьте адрес шлюза и попробуйте ещё раз.";
+    }
+   } catch(Exception error) {
+    if(!IsDisposed && Visible) status.Text = "Привязка не завершена. " + error.Message;
+   } finally {
+    if(!IsDisposed && !Disposing) start.Enabled = check.Enabled = endpoint.Enabled = true;
+   }
   }
  }
 }

@@ -1,5 +1,11 @@
 # Changelog
 
+- Show pairing progress and gateway errors where the Telegram actions are used.
+  Move service probes to Diagnostics and keep one shared application route.
+- Keep the pairing actions visible after opening Telegram in the portable client.
+- Batch connection layout changes and keep application list labels consistent
+  when switching tabs and selecting rows.
+
 - Default to the device-bound Dagami proxy for a new installation and remove
   the legacy Basic authentication path from the managed server adapter.
 - Show the Windows window before discovering applications. Move shortcut and

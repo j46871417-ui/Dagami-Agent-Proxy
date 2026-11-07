@@ -12,25 +12,34 @@ namespace DevProxyApp
 
         private Panel BuildAntigravityPage()
         {
-            var page = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 3, BackColor = FluentTheme.Background };
+            var page = new FluentLayout { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 3, BackColor = FluentTheme.Background };
             page.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
-            page.RowStyles.Add(new RowStyle(SizeType.Absolute, 136));
+            page.RowStyles.Add(new RowStyle(SizeType.Absolute, 146));
             page.RowStyles.Add(new RowStyle(SizeType.Absolute, 60));
             page.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
-            var card = new FluentCard { Dock = DockStyle.Fill };
+            var card = new FluentCard { Dock = DockStyle.Fill, Padding = new Padding(16, 12, 16, 12), Margin = new Padding(0, 0, 0, 8) };
             var body = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 3, BackColor = FluentTheme.Surface };
             body.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
-            body.Controls.Add(FluentLabel("Патчинг и проверка Antigravity / agy CLI", 15, true), 0, 0);
+            body.Controls.Add(FluentLabel("Проверка общего маршрута", 15, true), 0, 0);
             _prepareAntigravity = new CheckBox { Text = "Подготавливать совместимые версии Antigravity", AutoSize = true, Checked = ConfigManager.Instance.PrepareAntigravityClient };
 
             body.Controls.Add(new Label { Dock = DockStyle.Fill, ForeColor = FluentTheme.Muted,
-                Text = "Проверка разделяет ошибки прокси, DNS и сертификата. Она не входит в аккаунт и не отправляет запрос модели. Вход завершите в IDE." }, 0, 2);
-            body.RowStyles.Add(new RowStyle(SizeType.Absolute, 34)); body.RowStyles.Add(new RowStyle(SizeType.Absolute, 0)); body.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+                Text = "Выбор сервиса задаёт адрес тестового запроса. Общий маршрут для приложений сохраняется." }, 0, 1);
+            var routeActions = new FlowLayoutPanel { Dock=DockStyle.Fill, WrapContents=false, Margin=Padding.Empty };
+            _probeService = new ComboBox { Name="ProbeServicePicker", Width=132, DropDownStyle=ComboBoxStyle.DropDownList,
+                AccessibleName="Сервис для проверки общего маршрута", Margin=new Padding(3,6,8,0) };
+            _probeService.Items.AddRange(new object[] { "Antigravity", "Gemini", "Cursor", "Codex", "Claude" });
+            _probeService.SelectedIndex = 0;
+            PreventAccidentalScroll(_probeService);
+            routeActions.Controls.Add(_probeService);
+            AddNativeButton(routeActions, "Проверить маршрут", CheckFluentProxy);
+            ((FluentButton)_nativeButtons[_nativeButtons.Count - 1]).Primary = true;
+            body.Controls.Add(routeActions, 0, 2);
+            body.RowStyles.Add(new RowStyle(SizeType.Absolute, 30)); body.RowStyles.Add(new RowStyle(SizeType.Absolute, 36)); body.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
             card.Controls.Add(body); page.Controls.Add(card, 0, 0);
             var actions = new FlowLayoutPanel { Dock = DockStyle.Fill, WrapContents = false, AutoScroll = true };
-            AddNativeButton(actions, "Вход через прокси", OpenAntigravityLogin);
-            AddNativeButton(actions, "Проверить", () => RunAntigravityOperation("diagnose"));
-            ((FluentButton)_nativeButtons[_nativeButtons.Count - 1]).Primary = true;
+            AddNativeButton(actions, "Вход в Antigravity", OpenAntigravityLogin);
+            AddNativeButton(actions, "Проверить Antigravity", () => RunAntigravityOperation("diagnose"));
             page.Controls.Add(actions, 0, 1);
             var reportCard = new FluentCard { Dock = DockStyle.Fill };
             _antigravityReport = new TextBox { Dock = DockStyle.Fill, Multiline = true, ReadOnly = true, WordWrap = true,
@@ -43,6 +52,10 @@ namespace DevProxyApp
 
         private void RunAntigravityOperation(string operation)
         {
+            if (operation == "diagnose" && _bridgePort <= 0) {
+                _antigravityReport.Text = "Для проверки Antigravity нужен активный маршрут. Откройте вкладку «Подключение».";
+                return;
+            }
             AppTarget target = _targetList.SelectedItems.Count > 0 ? _targetList.SelectedItems[0].Tag as AppTarget : null;
             if (operation != "diagnose" && (target == null || !target.IsInstalled || !AntigravityIntegration.Supports(target.ExePath)))
                 throw new InvalidOperationException("Выберите Antigravity или agy в списке приложений.");
@@ -51,7 +64,6 @@ namespace DevProxyApp
             if (target == null) throw new InvalidOperationException("Antigravity не найден. Добавьте Antigravity.exe, Antigravity IDE.exe или agy.exe в список приложений.");
             if (operation == "restore" && MessageBox.Show(this, "Вернуть оригинальный backend выбранного клиента из резервной копии? Если IDE использует общий agy, изменение затронет и CLI.",
                 "Отмена подготовки", MessageBoxButtons.YesNo, MessageBoxIcon.Warning, MessageBoxDefaultButton.Button2) != DialogResult.Yes) return;
-            if (operation == "diagnose" && !SaveNativeSettings()) return;
             _nativeBusy = true; SetNativeButtonsEnabled(false);
             _antigravityReport.Text = "Выполняется проверка…";
             int bridgePort = _bridgePort;

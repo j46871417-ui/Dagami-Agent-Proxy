@@ -1,6 +1,25 @@
 package desktop
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
+
+type pairingFixtureWindow struct{ current view }
+
+func (w *pairingFixtureWindow) show(v view)    { w.current = v }
+func (w *pairingFixtureWindow) post(fn func()) { fn() }
+
+func TestPairingMissingGatewayKeepsActionsVisible(t *testing.T) {
+	w := &pairingFixtureWindow{}
+	d := &desktop{window: w}
+	d.showManagedPair("", "", "")
+	w.current.actions[1].click(0, []string{""})
+	if !strings.Contains(w.current.detail, "Укажите HTTPS-адрес") || len(w.current.fields) != 1 ||
+		len(w.current.actions) != 3 || w.current.actions[0].label != "Открыть Telegram" {
+		t.Fatalf("missing gateway did not leave a usable pairing form: %+v", w.current)
+	}
+}
 
 func TestWin32WindowUsesNativeControls(t *testing.T) {
 	clicked := false
