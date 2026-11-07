@@ -72,8 +72,8 @@ namespace DevProxyApp {
    ConfigureProcess(start,localProxy);string kind=Kind(target);
    if(kind=="opencode-desktop") {
     string current=start.EnvironmentVariables["WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS"];
-    start.EnvironmentVariables["WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS"]=(current??"")+" "+AppProxyPolicy.ChromiumArguments(localProxy);
-    if(IsElectronDesktop(target))start.Arguments+=" "+AppProxyPolicy.ChromiumArguments(localProxy);
+    start.EnvironmentVariables["WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS"]=AppProxyPolicy.ManagedChromiumArguments(current,localProxy);
+    if(IsElectronDesktop(target))start.Arguments=AppProxyPolicy.ManagedChromiumArguments(start.Arguments,localProxy);
    }
    if(kind=="jetbrains") {
     var uri=new Uri(localProxy);string existing=start.EnvironmentVariables["JAVA_TOOL_OPTIONS"];
@@ -112,7 +112,7 @@ namespace DevProxyApp {
     case "git":return "Патч: отдельная команда dagami-git и HTTP(S)-окружение. Обычный git и глобальный .gitconfig сохраняются; SSH требует своей настройки.";
     case "terminal":return "Патч: ярлык терминала с окружением прокси для дочерних команд. Системные команды в PATH не заменяются.";
     case "cli":return "Патч: команда CLI в пользовательском PATH и окружение прокси; параметры моделей и авторизации сохраняются.";
-    case "webview":return "Патч: ярлыки и параметры WebView2/Chromium/Qt при запуске.";
+    case "webview":return "Ярлыки и параметры WebView2/Chromium/Qt. При заданном прокси Gemini использует отдельный маршрут только через этот прокси, без Smart DNS. Доступность входа и чата проверяется отдельно.";
     default:return "Только управляемый запуск: ярлык и окружение HTTP(S). Файлы приложения и его настройки не меняются. Если программа игнорирует прокси, этот способ не перенаправит её трафик.";
    }
   }

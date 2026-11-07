@@ -19,6 +19,17 @@ class ConnectionRecoveryChecks {
  static int Main(){
   string root=Path.Combine(Path.GetTempPath(),"Dagami-recovery-"+Guid.NewGuid().ToString("N"));Directory.CreateDirectory(root);
   try {
+   var invalidConfig=Config(Path.Combine(root,"invalidConfig"));
+   File.WriteAllText(Path.Combine(root,"invalidConfig","config.json"),"{\"last_proxy_protected\":\"invalidConfig-base64\",\"use_proxy\":true,\"use_dagami_dns\":false}");
+   invalidConfig.Load();bool refused=false;try{string invalidRoute=invalidConfig.EffectiveProxy;}catch(IOException){refused=true;}
+   Assert(refused&&!string.IsNullOrEmpty(invalidConfig.LastLoadError),"Corrupt config silently selected a direct/auto-detected route");
+   invalidConfig.LastProxy="http://fixture.invalidConfig:8080";Assert(invalidConfig.Save(),invalidConfig.LastSaveError);
+   Assert(invalidConfig.LastLoadError==null&&invalidConfig.EffectiveProxy==invalidConfig.LastProxy,"Explicit save did not recover connection settings");
+   invalidConfig.LastProxy="";refused=false;try{string invalidRoute=invalidConfig.EffectiveProxy;}catch(IOException){refused=true;}
+   Assert(refused,"Enabled empty proxy silently selected direct");invalidConfig.UseProxy=false;Assert(invalidConfig.EffectiveProxy=="direct","Explicit DNS-only mode rejected");
+   Assert(!UpdateInstaller.ShouldRestart(new UpdatePlan{Restart=true,GuiPath="missing-or-untrusted.exe"},false),"Rejected update can restart an unvalidated target");
+   foreach(var mode in new[]{new[]{true,true},new[]{false,false}}){refused=false;try{UpdateInstaller.RequireUserUpdate(mode[0],mode[1]);}catch(IOException){refused=true;}Assert(refused,"Elevated/protected update was allowed");}
+   UpdateInstaller.RequireUserUpdate(false,true);
    var defaults=new ConfigManager();
    Assert(defaults.EffectiveProxy==ManagedAccess.Profile&&!defaults.UseDagamiDns,"A new install must use the Dagami gateway without a Smart DNS bypass");
    int probeCalls=0;

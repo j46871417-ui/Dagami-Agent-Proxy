@@ -5,6 +5,7 @@ using System.IO;
 using System.Text;
 using System.Threading;
 using System.Web.Script.Serialization;
+using System.Security.Principal;
 
 namespace DevProxyApp {
  public sealed class UpdatePlan {
@@ -57,12 +58,24 @@ namespace DevProxyApp {
    if(!File.Exists(runner))throw new IOException("Не найден файл программы для обновления.");
    File.Copy(runner,Path.Combine(plan.Stage,"dagami-update-helper.exe"),true);return file;
   }
-  public static Process StartHelper(UpdatePlan plan,string file){var start=new ProcessStartInfo(Path.Combine(plan.Stage,"dagami-update-helper.exe"),"--update-helper "+NativeShortcuts.Quote(file));if(CanWrite(Path.GetDirectoryName(plan.GuiPath))){start.UseShellExecute=false;start.CreateNoWindow=true;}else{start.UseShellExecute=true;start.Verb="runas";start.WindowStyle=ProcessWindowStyle.Hidden;}return Process.Start(start);}
+  public static void RequireUserUpdate(bool elevated, bool writable) {
+   if(elevated||!writable)throw new IOException("Автообновление выполняется только с обычными правами пользователя. Для защищённого каталога установите скачанное обновление вручную; затем запустите Dagami без прав администратора.");
+  }
+  public static Process StartHelper(UpdatePlan plan,string file){
+   RequireUserUpdate(new WindowsPrincipal(WindowsIdentity.GetCurrent()).IsInRole(WindowsBuiltInRole.Administrator),CanWrite(Path.GetDirectoryName(plan.GuiPath)));
+   return Process.Start(new ProcessStartInfo(Path.Combine(plan.Stage,"dagami-update-helper.exe"),"--update-helper "+NativeShortcuts.Quote(file)){UseShellExecute=false,CreateNoWindow=true});
+  }
   static bool ParentAlive(UpdatePlan plan){try{using(var parent=Process.GetProcessById(plan.ParentId))return !parent.HasExited&&parent.StartTime.ToUniversalTime().Ticks==plan.ParentStartTicks;}catch(ArgumentException){return false;}}
   static void SaveResult(UpdateResult result){NativeUpdates.Atomic(ResultPath,Encoding.UTF8.GetBytes(new JavaScriptSerializer().Serialize(result)));}
+  public static bool ShouldRestart(UpdatePlan plan,bool installed) {
+   if(!installed||plan==null||!plan.Restart)return false;
+   if(plan.Release==null||plan.Release.Gui==null||NativeUpdates.FileHash(plan.GuiPath)!=plan.Release.Gui.Sha256.ToLowerInvariant())throw new IOException("Установленный файл изменился перед запуском.");
+   return true;
+  }
   public static int RunHelper(string planPath){
    UpdatePlan plan=null;bool installed=false;string backup=null;
    try{
+    RequireUserUpdate(new WindowsPrincipal(WindowsIdentity.GetCurrent()).IsInRole(WindowsBuiltInRole.Administrator),true);
     string path=Path.GetFullPath(planPath),prefix=Path.GetFullPath(Path.Combine(NativeUpdates.Root,"staged")).TrimEnd(Path.DirectorySeparatorChar)+Path.DirectorySeparatorChar;
     if(!path.StartsWith(prefix,StringComparison.OrdinalIgnoreCase)||Path.GetFileName(path)!="plan.dat")throw new InvalidDataException("План должен находиться в каталоге загрузки Dagami.");
     plan=NativeUpdates.ReadProtected<UpdatePlan>(path);ValidatePaths(plan);
@@ -77,7 +90,9 @@ namespace DevProxyApp {
     }
     SaveResult(new UpdateResult{Success=true,Message="Установлено "+plan.Release.Tag+". Резервная копия: "+backup,Backup=backup,Utc=DateTime.UtcNow});
    }catch(Exception ex){try{SaveResult(new UpdateResult{Success=false,Message=ex.Message,Backup=backup,Utc=DateTime.UtcNow});}catch{} }
-   if(plan!=null&&plan.Restart&&File.Exists(plan.GuiPath))try{Process.Start(new ProcessStartInfo(plan.GuiPath){UseShellExecute=true,WorkingDirectory=Path.GetDirectoryName(plan.GuiPath)});}catch(Exception ex){try{SaveResult(new UpdateResult{Success=installed,Message=(installed?"Обновление установлено. ":"")+"Автозапуск не удался: "+ex.GetType().Name+". Запустите GUI вручную.",Backup=backup,Utc=DateTime.UtcNow});}catch{}}
+   try{
+    if(ShouldRestart(plan,installed))Process.Start(new ProcessStartInfo(plan.GuiPath){UseShellExecute=false,WorkingDirectory=Path.GetDirectoryName(plan.GuiPath)});
+   }catch(Exception ex){try{SaveResult(new UpdateResult{Success=installed,Message="Обновление установлено. Автозапуск не удался: "+ex.GetType().Name+". Запустите GUI вручную.",Backup=backup,Utc=DateTime.UtcNow});}catch{}}
    return installed?0:1;
   }
  }

@@ -15,7 +15,7 @@ SOURCES = [
     "NativeLaunchBroker.cs", "NativeSessions.cs", "SystemDnsManager.cs", "NativeCli.cs", "Brand.cs",
     "LicenseManager.cs", "AppProxyPolicy.cs", "ApplicationSupport.cs", "JetBrainsProxySettings.cs",
     "ApplicationDiscovery.cs", "NativeCliApps.cs", "BugReports.cs", "NativeUpdates.cs",
-    "UpdateInstaller.cs", "UpdateUi.cs", "NativeStartup.cs",
+    "UpdateInstaller.cs", "UpdateUi.cs", "NativeStartup.cs", "HttpWire.cs", "LoopbackPeer.cs", "SignedLicenses.cs",
 ]
 
 

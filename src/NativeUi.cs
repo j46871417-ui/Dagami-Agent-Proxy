@@ -111,33 +111,42 @@ namespace DevProxyApp
 
         internal static bool IsTargetPatched(AppTarget target)
         {
-            if (target == null || !target.IsInstalled) return false;
+            return TargetPatchState(target) == "ready";
+        }
+
+        internal static string TargetPatchState(AppTarget target)
+        {
+            if (target == null) return "none";
             try {
                 string issue;
                 int count = NativeCliApps.IsCommandTarget(target)
                     ? NativeCliApps.Current.VerifiedCount(target.Id, out issue)
                     : NativeShortcuts.Current.VerifiedCount(target.Id, out issue);
-                if (count > 0 || !string.IsNullOrEmpty(issue)) return true;
-            } catch { }
-            return HasPersistentAppChanges(target);
+                if (!string.IsNullOrEmpty(issue)) return "damaged";
+                if (count > 0) return "ready";
+            } catch { return "damaged"; }
+            try { return HasPersistentAppChanges(target) ? "ready" : "none"; }
+            catch { return "damaged"; }
+        }
+
+        public static string PatchStatusLabel(int records, string issue, bool persistent)
+        {
+            return !string.IsNullOrEmpty(issue) ? "Требует восстановления" :
+                records > 0 || persistent ? "Пропатчено" : "Не пропатчено";
         }
 
         private static bool HasPersistentAppChanges(AppTarget target)
         {
-            try {
-                if (ApplicationSupport.SupportsSettings(target)) {
-                    ApplicationSupport.ResolveSettings(target);
-                    if (!string.IsNullOrEmpty(target.ConfigPath) && File.Exists(target.ConfigPath + ".devproxy.bak"))
-                        return true;
+            if (ApplicationSupport.SupportsSettings(target)) {
+                ApplicationSupport.ResolveSettings(target);
+                if (!string.IsNullOrEmpty(target.ConfigPath) && File.Exists(target.ConfigPath + ".devproxy.bak"))
+                    return true;
+            }
+            if (AntigravityIntegration.Supports(target.ExePath)) {
+                foreach (string backend in AntigravityIntegration.BackendPaths(target.ExePath)) {
+                    if (AntigravityIntegration.HasActivePatchRecord(backend)) return true;
                 }
-            } catch { }
-            try {
-                if (AntigravityIntegration.Supports(target.ExePath)) {
-                    foreach (string backend in AntigravityIntegration.BackendPaths(target.ExePath)) {
-                        if (AntigravityIntegration.HasActivePatchRecord(backend)) return true;
-                    }
-                }
-            } catch { }
+            }
             return false;
         }
 
@@ -436,7 +445,7 @@ namespace DevProxyApp
         {
             if (_primaryAppAction == null || _nativeBusy) return;
             AppTarget target = _targetList.SelectedItems.Count == 0 ? null : (AppTarget)_targetList.SelectedItems[0].Tag;
-            bool configured = HasConfiguredConnection(ConfigManager.Instance.LastProxy, ConfigManager.Instance.UseDagamiDns, ConfigManager.Instance.UseProxy);
+            bool configured = string.IsNullOrEmpty(ConfigManager.Instance.LastLoadError) && HasConfiguredConnection(ConfigManager.Instance.LastProxy, ConfigManager.Instance.UseDagamiDns, ConfigManager.Instance.UseProxy);
             NativeSession session = null;
             bool running = target != null && _nativeSessions.TryGetValue(target.Id, out session) && session.RunningProcess != null;
             _selectedAppHeading.Text = target == null ? "Выберите приложение" : target.DisplayName;
@@ -446,8 +455,9 @@ namespace DevProxyApp
             _moreAppActions.Enabled = target != null;
             bool canPatch = target != null && target.IsInstalled;
             bool hasBinaryPatch = _clientStatusText != null && (_clientStatusText.StartsWith("Патч: применён", StringComparison.OrdinalIgnoreCase) || _clientStatusText.IndexOf("частично", StringComparison.OrdinalIgnoreCase) >= 0 || _clientStatusText.IndexOf("повторная подготовка",StringComparison.OrdinalIgnoreCase)>=0);
-            bool isPatched = target != null && (_shortcutRecords > 0 || _shortcutIssue != null || hasBinaryPatch || _selectedPersistentPatch);
-            bool canUnpatch = isPatched;
+            bool hasPatchRecords = target != null && (_shortcutRecords > 0 || _shortcutIssue != null || hasBinaryPatch || _selectedPersistentPatch);
+            bool isPatched = hasPatchRecords && string.IsNullOrEmpty(_shortcutIssue);
+            bool canUnpatch = hasPatchRecords;
             _patchMenuItem.Visible = true;
             _patchMenuItem.Enabled = canPatch;
             if (_unpatchMenuItem != null) _unpatchMenuItem.Enabled = canUnpatch;
@@ -458,7 +468,7 @@ namespace DevProxyApp
             string state = target == null ? "Выберите приложение" : !target.IsInstalled ? "Не установлено" :
                 running ? "Запущено через Dagami" : "Не запущено через Dagami";
             if (target != null && _targetList != null && _targetList.SelectedItems.Count > 0 && _targetList.SelectedItems[0].SubItems.Count > 1) {
-                string listStatus = !target.IsInstalled ? "Не найдено" : (isPatched ? "Настроено" : "Готово к запуску");
+                string listStatus = !target.IsInstalled ? "Не найдено" : !string.IsNullOrEmpty(_shortcutIssue) ? "Требует восстановления" : (isPatched ? "Настроено" : "Готово к запуску");
                 if (_targetList.SelectedItems[0].SubItems[1].Text != listStatus) _targetList.SelectedItems[0].SubItems[1].Text = listStatus;
             }
             _targetDetails.Text = state;
@@ -469,7 +479,7 @@ namespace DevProxyApp
             bool cli=NativeCliApps.IsCommandTarget(target);
 
             if (target != null && target.IsInstalled) {
-                _shortcutState.Text = isPatched ? ((_shortcutRecords > 0 && _shortcutIssue == null) ? "Статус: ПРОПАТЧЕНО · " + (cli ? "команда настроена через прокси" : "ярлыки настроены через прокси") : "Статус: Частичный патч · Требуется обновить " + (cli ? "команду" : "ярлыки")) : "Статус: НЕ ПРОПАТЧЕНО · " + (cli ? "прямой запуск команды" : "обычные ярлыки напрямую");
+                _shortcutState.Text = !string.IsNullOrEmpty(_shortcutIssue) ? "Требует восстановления · " + _shortcutIssue : isPatched ? ((_shortcutRecords > 0 && _shortcutIssue == null) ? "Статус: ПРОПАТЧЕНО · " + (cli ? "команда настроена через прокси" : "ярлыки настроены через прокси") : "Статус: Частичный патч · Требуется обновить " + (cli ? "команду" : "ярлыки")) : "Статус: НЕ ПРОПАТЧЕНО · " + (cli ? "прямой запуск команды" : "обычные ярлыки напрямую");
             } else { _shortcutState.Text = "Статус: не установлено"; }
 
 
@@ -584,14 +594,28 @@ namespace DevProxyApp
             BeginInvoke(new Action(() => {
                 _nativeColumnsPending = false;
                 if (_targetList.IsDisposed) return;
-                _targetList.Columns[0].Width=Math.Max(180,_targetList.ClientSize.Width-140);
-                _targetList.Columns[1].Width=130;_targetList.Columns[2].Width=0;
+                int statusWidth = Math.Max(130, TextRenderer.MeasureText("Требует восстановления", _targetList.Font).Width + 20);
+                _targetList.Columns[0].Width=Math.Max(180,_targetList.ClientSize.Width-statusWidth-10);
+                _targetList.Columns[1].Width=statusWidth;_targetList.Columns[2].Width=0;
             }));
         }
 
         private bool _targetScanRunning, _targetScanAgain, _startupStatusLoaded;
         private string _targetSelectionAfterScan;
+        private HashSet<string> _damagedTargets = new HashSet<string>();
         private Dictionary<string, Bitmap> _nativeAppIcons = new Dictionary<string, Bitmap>(StringComparer.OrdinalIgnoreCase);
+
+        private static HashSet<string> FindPatchedTargets(List<AppTarget> targets, out HashSet<string> damaged)
+        {
+            var ready = new HashSet<string>();
+            damaged = new HashSet<string>();
+            foreach (var target in targets) {
+                string state = TargetPatchState(target);
+                if (state == "ready") ready.Add(target.Id);
+                else if (state == "damaged") damaged.Add(target.Id);
+            }
+            return ready;
+        }
 
         private static Dictionary<string, Bitmap> LoadNativeAppIcons(List<AppTarget> targets)
         {
@@ -626,7 +650,8 @@ namespace DevProxyApp
             if (_targetScanRunning) { _targetScanAgain = true; return; }
             if (_preview) {
                 var targets = ProxyEngine.ScanAllTargets();
-                RenderNativeTargets(targets, new HashSet<string>(targets.FindAll(IsTargetPatched).ConvertAll(target => target.Id)), LoadNativeAppIcons(targets));
+                var patched = FindPatchedTargets(targets, out _damagedTargets);
+                RenderNativeTargets(targets, patched, LoadNativeAppIcons(targets));
                 return;
             }
             _targetScanRunning = true;
@@ -638,10 +663,11 @@ namespace DevProxyApp
             var worker = new System.Threading.Thread(() => {
                 List<AppTarget> targets = null;
                 HashSet<string> patched = null;
+                HashSet<string> damaged = null;
                 Dictionary<string, Bitmap> icons = null;
                 try {
                     targets = ProxyEngine.ScanAllTargets(custom);
-                    patched = new HashSet<string>(targets.FindAll(IsTargetPatched).ConvertAll(target => target.Id));
+                    patched = FindPatchedTargets(targets, out damaged);
                     icons = LoadNativeAppIcons(targets);
                 } catch (Exception error) { Logger.Log("[Detect] " + error.GetType().Name); }
                 try { BeginInvoke(new Action(() => {
@@ -650,7 +676,10 @@ namespace DevProxyApp
                         DisposeNativeAppIcons(icons);
                         _targetScanAgain = false;
                         RefreshNativeTargets();
-                    } else if (patched != null) RenderNativeTargets(targets, patched, icons);
+                    } else if (patched != null) {
+                        _damagedTargets = damaged;
+                        RenderNativeTargets(targets, patched, icons);
+                    }
                     else { UpdateNativeStatus(); _nativeStatus.Text = "Не удалось найти приложения. Повторите поиск через «Добавить»."; }
                 })); } catch (InvalidOperationException) { DisposeNativeAppIcons(icons); }
             });
@@ -672,7 +701,7 @@ namespace DevProxyApp
                 _targetList.Items.Clear();
                 foreach (AppTarget target in _cachedTargets) {
                     var item = new ListViewItem(target.DisplayName) { Tag = target };
-                    item.SubItems.Add(!target.IsInstalled ? "Не найдено" : (patched.Contains(target.Id) ? "Настроено" : "Готово к запуску"));
+                    item.SubItems.Add(!target.IsInstalled ? "Не найдено" : _damagedTargets.Contains(target.Id) ? "Требует восстановления" : (patched.Contains(target.Id) ? "Настроено" : "Готово к запуску"));
                     item.SubItems.Add(target.ExePath ?? "");
                     item.ToolTipText = (target.ExePath ?? target.DisplayName)+"\r\n"+ApplicationSupport.Describe(target);
                     item.Checked = ConfigManager.Instance.CheckedIds.Contains(target.Id);
@@ -699,7 +728,8 @@ namespace DevProxyApp
                 AppTarget target = (AppTarget)_targetList.SelectedItems[0].Tag;
                 try { _shortcutRecords = NativeCliApps.IsCommandTarget(target)?NativeCliApps.Current.VerifiedCount(target.Id,out _shortcutIssue):NativeShortcuts.Current.VerifiedCount(target.Id, out _shortcutIssue); }
                 catch (Exception) { _shortcutIssue = "Не удалось прочитать настройки ярлыков. Откройте журнал для проверки."; }
-                _selectedPersistentPatch=target.IsInstalled&&_shortcutRecords==0&&_shortcutIssue==null&&HasPersistentAppChanges(target);
+                try { _selectedPersistentPatch=target.IsInstalled&&_shortcutRecords==0&&_shortcutIssue==null&&HasPersistentAppChanges(target); }
+                catch { _shortcutIssue="Не удалось прочитать состояние настройки приложения."; }
             }
             QueueClientStatus();
             UpdateAppActionState();
@@ -715,12 +745,13 @@ namespace DevProxyApp
             SyncRouteCheckboxes();
             if (_connectionSummary != null) {
                 var config = ConfigManager.Instance;
-                bool managed = ManagedAccess.IsProfile(config.EffectiveProxy);
+                bool managed = config.UseProxy && ManagedAccess.IsProfile(config.LastProxy);
                 bool paired = ManagedAccess.HasActiveDevice();
                 bool needsPairing = managed && !paired;
                 string route = managed ? "Прокси Dagami" : config.UseProxy && !IsDirectProxyValue(config.LastProxy)
                     ? "Свой прокси" : config.UseDagamiDns ? "Smart DNS" : "Системный маршрут / VPN";
                 string routeState = route + (needsPairing ? " · ожидает привязки в Telegram" : _bridgePort > 0 ? " · мост запущен" : "");
+                if (!string.IsNullOrEmpty(config.LastLoadError)) routeState = "Не удалось загрузить настройки. Сохраните подключение заново.";
                 _connectionSummary.Text = routeState + " · для всех запусков через Dagami";
                 if (_connectionRouteStatus != null) _connectionRouteStatus.Text = routeState;
                 if (_managedRouteAction != null) _managedRouteAction.Text = paired && !managed ? "Использовать Dagami" : "Подключить по ключу";
@@ -788,7 +819,7 @@ namespace DevProxyApp
             if (!target.IsCustom) throw new InvalidOperationException("Из списка можно удалить только добавленные вручную приложения.");
             NativeSession active;
             if(_nativeSessions.TryGetValue(target.Id,out active)&&active.RunningProcess!=null)throw new InvalidOperationException("Сначала остановите приложение через «Действия → Остановить».");
-            if(IsTargetPatched(target))throw new InvalidOperationException("Сначала нажмите «Отменить патч». Удаление записи не должно оставлять управляемые ярлыки или команду CLI без возможности отката.");
+            if(TargetPatchState(target)!="none")throw new InvalidOperationException("Сначала нажмите «Отменить патч». Удаление записи не должно оставлять управляемые ярлыки или команду CLI без возможности отката.");
             int position=ConfigManager.Instance.CustomTargets.IndexOf(target);
             bool wasChecked=ConfigManager.Instance.CheckedIds.Remove(target.Id);
             ConfigManager.Instance.CustomTargets.Remove(target);

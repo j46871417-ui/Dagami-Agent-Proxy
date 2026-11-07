@@ -31,6 +31,16 @@ class GoogleGeminiChecks {
    Assert(!start.Arguments.Contains("--user-data-dir"),"Account profile was changed");
    Assert(start.EnvironmentVariables["WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS"].Contains("--existing-webview-flag"),"Existing WebView arguments lost");
    Assert(start.EnvironmentVariables["QTWEBENGINE_CHROMIUM_FLAGS"].Contains("--disable-quic"),"Qt proxy flags missing");
+   start.Arguments="--no-proxy-server --proxy-server old.invalid:80 --title \"literal --no-proxy-server\"";
+   start.EnvironmentVariables["WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS"]="--no-proxy-server --proxy-pac-url=http://old.invalid/ --existing-webview-flag";
+   start.EnvironmentVariables["QTWEBENGINE_CHROMIUM_FLAGS"]="--proxy-auto-detect --proxy-bypass-list *";
+   AppProxyPolicy.ConfigureGemini(start,"http://127.0.0.1:43210");
+   var managed=NativeCliApps.SplitArguments(start.Arguments);
+   Assert(!Array.Exists(managed,x=>x=="--no-proxy-server"||x.Contains("old.invalid")),"Conflicting command route survived");
+   Assert(Array.Exists(managed,x=>x=="literal --no-proxy-server"),"Non-routing quoted argument was corrupted");
+   Assert(!start.EnvironmentVariables["WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS"].Contains("--no-proxy-server")&&!start.EnvironmentVariables["WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS"].Contains("--proxy-pac-url"),"WebView bypass survived");
+   Assert(!start.EnvironmentVariables["QTWEBENGINE_CHROMIUM_FLAGS"].Contains("--proxy-auto-detect"),"Qt bypass survived");
+   string stable=start.Arguments;AppProxyPolicy.ConfigureGemini(start,"http://127.0.0.1:43210");Assert(stable==start.Arguments,"Managed browser arguments not idempotent");
    bool rejected=false;try{AppProxyPolicy.ChromiumArguments("http://user:password@remote.invalid:80");}catch(ArgumentException){rejected=true;}Assert(rejected,"Remote/authenticated bridge accepted");
    string signal=Path.Combine(temp,"go"),pidFile=Path.Combine(temp,"pid");
    using(var session=new NativeSession()){

@@ -55,7 +55,7 @@ namespace DevProxyApp {
                 DnsProviders.Initialize(null,false);
                 var config=ConfigManager.Instance;Uri proxy;var pool=DnsProviders.ForServer(config.DnsHost);
                 bool configured=ManagedAccess.IsProfile(config.LastProxy)?ManagedAccess.HasActiveDevice():UpstreamProxyDiagnostics.TryParse(config.LastProxy,out proxy);
-                Console.WriteLine(new JavaScriptSerializer().Serialize(new{version=Brand.Version,proxyConfigured=configured,proxyEnabled=config.UseProxy,dnsEnabled=config.UseDagamiDns,dnsTransport=pool==null?"custom UDP/TCP":pool.Length>0&&pool[0].Provider=="magicdns"?"DoH: MagicDNS":"DoH: Dagami -> MagicDNS",providers=DnsProviders.Snapshot(),systemDns=SystemDnsManager.BriefStatus(),loginVerified=false,modelResponseVerified=false,next="diagnose login; patch APP_ID --dry-run"}));return true;
+                Console.WriteLine(new JavaScriptSerializer().Serialize(new{version=Brand.Version,configurationError=config.LastLoadError,proxyConfigured=configured,proxyEnabled=config.UseProxy,dnsEnabled=config.UseDagamiDns,dnsTransport=pool==null?"custom UDP/TCP":pool.Length>0&&pool[0].Provider=="magicdns"?"DoH: MagicDNS":"DoH: Dagami -> MagicDNS",providers=DnsProviders.Snapshot(),systemDns=SystemDnsManager.BriefStatus(),loginVerified=false,modelResponseVerified=false,next="diagnose login; patch APP_ID --dry-run"}));return true;
             }
             if(command=="diagnose"&&args.Length==3&&args[1]=="error"){
                 var report=new FileInfo(args[2]);if(!report.Exists||report.Length>1048576)throw new ArgumentException("Нужен текстовый отчёт до 1 МБ.");

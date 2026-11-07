@@ -25,6 +25,7 @@ jobs:
           name: dagami-agent-proxy-${{ matrix.os }}
           path: |
             dist-portable/native-next/*.zip
-            dist-portable/native-next/windows-native/DagamiAgentProxy.exe
+            dist-portable/native-next/DagamiAgentProxy.exe
             dist-portable/native-next/SHA256SUMS.json
+            dist-portable/native-next/SHA256SUMS.txt
           if-no-files-found: error

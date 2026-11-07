@@ -1,4 +1,4 @@
-> Подготовлена **0.5.0 beta**. [Пакеты и установка](NATIVE_NEXT.md) · [Изменения релиза](RELEASE_NOTES.md).
+> **[Скачать 0.5.0 beta](https://github.com/j46871417-ui/Dagami-Agent-Proxy/releases/tag/v0.5.0-beta)** · [Пакеты и установка](NATIVE_NEXT.md) · [Изменения релиза](RELEASE_NOTES.md).
 > Windows поддерживает подключение по ключу Telegram и свой HTTP/HTTPS-прокси.
 > Ниже описана прежняя версия и её возможности для сравнения при миграции.
 

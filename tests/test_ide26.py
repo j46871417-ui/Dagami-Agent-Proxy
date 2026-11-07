@@ -74,7 +74,10 @@ class Ide26Tests(unittest.TestCase):
                         authority = f'localhost:{backend.getsockname()[1]}'
                         target = '/test.Service/Stream?a=1' if origin else f'http://{authority}/test.Service/Stream?a=1'
                         peer.sendall((f'POST {target} HTTP/1.1\r\nHost: {authority}\r\nx-codeium-csrf-token: fixture-csrf\r\nProxy-Authorization: Basic fixture-proxy\r\nTransfer-Encoding: chunked\r\n\r\n').encode() + payload)
-                        self.assertEqual(response, self.receive_all(peer))
+                        received = self.receive_all(peer)
+                        response_header, response_body = received.split(b'\r\n\r\n', 1)
+                        self.assertIn(b'Connection: close', response_header)
+                        self.assertEqual(response.split(b'\r\n\r\n', 1)[1], response_body)
                     worker.join(5)
                     self.assertFalse(worker.is_alive())
                     self.assertFalse(errors)

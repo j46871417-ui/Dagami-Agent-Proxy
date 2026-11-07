@@ -2,6 +2,10 @@
 
 ## 0.5.0 beta
 
+- Merge the published 0.4.1 beta security baseline before release. Preserve
+  failed-config refusal, Windows loopback ownership, live relay capacity,
+  framed HTTP transactions, Gemini proxy-only sessions and verified updater
+  restart without elevation.
 - Keep a separate, protected custom proxy address in the Windows connection
   page. Use explicit route selection and preserve unsaved edits across tabs.
 - Restore Windows application icons with loading on the app discovery worker.
