@@ -63,18 +63,30 @@ namespace DevProxyApp {
    var page=new FluentLayout{Dock=DockStyle.Fill,ColumnCount=1,RowCount=2,Padding=new Padding(12)};
    page.RowStyles.Add(new RowStyle(SizeType.Absolute,220));page.RowStyles.Add(new RowStyle(SizeType.Percent,100));page.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,100));
    var card=new FluentCard{Dock=DockStyle.Fill,Padding=new Padding(16,12,16,12)};var rows=new FluentLayout{Dock=DockStyle.Fill,ColumnCount=2,RowCount=5};rows.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,100));rows.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute,135));foreach(int height in new[]{38,28,38,42})rows.RowStyles.Add(new RowStyle(SizeType.Absolute,height));rows.RowStyles.Add(new RowStyle(SizeType.Percent,100));
-   rows.Controls.Add(FluentLabel("Подключение к прокси",15,true),0,0);
-   var pairLink=new LinkLabel{Name="ManagedPairLink",Text="Dagami через бота",AutoSize=true,Anchor=AnchorStyles.Top|AnchorStyles.Right,LinkColor=FluentTheme.Accent,LinkBehavior=LinkBehavior.HoverUnderline,AccessibleName="Привязать устройство через Telegram",Margin=new Padding(0,4,0,0)};
-   pairLink.LinkClicked+=(s,e)=>ExecuteNativeAction(OpenManagedPair);rows.Controls.Add(pairLink,1,0);
-   rows.Controls.Add(FluentLabel("Адрес HTTP / HTTPS прокси",10,false),0,1);
+   rows.Controls.Add(FluentLabel("Прокси Dagami",15,true),0,0);
+   var manual=new LinkLabel{AutoSize=true,Anchor=AnchorStyles.Top|AnchorStyles.Right,LinkColor=FluentTheme.Accent,LinkBehavior=LinkBehavior.HoverUnderline,Margin=new Padding(0,4,0,0)};
+   rows.Controls.Add(manual,1,0);
+   var routeHint=new Label{Dock=DockStyle.Fill,ForeColor=FluentTheme.Muted,Text="Один маршрут для запуска из Dagami и настроенных ярлыков."};
+   rows.Controls.Add(routeHint,0,1);rows.SetColumnSpan(routeHint,2);
    bool hasCreds=(ConfigManager.Instance.LastProxy??"").Contains("@");
    _proxyBox=new TextBox{Dock=DockStyle.Fill,UseSystemPasswordChar=hasCreds,Text=ConfigManager.Instance.LastProxy,BorderStyle=BorderStyle.FixedSingle,AccessibleName="Адрес HTTP или HTTPS прокси"};rows.Controls.Add(_proxyBox,0,2);
    var reveal=new CheckBox{Text="Показать",AutoSize=true,Checked=!hasCreds,Margin=new Padding(12,3,0,0)};reveal.CheckedChanged+=(s,e)=>_proxyBox.UseSystemPasswordChar=!reveal.Checked;rows.Controls.Add(reveal,1,2);
-   var actions=new FlowLayoutPanel{Dock=DockStyle.Fill,WrapContents=false};AddNativeButton(actions,"Сохранить и проверить",CheckFluentProxy);((FluentButton)_nativeButtons[_nativeButtons.Count-1]).Primary=true;
+   var actions=new FlowLayoutPanel{Dock=DockStyle.Fill,WrapContents=false};
+   AddNativeButton(actions,"Подключить через Telegram",OpenManagedPair);
+   var pair=(FluentButton)_nativeButtons[_nativeButtons.Count-1];pair.Name="ManagedPairLink";pair.Primary=true;
+   AddNativeButton(actions,"Проверить",CheckFluentProxy);
    _probeService=new ComboBox{Width=112,DropDownStyle=ComboBoxStyle.DropDownList,AccessibleName="Сервис для проверки подключения",Margin=new Padding(4,4,0,0)};
    _probeService.Items.AddRange(new object[]{"Antigravity","Gemini","Cursor","Codex","Claude"});_probeService.SelectedIndex=0;PreventAccidentalScroll(_probeService);actions.Controls.Add(_probeService);
    _useProxyCheckBox=new CheckBox{Name="UseProxyCheckBox",Text="Использовать прокси",AutoSize=true,Checked=ConfigManager.Instance.UseProxy,Margin=new Padding(14,7,0,0),AccessibleName="Использовать указанный прокси"};_useProxyCheckBox.CheckedChanged+=(s,e)=>ApplyRouteFlagsChange(_useProxyCheckBox.Checked,ConfigManager.Instance.UseDagamiDns);actions.Controls.Add(_useProxyCheckBox);rows.Controls.Add(actions,0,3);rows.SetColumnSpan(actions,2);
-   var note=new Label{Dock=DockStyle.Fill,ForeColor=FluentTheme.Muted,Text="Для системного VPN укажите direct. Smart DNS включается отдельно на странице DNS. После сохранения запускайте приложение через Dagami."};rows.Controls.Add(note,0,4);rows.SetColumnSpan(note,2);card.Controls.Add(rows);page.Controls.Add(card,0,0);
+   var note=new Label{Dock=DockStyle.Fill,ForeColor=FluentTheme.Muted};rows.Controls.Add(note,0,4);rows.SetColumnSpan(note,2);card.Controls.Add(rows);page.Controls.Add(card,0,0);
+   bool showManual=false;
+   Action renderManual=()=>{
+    manual.Text=showManual?"Скрыть адрес":"Свой маршрут";
+    _proxyBox.Visible=reveal.Visible=_useProxyCheckBox.Visible=showManual;
+    rows.RowStyles[2].Height=showManual?38:0;
+    note.Text=showManual?"Можно указать собственный HTTP/HTTPS-прокси или direct для VPN.":"Прокси включается для настроенных ярлыков и запуска из Dagami.";
+   };
+   manual.LinkClicked+=(s,e)=>{showManual=!showManual;renderManual();};renderManual();
    _dnsEnabled=new CheckBox{Text="Шифрованный DNS для входа и приложений",AutoSize=true,Checked=ConfigManager.Instance.UseDagamiDns};
    _dnsObfuscation=new CheckBox{Text="Экспериментальное разделение TLS и DNS",AutoSize=true,Checked=ConfigManager.Instance.DnsObfuscation};
    _dnsBox=new TextBox{Text=ConfigManager.Instance.DnsHost,Width=450,BorderStyle=BorderStyle.FixedSingle,AccessibleName="Любой DNS: домен, IP:порт, https://.../dns-query или tls://..."};
@@ -98,8 +110,7 @@ namespace DevProxyApp {
    var rows=new FlowLayoutPanel{Location=new Point(16,16),AutoSize=true,AutoSizeMode=AutoSizeMode.GrowAndShrink,FlowDirection=FlowDirection.TopDown,WrapContents=false};
    rows.Controls.Add(FluentLabel("Параметры запуска",14,true));
    _systemEnvironment=new CheckBox{Text="Записывать переменные прокси Windows при постоянной настройке",AutoSize=true,Checked=ConfigManager.Instance.SetSystemEnv};rows.Controls.Add(_systemEnvironment);
-   _startWithWindows=new CheckBox{Text="Запускать Dagami Agent Proxy вместе с Windows",AutoSize=true};_startupStatus=FluentLabel("",9,false);rows.Controls.Add(_startWithWindows);rows.Controls.Add(_startupStatus);
-   ReadStartupState();
+   _startWithWindows=new CheckBox{Text="Запускать Dagami Agent Proxy вместе с Windows",AutoSize=true,Enabled=false};_startupStatus=FluentLabel("",9,false);rows.Controls.Add(_startWithWindows);rows.Controls.Add(_startupStatus);
    _startWithWindows.CheckedChanged+=(s,e)=>ApplyStartupCheckboxChange(_startWithWindows.Checked);
    rows.Controls.Add(_prepareAntigravity);
    rows.Controls.Add(FluentLabel("Экспериментальный режим соединения",13,true));
@@ -131,7 +142,6 @@ namespace DevProxyApp {
    var save=new FlowLayoutPanel{Width=520,Height=44,WrapContents=false};AddNativeButton(save,"Сохранить параметры",()=>{if(!SaveNativeSettings())return;_appFeedback.Text="Параметры сохранены.";});rows.Controls.Add(save);
    _wholeNetworkDns=new CheckBox{Text="Шифровать DNS всей сети на выбранных адаптерах",AutoSize=true};rows.Controls.Add(_wholeNetworkDns);
    _dnsNetworkAdapters=new CheckedListBox{Width=520,Height=100,Visible=false,CheckOnClick=true,AccessibleName="Адаптеры для шифрованного DNS всей сети"};
-   if(!_preview)foreach(var adapter in SystemDnsManager.Adapters())_dnsNetworkAdapters.Items.Add(adapter,false);
    rows.Controls.Add(_dnsNetworkAdapters);_wholeNetworkDns.CheckedChanged+=(s,e)=>{
     _dnsNetworkAdapters.Visible=_wholeNetworkDns.Checked;
     if(_wholeNetworkDns.Checked&&!_preview)try{var selected=new HashSet<string>(StringComparer.OrdinalIgnoreCase);foreach(SystemDnsAdapter item in _dnsNetworkAdapters.CheckedItems)selected.Add(item.Guid);_dnsNetworkAdapters.Items.Clear();foreach(var item in SystemDnsManager.Adapters())_dnsNetworkAdapters.Items.Add(item,selected.Contains(item.Guid));}
@@ -155,6 +165,7 @@ namespace DevProxyApp {
    System.Threading.ThreadPool.QueueUserWorkItem(state=>{
     string summary;
     try{
+     DnsProviders.Initialize(null,false);
      summary=DnsProviders.ProbeAllBuiltIn();
      DnsProviders.Refresh();
     }catch(Exception ex){
@@ -189,14 +200,26 @@ namespace DevProxyApp {
   }
   Panel BuildFlatConnectionPage(Panel connection, Panel advanced){
    var host=new FluentPageHost{Dock=DockStyle.Fill,AutoScroll=true,BackColor=FluentTheme.Background};
-   var rows=new FluentLayout{Dock=DockStyle.Top,AutoSize=true,AutoSizeMode=AutoSizeMode.GrowAndShrink,ColumnCount=1,RowCount=2,Margin=Padding.Empty};
+   var rows=new FluentLayout{Dock=DockStyle.Top,AutoSize=true,AutoSizeMode=AutoSizeMode.GrowAndShrink,ColumnCount=1,RowCount=3,Margin=Padding.Empty};
    rows.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,100));
-   var connectionHeight=new RowStyle(SizeType.Absolute,230);var advancedHeight=new RowStyle(SizeType.Absolute,640);
-   rows.RowStyles.Add(connectionHeight);rows.RowStyles.Add(advancedHeight);
+   var advancedHeight=new RowStyle(SizeType.Absolute,0);
+   rows.RowStyles.Add(new RowStyle(SizeType.Absolute,230));
+   rows.RowStyles.Add(new RowStyle(SizeType.Absolute,42));
+   rows.RowStyles.Add(advancedHeight);
+   var options=new FluentButton{Name="AdvancedConnectionButton",Text="Дополнительные настройки ▾",AutoSize=true,Margin=new Padding(12,0,0,0),Anchor=AnchorStyles.Left};
+   bool expanded=false;
    var content=advanced.Controls[0];advanced.AutoScroll=false;
-   Action fit=()=>{advancedHeight.Height=content.Height+36;rows.PerformLayout();};
+   Action fit=()=>{advancedHeight.Height=expanded?content.Height+36:0;rows.PerformLayout();};
    content.SizeChanged+=(s,e)=>fit();
-   rows.Controls.Add(connection,0,0);rows.Controls.Add(advanced,0,1);host.Controls.Add(rows);fit();return host;
+   options.Click+=(s,e)=>{
+    expanded=!expanded;
+    advanced.Visible=expanded;
+    options.Text=expanded?"Скрыть дополнительные настройки ▴":"Дополнительные настройки ▾";
+    fit();
+    if(expanded&&!_startupStatusLoaded){_startupStatusLoaded=true;ReadStartupState();}
+   };
+   advanced.Visible=false;
+   rows.Controls.Add(connection,0,0);rows.Controls.Add(options,0,1);rows.Controls.Add(advanced,0,2);host.Controls.Add(rows);fit();return host;
   }
   Panel BuildDnsPage(){
    var page=new FluentLayout{Dock=DockStyle.Fill,ColumnCount=1,RowCount=3,Padding=new Padding(4)};page.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,100));page.RowStyles.Add(new RowStyle(SizeType.Absolute,236));page.RowStyles.Add(new RowStyle(SizeType.Absolute,266));page.RowStyles.Add(new RowStyle(SizeType.Percent,100));

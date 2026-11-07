@@ -291,7 +291,7 @@ func checkWindows(exe, dir string) error {
 	if e := copyFile(exe, lib, 0755); e != nil {
 		return e
 	}
-	for _, name := range []string{"LocalUiChecks", "SystemDnsUiChecks", "AntigravityPatchChecks", "ManagedAccessChecks"} {
+	for _, name := range []string{"LocalUiChecks", "ConnectionRecoveryChecks", "SystemDnsUiChecks", "AntigravityPatchChecks", "ManagedAccessChecks"} {
 		out := filepath.Join(dir, name+".exe")
 		args := []string{"/nologo", "/target:exe", "/out:" + out, "/reference:" + lib}
 		for _, r := range references {
@@ -389,7 +389,7 @@ func sourceZip(path string) error {
 	for _, s := range nativeSources {
 		names = append(names, "src/"+s)
 	}
-	for _, name := range []string{"LocalUiChecks", "SystemDnsUiChecks", "AntigravityPatchChecks", "ManagedAccessChecks"} {
+	for _, name := range []string{"LocalUiChecks", "ConnectionRecoveryChecks", "SystemDnsUiChecks", "AntigravityPatchChecks", "ManagedAccessChecks"} {
 		names = append(names, "tests/native/"+name+".cs")
 	}
 	for _, dir := range []string{"cmd", "internal"} {

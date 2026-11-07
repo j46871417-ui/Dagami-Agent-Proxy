@@ -233,3 +233,20 @@ func TestSettingsPersistAndRedact(t *testing.T) {
 		t.Fatal("proxy credentials leaked")
 	}
 }
+
+func TestDefaultRouteRequiresPairing(t *testing.T) {
+	c, err := NewController(t.TempDir(), false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.activeRoute(); err == nil {
+		t.Fatal("new install could connect without pairing or selecting a route")
+	}
+	if err := c.SelectProfile("direct"); err != nil {
+		t.Fatal(err)
+	}
+	route, err := c.activeRoute()
+	if err != nil || route.upstream != nil {
+		t.Fatalf("explicit system route failed: %v", err)
+	}
+}

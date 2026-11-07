@@ -41,7 +41,7 @@ class AdapterTests(unittest.TestCase):
         controller = load("controller_fixture", folder / "controller.py")
         secret = base64.urlsafe_b64encode(b"z" * 32).decode().rstrip("=")
         (folder / "secret").write_text(secret)
-        with patch.dict(os.environ, DAGAMI_MANAGED_BRIDGE_KEY_FILE=str(folder / "secret"), DAGAMI_MANAGED_REQUIRE_DEVICE="1"):
+        with patch.dict(os.environ, DAGAMI_MANAGED_BRIDGE_KEY_FILE=str(folder / "secret"), DAGAMI_MANAGED_REQUIRE_DEVICE="0"):
             auth = controller.Controller({"route_count": 1, "nodes": {"us": {}}, "database": str(folder / "fixture.db"),
                                           "google_networks": [], "google_hosts": ["example.test"], "google_suffixes": [], "upstream_auth": "Basic fixture"})
         self.addCleanup(auth.db.close)

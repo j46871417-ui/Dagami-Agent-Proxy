@@ -138,20 +138,26 @@ namespace DevProxyApp
 
         internal void ReadStartupState()
         {
+            if (_preview || _updatingStartup || _startWithWindows == null) return;
             _updatingStartup = true;
-            try {
-                var startup = NativeStartup.Current;
-                bool enabled = !_preview && startup.IsEnabled();
-                if (_startWithWindows != null) _startWithWindows.Checked = enabled;
-                if (_startupStatus != null) {
-                    _startupStatus.Text = enabled ? "Автозапуск включён для этой копии." :
-                        (!_preview && startup.HasLegacyElevatedTask() ? "Обнаружен старый автозапуск с правами администратора. Включите автозапуск заново, чтобы обновить его." : "Автозапуск выключен.");
-                }
-            } catch (Exception error) {
-                if (_startupStatus != null) _startupStatus.Text = "Не удалось проверить автозапуск: " + error.GetType().Name;
-            } finally {
-                _updatingStartup = false;
-            }
+            _startWithWindows.Enabled = false;
+            _startupStatus.Text = "Проверяем автозапуск…";
+            System.Threading.ThreadPool.QueueUserWorkItem(_ => {
+                bool enabled = false;
+                string status;
+                try {
+                    var startup = NativeStartup.Current;
+                    enabled = startup.IsEnabled();
+                    status = enabled ? "Автозапуск включён." : startup.HasLegacyElevatedTask()
+                        ? "Чтобы обновить прежний автозапуск, включите его заново." : "Автозапуск выключен.";
+                } catch (Exception error) { status = "Не удалось проверить автозапуск: " + error.GetType().Name; }
+                try { BeginInvoke(new Action(() => {
+                    _startWithWindows.Checked = enabled;
+                    _startupStatus.Text = status;
+                    _startWithWindows.Enabled = true;
+                    _updatingStartup = false;
+                })); } catch (InvalidOperationException) { }
+            });
         }
 
         internal void ApplyStartupCheckboxChange(bool enabled)
@@ -303,7 +309,8 @@ namespace DevProxyApp
         internal static bool HasConfiguredConnection(string proxyValue, bool smartDnsEnabled, bool useProxy = true)
         {
             Uri parsed;
-            if (useProxy && (ManagedAccess.IsProfile(proxyValue) || TryParseSupportedProxy(proxyValue, out parsed) || IsDirectProxyValue(proxyValue))) return true;
+            if (useProxy && ManagedAccess.IsProfile(proxyValue)) return ManagedAccess.HasActiveDevice();
+            if (useProxy && (TryParseSupportedProxy(proxyValue, out parsed) || IsDirectProxyValue(proxyValue))) return true;
             if (smartDnsEnabled) return true;
             return false;
         }
@@ -394,7 +401,6 @@ namespace DevProxyApp
             }
             // Diagnostics are advisory. Launch uses saved parameters and must not
             // depend on a stale probe result or a writable settings directory.
-            if (_bridgePort <= 0) RestartRescueBridge();
             _nativeBusy = true; SetNativeButtonsEnabled(false);
             _primaryAppAction.Text = "Запуск…"; _primaryAppAction.Refresh();
             try {
@@ -561,18 +567,60 @@ namespace DevProxyApp
             }));
         }
 
-        private void RefreshNativeTargets()
+        private bool _targetScanRunning, _targetScanAgain, _startupStatusLoaded;
+        private string _targetSelectionAfterScan;
+
+        private void RefreshNativeTargets() { RefreshNativeTargets(null); }
+
+        private void RefreshNativeTargets(string selectedId)
         {
-            if (_targetList == null) return;
-            string selectedId = _targetList.SelectedItems.Count > 0 ? ((AppTarget)_targetList.SelectedItems[0].Tag).Id : null;
-            _cachedTargets = ProxyEngine.ScanAllTargets();
+            if (_targetList == null || IsDisposed) return;
+            if (selectedId != null) _targetSelectionAfterScan = selectedId;
+            if (_targetScanRunning) { _targetScanAgain = true; return; }
+            if (_preview) {
+                var targets = ProxyEngine.ScanAllTargets();
+                RenderNativeTargets(targets, new HashSet<string>(targets.FindAll(IsTargetPatched).ConvertAll(target => target.Id)));
+                return;
+            }
+            _targetScanRunning = true;
+            UpdateNativeStatus();
+            var custom = ConfigManager.Instance.CustomTargets.ConvertAll(target => new AppTarget {
+                Id = target.Id, DisplayName = target.DisplayName, ExePath = target.ExePath,
+                ConfigPath = target.ConfigPath, IsCustom = target.IsCustom
+            });
+            var worker = new System.Threading.Thread(() => {
+                List<AppTarget> targets = null;
+                HashSet<string> patched = null;
+                try {
+                    targets = ProxyEngine.ScanAllTargets(custom);
+                    patched = new HashSet<string>(targets.FindAll(IsTargetPatched).ConvertAll(target => target.Id));
+                } catch (Exception error) { Logger.Log("[Detect] " + error.GetType().Name); }
+                try { BeginInvoke(new Action(() => {
+                    _targetScanRunning = false;
+                    if (_targetScanAgain) {
+                        _targetScanAgain = false;
+                        RefreshNativeTargets();
+                    } else if (patched != null) RenderNativeTargets(targets, patched);
+                    else { UpdateNativeStatus(); _nativeStatus.Text = "Не удалось найти приложения. Повторите поиск через «Добавить»."; }
+                })); } catch (InvalidOperationException) { }
+            });
+            worker.IsBackground = true;
+            worker.SetApartmentState(System.Threading.ApartmentState.STA);
+            worker.Start();
+        }
+
+        private void RenderNativeTargets(List<AppTarget> targets, HashSet<string> patched)
+        {
+            string selectedId = _targetSelectionAfterScan ?? (_targetList.SelectedItems.Count > 0 ? ((AppTarget)_targetList.SelectedItems[0].Tag).Id : null);
+            _targetSelectionAfterScan = null;
+            _cachedTargets = targets;
             _refreshingTargets = true;
             _targetList.BeginUpdate();
             try {
                 _targetList.Items.Clear();
                 foreach (AppTarget target in _cachedTargets) {
                     var item = new ListViewItem(target.DisplayName) { Tag = target };
-                    item.SubItems.Add(!target.IsInstalled ? "Не найдено" : (IsTargetPatched(target) ? "Пропатчено" : "Не пропатчено"));
+                    item.SubItems.Add(!target.IsInstalled ? "Не найдено" : (patched.Contains(target.Id) ? "Настроено" : "Готово к запуску"));
                     item.SubItems.Add(target.ExePath ?? "");
                     item.ToolTipText = (target.ExePath ?? target.DisplayName)+"\r\n"+ApplicationSupport.Describe(target);
                     item.Checked = ConfigManager.Instance.CheckedIds.Contains(target.Id);
@@ -580,12 +628,12 @@ namespace DevProxyApp
                     _targetList.Items.Add(item);
                     if (target.Id == selectedId) item.Selected = true;
                 }
+                if (_targetList.SelectedItems.Count == 0 && _targetList.Items.Count > 0) {
+                    ListViewItem first = _targetList.Items[0];
+                    foreach (ListViewItem item in _targetList.Items) if (((AppTarget)item.Tag).IsInstalled) { first = item; break; }
+                    first.Selected = true; first.Focused = true;
+                }
             } finally { _targetList.EndUpdate(); _refreshingTargets = false; }
-            if (_targetList.SelectedItems.Count == 0 && _targetList.Items.Count > 0) {
-                ListViewItem first = _targetList.Items[0];
-                foreach (ListViewItem item in _targetList.Items) if (((AppTarget)item.Tag).IsInstalled) { first = item; break; }
-                first.Selected = true; first.Focused = true;
-            }
             FitNativeListColumns(); UpdateNativeDetails();
             UpdateNativeStatus();
         }
@@ -610,16 +658,20 @@ namespace DevProxyApp
             if (_nativeStatus == null) return;
             int active = 0;
             foreach (var sessionEntry in _nativeSessions.Values) if (sessionEntry.RunningProcess != null) active++;
-            _nativeStatus.Text = "Приложений: "+_cachedTargets.Count+" · Запущено через Dagami: "+active;
-            var currentDns=DnsProviders.ForServer(ConfigManager.Instance.DnsHost);
+            _nativeStatus.Text = _cachedTargets.Count == 0 && (_targetScanRunning || !_backgroundWorkStarted)
+                ? "Ищем установленные приложения…" : "Приложений: "+_cachedTargets.Count+" · Запущено через Dagami: "+active;
             // connection summary updated below
             SyncRouteCheckboxes();
             // connection summary updated below
             if (_connectionSummary != null) {
-                bool flagsActive = ConfigManager.Instance.UseProxy || ConfigManager.Instance.UseDagamiDns;
-                string proxyText = ConfigManager.Instance.UseProxy ? (!string.IsNullOrEmpty(ConfigManager.Instance.LastProxy) && !IsDirectProxyValue(ConfigManager.Instance.LastProxy) ? "Прокси: включён" : "Прокси: прямой (direct)") : "Прокси: выключен";
-                string dnsText = ConfigManager.Instance.UseDagamiDns ? (currentDns==null?"Свой DNS":currentDns.Length>0&&currentDns[0].Provider=="magicdns"?"DNS: MagicDNS":"DNS: Dagami → MagicDNS") : "DNS: выключен";
-                _connectionSummary.Text = !flagsActive ? (_bridgePort > 0 ? "Мост 127.0.0.1:" + _bridgePort + "  ·  " : "") + "Режим не выбран (прокси и DNS выключены)  ·  Включите флаги ниже.\nПараметры подключения — в настройках. Системный DNS — в «DNS и сброс»." : (_bridgePort > 0 ? "Мост 127.0.0.1:" + _bridgePort + "  ·  " : "Проверьте подключение  ·  ") + proxyText + "  ·  " + dnsText + "\nПараметры подключения — в настройках. Системный DNS — в «DNS и сброс».";
+                var config = ConfigManager.Instance;
+                bool managed = ManagedAccess.IsProfile(config.EffectiveProxy);
+                bool needsPairing = managed && !ManagedAccess.HasActiveDevice();
+                string route = managed ? "Прокси Dagami" : config.UseProxy && !IsDirectProxyValue(config.LastProxy)
+                    ? "Свой прокси" : config.UseDagamiDns ? "Smart DNS" : "Системный маршрут / VPN";
+                _connectionSummary.Text = needsPairing ? "Привяжите устройство через Telegram, чтобы начать работу."
+                    : route + (_bridgePort > 0 ? " · мост запущен" : "") + "\nДля запуска из Dagami и настроенных ярлыков.";
+                _connectionAction.Text = needsPairing ? "Подключить" : "Настройки";
             }
 
 
@@ -671,8 +723,7 @@ namespace DevProxyApp
                         if(added)ConfigManager.Instance.CustomTargets.Remove(target);else target.DisplayName=oldName;
                         throw new IOException("Не удалось сохранить добавленное приложение. "+ConfigManager.Instance.LastSaveError);
                     }
-                    RefreshNativeTargets();
-                    foreach (ListViewItem item in _targetList.Items) item.Selected = ((AppTarget)item.Tag).Id == id;
+                    RefreshNativeTargets(id);
                     Logger.Log("[✓] Приложение добавлено: " + target.DisplayName);
                 }
             }
@@ -726,6 +777,7 @@ namespace DevProxyApp
             if (WindowState == FormWindowState.Minimized) WindowState = _nativeRestoreState;
             Show();
             Activate();
+            if (!_preview && !_backgroundWorkStarted) BeginInvoke(new Action(InitializeBackgroundWork));
         }
     }
 }

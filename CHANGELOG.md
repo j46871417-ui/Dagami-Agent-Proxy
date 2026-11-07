@@ -1,5 +1,10 @@
 # Changelog
 
+- Default to the device-bound Dagami proxy for a new installation and remove
+  the legacy Basic authentication path from the managed server adapter.
+- Show the Windows window before discovering applications. Move shortcut and
+  startup checks off the UI thread and simplify the connection screen.
+
 - Fix a WinForms crash when dismissing the appearance menu with an outside click.
 
 ## Native appearance and managed Dagami access

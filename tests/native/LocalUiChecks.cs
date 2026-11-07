@@ -28,6 +28,7 @@ class LocalUiChecks {
    ContextMenuStrip themeMenu;
    using (var form = new MainForm(null, false, true)) {
     Console.WriteLine("UI fixture: rendering pages");Console.Out.Flush();
+    Assert(((ListView)Get(form,"_targetList")).Items.Count==0,"App discovery delayed construction of the first window");
     Assert(typeof(MainForm).GetMethod("AntigravitySession",Private).Invoke(form,null)==null,"Login lookup crashes on missing application paths without a session");
     form.StartPosition = FormStartPosition.Manual; form.Location = new Point(-30000, -30000); form.Opacity = 1; form.Show(); Application.DoEvents();
     var menu = (ContextMenuStrip)Get(form, "_appActions");
@@ -80,7 +81,14 @@ class LocalUiChecks {
     Call(form,"ApplyThemeChoice","light");
     Assert(form.BackColor.ToArgb()==light.ToArgb(),"Switching back did not restore the light theme");
     for(int index=0;index<5;index++){Call(form,"ShowFluentPage",index);Bounds(form);Picture(form,"local-page-"+index+".png");}
-    Call(form,"ShowFluentPage",1);((CheckBox)Get(form,"_wholeNetworkDns")).Checked=true;Application.DoEvents();Bounds(form);((CheckBox)Get(form,"_wholeNetworkDns")).Checked=false;
+    Call(form,"ShowFluentPage",1);
+    var advanced=(Button)form.Controls.Find("AdvancedConnectionButton",true)[0];
+    var wholeNetwork=(CheckBox)Get(form,"_wholeNetworkDns");
+    Assert(!wholeNetwork.Visible,"Advanced connection settings must start collapsed");
+    advanced.PerformClick();Application.DoEvents();
+    Assert(wholeNetwork.Visible,"Advanced connection settings did not open");
+    wholeNetwork.Checked=true;Application.DoEvents();Bounds(form);wholeNetwork.Checked=false;
+    advanced.PerformClick();Application.DoEvents();
     form.Size = form.MinimumSize; Application.DoEvents();
     for(int index=0;index<5;index++){Call(form,"ShowFluentPage",index);Bounds(form);Picture(form,"local-page-"+index+"-min.png");}
 

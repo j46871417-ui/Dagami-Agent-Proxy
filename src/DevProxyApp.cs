@@ -4383,7 +4383,7 @@ namespace DevProxyApp
 
 
             UseProxy = true;
-            UseDagamiDns = true;
+            UseDagamiDns = false;
 
 
 
@@ -4411,7 +4411,7 @@ namespace DevProxyApp
 
 
 
-            LastProxy = "";
+            LastProxy = ManagedAccess.Profile;
 
 
 
@@ -4529,58 +4529,10 @@ namespace DevProxyApp
 
 
 
-            // If no proxy saved in config, scan existing settings in IDEs or environment
-
-
-
-            if (string.IsNullOrEmpty(LastProxy))
-
-
-
-            {
-
-
-
-                string detected = ScanExistingIdeProxy();
-
-
-
-                if (!string.IsNullOrEmpty(detected))
-
-
-
-                {
-
-
-
-                    LastProxy = detected;
-
-
-
-                    AddProfileIfMissing("Обнаруженный прокси", detected);
-
-
-
-                }
-
-
-
-                else
-
-
-
-                {
-
-
-
-                    LastProxy = "";
-
-
-
-                }
-
-
-
+            if (UseProxy && string.IsNullOrWhiteSpace(LastProxy)) {
+                LastProxy = ManagedAccess.Profile;
+                UseProxy = true;
+                UseDagamiDns = false;
             }
 
 
@@ -5331,152 +5283,14 @@ namespace DevProxyApp
 
 
 
-        string ScanExistingIdeProxy()
 
 
 
-        {
 
 
 
-            string appData = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData);
 
 
-
-            string[] potentialConfigs = new string[] {
-
-
-
-                Path.Combine(appData, @"Antigravity\User\settings.json"),
-
-
-
-                Path.Combine(appData, @"Cursor\User\settings.json"),
-
-
-
-                Path.Combine(appData, @"Code\User\settings.json"),
-
-
-
-                Path.Combine(appData, @"Windsurf\User\settings.json"),
-
-
-
-                Path.Combine(appData, @"VSCodium\User\settings.json")
-
-
-
-            };
-
-
-
-
-
-
-
-            foreach (string path in potentialConfigs)
-
-
-
-            {
-
-
-
-                if (File.Exists(path))
-
-
-
-                {
-
-
-
-                    try
-
-
-
-                    {
-
-
-
-                        string content = File.ReadAllText(path, Encoding.UTF8);
-
-
-
-                        Match m = Regex.Match(content, @"\""http\.proxy\""\s*:\s*\""([^\""]+)\""");
-
-
-
-                        if (m.Success && CanAdoptDetectedProxy(m.Groups[1].Value, File.Exists(path + ".devproxy.bak")))
-
-
-
-                        {
-
-
-
-                            return m.Groups[1].Value;
-
-
-
-                        }
-
-
-
-                    }
-
-
-
-                    catch { }
-
-
-
-                }
-
-
-
-            }
-
-
-
-
-
-
-
-            // Environment variable
-
-
-
-            string envProxy = Environment.GetEnvironmentVariable("HTTP_PROXY") ?? Environment.GetEnvironmentVariable("ALL_PROXY");
-
-
-
-            if (CanAdoptDetectedProxy(envProxy, false)) return envProxy;
-
-
-
-
-
-
-
-            return null;
-
-
-
-        }
-
-
-
-
-
-
-
-        internal static bool CanAdoptDetectedProxy(string value, bool managedSettings) {
-            Uri proxy;
-            if (!UpstreamProxyDiagnostics.TryParse(value, out proxy)) return false;
-            if (proxy.IsLoopback && (managedSettings || (proxy.Port >= 53200 && proxy.Port < 53210))) return false;
-            return !UpstreamProxyDiagnostics.IsDnsEndpointMistakenForProxy(value);
-        }
         public void AddProfileIfMissing(string name, string url)
 
 
@@ -5733,7 +5547,7 @@ namespace DevProxyApp
 
 
 
-        public static List<AppTarget> ScanAllTargets()
+        public static List<AppTarget> ScanAllTargets(IEnumerable<AppTarget> customTargets = null)
 
 
 
@@ -6192,7 +6006,7 @@ namespace DevProxyApp
 
 
 
-            foreach (var custom in ConfigManager.Instance.CustomTargets)
+            foreach (var custom in customTargets ?? ConfigManager.Instance.CustomTargets)
 
 
 
@@ -9052,7 +8866,7 @@ namespace DevProxyApp
 
 
 
-            if (!preview) { InitLogging(); StartRescueBridge(); }
+            if (!preview) InitLogging();
 
 
 
@@ -9091,7 +8905,7 @@ namespace DevProxyApp
 
 
 
-            if(!_preview)StartUpdateChecks();
+            if (!_preview && _startInTray) BeginInvoke(new Action(InitializeBackgroundWork));
 
 
 
@@ -9135,7 +8949,9 @@ namespace DevProxyApp
 
 
 
-            if(_startInTray) Hide();
+            if (_preview) BeginInvoke(new Action(RefreshNativeTargets));
+            else if (_startInTray) Hide();
+            else if (!_shortcutSession) BeginInvoke(new Action(InitializeBackgroundWork));
 
 
 
@@ -9353,6 +9169,18 @@ namespace DevProxyApp
 
 
 
+        private bool _backgroundWorkStarted;
+
+        private void InitializeBackgroundWork()
+        {
+            if (_backgroundWorkStarted || IsDisposed) return;
+            _backgroundWorkStarted = true;
+            RefreshNativeTargets();
+            StartUpdateChecks();
+            if (_bridgePort == 0) StartRescueBridge();
+            UpdateNativeStatus();
+        }
+
         private void StartRescueBridge()
 
 
@@ -9370,6 +9198,7 @@ namespace DevProxyApp
 
 
                 string proxyUrl = ConfigManager.Instance.EffectiveProxy;
+                if (ManagedAccess.IsProfile(proxyUrl) && !ManagedAccess.HasActiveDevice()) return;
                 if (string.IsNullOrEmpty(proxyUrl) || IsDirectProxyValue(proxyUrl)) proxyUrl = "direct";
 
 
@@ -9446,6 +9275,7 @@ namespace DevProxyApp
 
 
 
+                    if (ConfigManager.Instance.UseDagamiDns && !ManagedAccess.IsProfile(proxyUrl)) DnsProviders.Initialize();
                     _rescueBridge = new LocalProxyBridge();
 
 
@@ -9470,7 +9300,7 @@ namespace DevProxyApp
 
 
 
-                        if (ConfigManager.Instance.DnsObfuscation && dpiMode == DpiDesyncMode.ExternalEngine) {
+                        if (ConfigManager.Instance.UseDagamiDns && !ManagedAccess.IsProfile(proxyUrl) && ConfigManager.Instance.DnsObfuscation && dpiMode == DpiDesyncMode.ExternalEngine) {
 
 
 
@@ -9587,6 +9417,7 @@ namespace DevProxyApp
 
 
 
+            if (_bridgePort <= 0) RestartRescueBridge();
             if (_bridgePort <= 0)
 
 
@@ -9595,7 +9426,9 @@ namespace DevProxyApp
 
 
 
-                error = "Локальный прокси-мост не запущен. Укажите рабочий HTTP или HTTPS upstream proxy.";
+                error = ManagedAccess.IsProfile(ConfigManager.Instance.EffectiveProxy) && !ManagedAccess.HasActiveDevice()
+                    ? "Откройте Dagami и привяжите устройство через Telegram в разделе «Подключение»."
+                    : "Не удалось запустить прокси. Проверьте подключение в Dagami.";
 
 
 
@@ -9996,7 +9829,7 @@ namespace DevProxyApp
 
 
 
-            return kind=="vscode"||kind=="codex-desktop"||kind=="claude-desktop";
+            return kind=="vscode"||kind=="codex-desktop"||kind=="claude-desktop"||kind=="unknown"&&ApplicationSupport.IsElectronDesktop(target);
 
 
 

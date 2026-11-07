@@ -203,7 +203,9 @@ func (d *desktop) profiles(snapshot portable.Snapshot) {
 			label += "  ·  Активен"
 			v.selected = i
 		}
-		if profile.Proxy != "direct" {
+		if profile.Managed && profile.Proxy == "" {
+			label += "  ·  Нужна привязка"
+		} else if profile.Proxy != "direct" {
 			label += "  ·  " + profile.Proxy
 		}
 		v.items = append(v.items, label)

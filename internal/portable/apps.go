@@ -25,7 +25,7 @@ func launchProxySettings(app App, local, platform string) ([]string, []string) {
 	case "antigravity", "antigravity-ide", "vscode", "cursor", "windsurf", "claude-desktop", "codex-desktop":
 		chromium = true
 	}
-	if chromium || gemini {
+	if chromium || gemini || electronBundle(app.Path, platform) {
 		args = append(args, "--proxy-server="+local, "--proxy-bypass-list=localhost;127.0.0.1;[::1]", "--disable-quic")
 	}
 	if gemini {
@@ -35,6 +35,19 @@ func launchProxySettings(app App, local, platform string) ([]string, []string) {
 		}
 	}
 	return args, env
+}
+
+func electronBundle(executable, platform string) bool {
+	resources := filepath.Join(filepath.Dir(executable), "resources")
+	if platform == "darwin" {
+		resources = filepath.Join(filepath.Dir(executable), "..", "Resources")
+	}
+	for _, name := range []string{"app.asar", filepath.Join("app", "package.json")} {
+		if info, err := os.Stat(filepath.Join(resources, name)); err == nil && info.Mode().IsRegular() {
+			return true
+		}
+	}
+	return false
 }
 
 func addMissingApps(existing []App) []App {

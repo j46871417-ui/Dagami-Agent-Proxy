@@ -14,6 +14,12 @@ type pairing struct {
 	Protected string `json:"protected"`
 }
 
+const managedDefaultID = "dagami-managed"
+
+func pendingManagedProfile() Profile {
+	return Profile{ID: managedDefaultID, Name: "Dagami · Telegram", Managed: true}
+}
+
 func (c *Controller) ManagedEndpoint() string {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -82,7 +88,7 @@ func (c *Controller) ActivateManaged(ctx context.Context, raw string, start bool
 	old := c.state
 	profiles := make([]Profile, 0, len(old.Profiles)+1)
 	for _, entry := range old.Profiles {
-		if !entry.Managed || entry.Proxy != p.Endpoint {
+		if entry.ID != managedDefaultID && (!entry.Managed || entry.Proxy != p.Endpoint) {
 			profiles = append(profiles, entry)
 		}
 	}
@@ -123,7 +129,7 @@ func profileValue(p Profile) (string, error) {
 		return unprotectSecret(p.ID, p.Protected)
 	}
 	if p.Managed {
-		return "", errors.New("нет ключа привязки Dagami")
+		return "", errors.New("сначала привяжите устройство в разделе «Подключение»")
 	}
 	return p.Proxy, nil
 }

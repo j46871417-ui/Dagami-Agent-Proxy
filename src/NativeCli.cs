@@ -54,7 +54,8 @@ namespace DevProxyApp {
                 if(args.Length!=1)throw new ArgumentException("doctor — состояние без изменения настроек; diagnose error REPORT.log — объяснение ошибки.");
                 DnsProviders.Initialize(null,false);
                 var config=ConfigManager.Instance;Uri proxy;var pool=DnsProviders.ForServer(config.DnsHost);
-                Console.WriteLine(new JavaScriptSerializer().Serialize(new{version=Brand.Version,proxyConfigured=UpstreamProxyDiagnostics.TryParse(config.LastProxy,out proxy),proxyEnabled=config.UseProxy,dnsEnabled=config.UseDagamiDns,dnsTransport=pool==null?"custom UDP/TCP":pool.Length>0&&pool[0].Provider=="magicdns"?"DoH: MagicDNS":"DoH: Dagami -> MagicDNS",providers=DnsProviders.Snapshot(),systemDns=SystemDnsManager.BriefStatus(),loginVerified=false,modelResponseVerified=false,next="diagnose login; patch APP_ID --dry-run"}));return true;
+                bool configured=ManagedAccess.IsProfile(config.LastProxy)?ManagedAccess.HasActiveDevice():UpstreamProxyDiagnostics.TryParse(config.LastProxy,out proxy);
+                Console.WriteLine(new JavaScriptSerializer().Serialize(new{version=Brand.Version,proxyConfigured=configured,proxyEnabled=config.UseProxy,dnsEnabled=config.UseDagamiDns,dnsTransport=pool==null?"custom UDP/TCP":pool.Length>0&&pool[0].Provider=="magicdns"?"DoH: MagicDNS":"DoH: Dagami -> MagicDNS",providers=DnsProviders.Snapshot(),systemDns=SystemDnsManager.BriefStatus(),loginVerified=false,modelResponseVerified=false,next="diagnose login; patch APP_ID --dry-run"}));return true;
             }
             if(command=="diagnose"&&args.Length==3&&args[1]=="error"){
                 var report=new FileInfo(args[2]);if(!report.Exists||report.Length>1048576)throw new ArgumentException("Нужен текстовый отчёт до 1 МБ.");
@@ -98,6 +99,9 @@ namespace DevProxyApp {
             }
             if(command=="proxy") {
                 if(args.Length==2&&args[1]=="status") {
+                    if(ManagedAccess.IsProfile(ConfigManager.Instance.EffectiveProxy)) {
+                        Console.WriteLine(ManagedAccess.HasActiveDevice()?"Прокси Dagami: устройство привязано.":"Прокси Dagami: привяжите устройство через Telegram.");return true;
+                    }
                     if(MainForm.IsDirectProxyValue(ConfigManager.Instance.LastProxy)){Console.WriteLine("Прямой маршрут Windows/VPN.");return true;}
                     Uri proxy;if(!Uri.TryCreate(ConfigManager.Instance.LastProxy,UriKind.Absolute,out proxy)){Console.WriteLine("Прокси не настроен.");return true;}
                     var safe=new UriBuilder(proxy){UserName="",Password=""};Console.WriteLine(safe.Uri.AbsoluteUri);return true;
@@ -159,7 +163,7 @@ namespace DevProxyApp {
             List<string> paths;
             if(command=="patch"){
                 var cfg=ConfigManager.Instance;string patchProxy=string.IsNullOrWhiteSpace(cfg.EffectiveProxy)&&cfg.UseDagamiDns?"direct":cfg.EffectiveProxy;
-                Uri proxy;if(!MainForm.IsDirectProxyValue(patchProxy)&&(!Uri.TryCreate(patchProxy,UriKind.Absolute,out proxy)||(proxy.Scheme!="http"&&proxy.Scheme!="https")))throw new ArgumentException("Сначала настройте подключение: proxy set");
+                if(!MainForm.HasConfiguredConnection(patchProxy,false))throw new ArgumentException("Сначала настройте подключение в Dagami или выберите свой маршрут через proxy set.");
                 string summary;
                 paths=NativeAppPatcher.Apply(app,manager,NativeShortcuts.UserFolders(),store,patchProxy,out summary,true);
                 Console.WriteLine(summary);

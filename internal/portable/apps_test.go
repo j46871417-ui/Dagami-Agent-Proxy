@@ -2,6 +2,8 @@ package portable
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -59,6 +61,22 @@ func TestAppPresetsPreserveRegisteredPaths(t *testing.T) {
 	}
 	if merged[0].Name != "My Cursor" || merged[0].Path != "custom-cursor" {
 		t.Fatal("discovery overwrote a registered path")
+	}
+}
+
+func TestCustomElectronAppUsesProxy(t *testing.T) {
+	root := t.TempDir()
+	resources := filepath.Join(root, "resources")
+	if err := os.Mkdir(resources, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(resources, "app.asar"), nil, 0600); err != nil {
+		t.Fatal(err)
+	}
+	const local = "http://127.0.0.1:12345"
+	args, _ := launchProxySettings(App{Path: filepath.Join(root, "custom.exe")}, local, "windows")
+	if !slices.Contains(args, "--proxy-server="+local) {
+		t.Fatalf("proxy flags missing: %v", args)
 	}
 }
 

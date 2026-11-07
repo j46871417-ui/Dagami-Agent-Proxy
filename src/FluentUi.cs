@@ -69,11 +69,13 @@ namespace DevProxyApp
                 root.HandleCreated += ThemeControlHandle;
                 if (root.IsHandleCreated) ThemeControlHandle(root, EventArgs.Empty);
             }
-            if (root is Form && root.IsHandleCreated) {
-                int enabled = IsDark ? 1 : 0;
-                DwmSetWindowAttribute(root.Handle, 20, ref enabled, 4);
-            }
+            if (root is Form) ApplyWindowCaption(root);
             root.Invalidate();
+        }
+        internal static void ApplyWindowCaption(Control control) {
+            if (!control.IsHandleCreated) return;
+            int enabled = IsDark ? 1 : 0;
+            DwmSetWindowAttribute(control.Handle, 20, ref enabled, 4);
         }
         private static void ThemeControlHandle(object sender, EventArgs e) {
             var control = (Control)sender;
@@ -268,7 +270,7 @@ namespace DevProxyApp
     {
         private void StyleMacAppList(ListView list)
         {
-            var icons = new Dictionary<string, Image>(StringComparer.OrdinalIgnoreCase);
+            var titleFont = new Font(list.Font, FontStyle.Bold);
             list.OwnerDraw = true;
             list.DrawColumnHeader += (sender, e) => {
                 using (var brush = new SolidBrush(FluentTheme.Surface)) e.Graphics.FillRectangle(brush, e.Bounds);
@@ -281,31 +283,23 @@ namespace DevProxyApp
                 using (var pen = new Pen(FluentTheme.Pick(0xf0f1f4,0x363d4a))) e.Graphics.DrawLine(pen, e.Bounds.Left, e.Bounds.Bottom - 1, e.Bounds.Right, e.Bounds.Bottom - 1);
                 var bounds = Rectangle.Inflate(e.Bounds, -12, 0);
                 if (e.ColumnIndex == 0) {
-                    var target = e.Item.Tag as AppTarget;
-                    string executable = target == null ? "" : target.ExePath ?? "";
-                    Image artwork;
-                    if (!icons.TryGetValue(executable, out artwork)) {
-                        artwork = null;
-                        try { if (File.Exists(executable)) using (var icon = Icon.ExtractAssociatedIcon(executable)) { if (icon != null) artwork = icon.ToBitmap(); } } catch (Exception) { }
-                        icons[executable] = artwork;
-                    }
                     var tile = new Rectangle(bounds.Left, bounds.Top + (bounds.Height - 30) / 2, 30, 30);
                     e.Graphics.SmoothingMode = SmoothingMode.AntiAlias;
                     using (var shape = FluentTheme.Rounded(tile, 9))
                     using (var brush = new SolidBrush(FluentTheme.Pick(0xeff2f8,0x323d51))) e.Graphics.FillPath(brush, shape);
-                    if (artwork != null) e.Graphics.DrawImage(artwork, Rectangle.Inflate(tile, -4, -4));
-                    else TextRenderer.DrawText(e.Graphics, e.Item.Text.Length == 0 ? "A" : e.Item.Text.Substring(0, 1), list.Font, tile, FluentTheme.Accent, TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
+                    TextRenderer.DrawText(e.Graphics, e.Item.Text.Length == 0 ? "A" : e.Item.Text.Substring(0, 1), titleFont, tile, FluentTheme.Accent, TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
                     bounds.X += 42; bounds.Width -= 42;
-                    using (var font = new Font(list.Font, FontStyle.Bold)) TextRenderer.DrawText(e.Graphics, e.SubItem.Text, font, bounds, FluentTheme.Text, TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis);
+                    TextRenderer.DrawText(e.Graphics, e.SubItem.Text, titleFont, bounds, FluentTheme.Text, TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis);
                     if (selected && list.Focused) ControlPaint.DrawFocusRectangle(e.Graphics, Rectangle.Inflate(e.Item.Bounds, -2, -2));
                 } else TextRenderer.DrawText(e.Graphics, e.SubItem.Text, list.Font, bounds, FluentTheme.Muted, TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis);
             };
-            list.Disposed += (sender, e) => { foreach (var image in icons.Values) if (image != null) image.Dispose(); };
+            list.Disposed += (sender, e) => titleFont.Dispose();
         }
         private Panel _fluentPages;
         private Label _fluentHeading;
         private Label _fluentSubtitle;
         private Label _connectionSummary;
+        private FluentButton _connectionAction;
         private LinkLabel _themeLink;
         private string _themeMode;
         private readonly List<FluentButton> _navigation = new List<FluentButton>();
@@ -471,7 +465,7 @@ namespace DevProxyApp
 
             var apps = new FluentLayout { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 4, BackColor = BackColor };
             apps.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
-            apps.RowStyles.Add(new RowStyle(SizeType.Absolute, 116));
+            apps.RowStyles.Add(new RowStyle(SizeType.Absolute, 100));
             apps.RowStyles.Add(new RowStyle(SizeType.Absolute, 42));
             apps.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
             apps.RowStyles.Add(new RowStyle(SizeType.Absolute, 196));
@@ -479,15 +473,15 @@ namespace DevProxyApp
             var connectionRows = new FluentLayout { Dock = DockStyle.Fill, BackColor = Color.Transparent, ColumnCount = 2, RowCount = 2, Margin = Padding.Empty };
             connectionRows.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
             connectionRows.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 126));
-            connectionRows.RowStyles.Add(new RowStyle(SizeType.Absolute, 23));
+            connectionRows.RowStyles.Add(new RowStyle(SizeType.Absolute, 20));
             connectionRows.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
             var connectionCaption = new Label { Text = "ВАШЕ ПОДКЛЮЧЕНИЕ", Dock = DockStyle.Fill, ForeColor = Color.FromArgb(222, 233, 255), Font = new Font("Segoe UI", 9, FontStyle.Bold), BackColor = Color.Transparent, Margin = Padding.Empty };
             connectionRows.Controls.Add(connectionCaption, 0, 0);
             _connectionSummary = new Label { Dock = DockStyle.Fill, ForeColor = Color.White, Font = new Font("Segoe UI", 10), BackColor = Color.Transparent, Margin = Padding.Empty, Text = "Параметры маршрута", AutoEllipsis = true };
             connectionRows.Controls.Add(_connectionSummary, 0, 1);
-            var connectionAction = new FluentButton { Text = "Изменить", Dock = DockStyle.Fill, Margin = new Padding(12, 4, 0, 12), ForeColor = FluentTheme.Accent, BackColor = Color.White, AccessibleName = "Открыть настройки подключения" };
-            connectionAction.Click += (sender, e) => ShowFluentPage(1);
-            connectionRows.Controls.Add(connectionAction, 1, 1);
+            _connectionAction = new FluentButton { Text = "Подключение", Dock = DockStyle.Fill, Margin = new Padding(12, 0, 0, 0), ForeColor = FluentTheme.Accent, BackColor = Color.White, AccessibleName = "Открыть настройки подключения" };
+            _connectionAction.Click += (sender, e) => ShowFluentPage(1);
+            connectionRows.Controls.Add(_connectionAction, 1, 1);
             connection.Controls.Add(connectionRows); apps.Controls.Add(connection, 0, 0);
             var tools = new FlowLayoutPanel { Dock = DockStyle.Fill, WrapContents = false };
             var addMenu=new ContextMenuStrip();
@@ -630,21 +624,20 @@ namespace DevProxyApp
                     else if (!_sessionRefreshTimer.Enabled && _nativeSessions.Count > 0) UpdateNativeStatus();
                 }
             };
-            if (!_preview) {
-                DnsProviders.Initialize();
-                DateTime nextDiscovery=DateTime.UtcNow;
-                Activated+=(sender,e)=>{if(!_nativeBusy&&DateTime.UtcNow>=nextDiscovery){nextDiscovery=DateTime.UtcNow.AddSeconds(15);RefreshNativeTargets();QueueClientStatus(true);UpdateAppActionState();ReadStartupState();}};
-            }
-            RefreshNativeTargets();
+            UpdateNativeStatus();
             bool dark = FluentTheme.IsDark;
             FluentTheme.Apply(this, dark);
             if (_appActions != null) FluentTheme.ApplyMenu(_appActions);
             _themeLink.Text = "Тема: " + (_themeMode == "dark" ? "тёмная" : _themeMode == "light" ? "светлая" : "системная");
-            HandleCreated += (s,e) => FluentTheme.Apply(this, FluentTheme.IsDark);
+            HandleCreated += (s,e) => FluentTheme.ApplyWindowCaption(this);
         }
 
         private void CheckFluentProxy()
         {
+            if (_useProxyCheckBox.Checked && ManagedAccess.IsProfile(_proxyBox.Text) && !ManagedAccess.HasActiveDevice()) {
+                OpenManagedPair();
+                return;
+            }
             if (!SaveNativeSettings()) return; int port = _bridgePort;
             string service = _probeService == null ? "Antigravity" : _probeService.Text;
             _nativeBusy = true; SetNativeButtonsEnabled(false); _nativeStatus.Text = "Проверка TLS и доступности маршрута через Dagami…";

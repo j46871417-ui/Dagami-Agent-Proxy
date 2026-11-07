@@ -19,12 +19,8 @@ class ConnectionRecoveryChecks {
  static int Main(){
   string root=Path.Combine(Path.GetTempPath(),"Dagami-recovery-"+Guid.NewGuid().ToString("N"));Directory.CreateDirectory(root);
   try {
-   var adopt=typeof(ConfigManager).GetMethod("CanAdoptDetectedProxy",BindingFlags.Static|BindingFlags.NonPublic);
-   Assert(!(bool)adopt.Invoke(null,new object[]{"http://127.0.0.1:53200",false}),"Own bridge adopted as upstream");
-   Assert(!(bool)adopt.Invoke(null,new object[]{"http://localhost:53209",false}),"Reserve bridge adopted as upstream");
-   Assert(!(bool)adopt.Invoke(null,new object[]{"http://127.0.0.1:61000",true}),"Managed dynamic bridge adopted as upstream");
-   Assert((bool)adopt.Invoke(null,new object[]{"http://127.0.0.1:7890",false}),"Independent local VPN proxy rejected");
-   Assert((bool)adopt.Invoke(null,new object[]{"http://proxy.example:8080",true}),"Explicit external proxy in IDE rejected");
+   var defaults=new ConfigManager();
+   Assert(defaults.EffectiveProxy==ManagedAccess.Profile&&!defaults.UseDagamiDns,"A new install must use the Dagami gateway without a Smart DNS bypass");
    int probeCalls=0;
    var route=ConnectionDiagnostics.Check(12345,port=>{probeCalls++;Assert(port==12345,"Probe did not use selected bridge");return "HTTP 401 expected without token";});
    Assert(route.Available&&route.Status==401&&probeCalls==1,"Effective Smart DNS/VPN route rejected because no upstream was tested");

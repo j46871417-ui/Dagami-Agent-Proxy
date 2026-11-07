@@ -22,6 +22,7 @@ namespace DevProxyApp {
   readonly byte[] privateKey;
   public Uri Endpoint {get;private set;}
   public static bool IsProfile(string value){return string.Equals((value??"").Trim(),Profile,StringComparison.OrdinalIgnoreCase);}
+  public static bool HasActiveDevice(){return File.Exists(Active);}
   public sealed class Stored {public string Endpoint {get;set;} public string Key {get;set;} }
   public sealed class Result { public bool active {get;set;} public string code {get;set;} }
 

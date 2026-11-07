@@ -105,11 +105,19 @@ func NewController(dir string, preview bool) (*Controller, error) {
 		if c.state.Version != 1 {
 			return nil, errors.New("неподдерживаемая версия настроек")
 		}
+		// The original install provided just the system route as a preset.
+		if c.state.Active == "direct" && len(c.state.Profiles) == 1 && c.state.Profiles[0].ID == "direct" && c.state.Profiles[0].Proxy == "direct" {
+			c.state.Profiles = append(c.state.Profiles, pendingManagedProfile())
+			c.state.Active = managedDefaultID
+			if e = c.saveLocked(); e != nil {
+				return nil, e
+			}
+		}
 		c.state.Apps = addMissingApps(c.state.Apps)
 	} else if !os.IsNotExist(e) {
 		return nil, e
 	} else {
-		c.state = State{Version: 1, Active: "direct", Profiles: []Profile{{ID: "direct", Name: "Системный маршрут / VPN", Proxy: "direct"}}, Apps: DiscoverApps()}
+		c.state = State{Version: 1, Active: managedDefaultID, Profiles: []Profile{pendingManagedProfile(), {ID: "direct", Name: "Системный маршрут / VPN", Proxy: "direct"}}, Apps: DiscoverApps()}
 		if e = c.saveLocked(); e != nil {
 			return nil, e
 		}
