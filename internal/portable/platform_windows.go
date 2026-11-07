@@ -93,9 +93,17 @@ func manageProcess(cmd *exec.Cmd) (func() error, error) {
 	}, nil
 }
 func openBrowser(address string) error {
-	cmd := exec.Command("rundll32.exe", "url.dll,FileProtocolHandler", address)
-	prepareProcess(cmd)
-	return cmd.Run()
+	target, err := syscall.UTF16PtrFromString(address)
+	if err != nil {
+		return err
+	}
+	verb, _ := syscall.UTF16PtrFromString("open")
+	shell := syscall.NewLazyDLL("shell32.dll").NewProc("ShellExecuteW")
+	result, _, _ := shell.Call(0, uintptr(unsafe.Pointer(verb)), uintptr(unsafe.Pointer(target)), 0, 0, 1)
+	if result <= 32 {
+		return errors.New("Windows не смог открыть браузер по умолчанию")
+	}
+	return nil
 }
 func resolveExecutable(path string) (string, error) {
 	fi, e := os.Stat(path)

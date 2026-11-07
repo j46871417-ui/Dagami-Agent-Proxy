@@ -146,7 +146,7 @@ func (s *Server) handle(w http.ResponseWriter, r *http.Request) {
 	case "/api/session/stop":
 		e = s.Controller.Stop(input.ID)
 	case "/api/probe":
-		value, e = s.Controller.Probe(r.Context())
+		value, e = s.Controller.Probe(r.Context(), input.ID)
 	case "/api/dns/status":
 		value, e = s.Controller.DNSStatus(r.Context())
 	case "/api/dns/apply", "/api/dns/restore", "/api/dns/reset":
@@ -173,7 +173,28 @@ func reply(w http.ResponseWriter, value any, e error) {
 	}
 	json.NewEncoder(w).Encode(map[string]any{"ok": true, "result": value})
 }
-func (c *Controller) Probe(parent context.Context) (any, error) {
+func probeHosts(service string) []string {
+	switch service {
+	case "", "antigravity":
+		return []string{"accounts.google.com", "oauth2.googleapis.com", "cloudcode-pa.googleapis.com"}
+	case "gemini":
+		return []string{"gemini.google.com", "accounts.google.com"}
+	case "cursor":
+		return []string{"cursor.com", "api2.cursor.sh"}
+	case "codex":
+		return []string{"chatgpt.com", "api.openai.com"}
+	case "claude":
+		return []string{"claude.ai", "api.anthropic.com"}
+	default:
+		return nil
+	}
+}
+
+func (c *Controller) Probe(parent context.Context, service string) (any, error) {
+	hosts := probeHosts(service)
+	if len(hosts) == 0 {
+		return nil, errors.New("выберите сервис для проверки")
+	}
 	raw, e := c.profileProxy()
 	if e != nil {
 		return nil, e
@@ -193,8 +214,7 @@ func (c *Controller) Probe(parent context.Context) (any, error) {
 		MS     int64  `json:"ms"`
 		Error  string `json:"error,omitempty"`
 	}
-	results := make([]result, 3)
-	hosts := []string{"accounts.google.com", "oauth2.googleapis.com", "cloudcode-pa.googleapis.com"}
+	results := make([]result, len(hosts))
 	var wg sync.WaitGroup
 	for i, host := range hosts {
 		wg.Add(1)

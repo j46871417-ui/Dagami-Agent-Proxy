@@ -1,5 +1,15 @@
 # Changelog
 
+## App routing and smaller desktop package
+
+- Add separate launch presets for Gemini Desktop, Codex Desktop, Claude Desktop
+  and Claude Code, with per-service connectivity checks.
+- Build a routing-only package without system DNS changes or binary inspection.
+- Open the Windows UI through ShellExecute and support verified Authenticode
+  signing before packaging.
+
+See [APP_ROUTING.md](APP_ROUTING.md) for routing and release instructions.
+
 ## Go/Rust portable client and flat Windows UI — 2026-11-07
 
 - Add a compiled portable client with profiles, local proxy sessions, route

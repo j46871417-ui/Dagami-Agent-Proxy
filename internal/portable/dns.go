@@ -1,3 +1,5 @@
+//go:build !routing_only
+
 package portable
 
 import (
@@ -6,6 +8,8 @@ import (
 	"net"
 	"strings"
 )
+
+const RoutingOnly = false
 
 func (c *Controller) DNSStatus(ctx context.Context) (any, error) { return dnsStatus(ctx) }
 func (c *Controller) DNSChange(ctx context.Context, operation, server, iface string) (any, error) {

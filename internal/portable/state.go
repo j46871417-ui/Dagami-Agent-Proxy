@@ -103,6 +103,7 @@ func NewController(dir string, preview bool) (*Controller, error) {
 		if c.state.Version != 1 {
 			return nil, errors.New("неподдерживаемая версия настроек")
 		}
+		c.state.Apps = addMissingApps(c.state.Apps)
 	} else if !os.IsNotExist(e) {
 		return nil, e
 	} else {
@@ -171,12 +172,13 @@ func (c *Controller) Snapshot() any {
 		sessions = append(sessions, s.SessionInfo)
 	}
 	return struct {
-		State    State         `json:"state"`
-		Sessions []SessionInfo `json:"sessions"`
-		Events   []Event       `json:"events"`
-		OS       string        `json:"os"`
-		Preview  bool          `json:"preview"`
-	}{state, sessions, append([]Event(nil), c.events...), runtime.GOOS, c.preview}
+		State       State         `json:"state"`
+		Sessions    []SessionInfo `json:"sessions"`
+		Events      []Event       `json:"events"`
+		OS          string        `json:"os"`
+		Preview     bool          `json:"preview"`
+		RoutingOnly bool          `json:"routing_only"`
+	}{state, sessions, append([]Event(nil), c.events...), runtime.GOOS, c.preview, RoutingOnly}
 }
 func (c *Controller) SaveProfile(name, raw string) error {
 	if len(name) < 1 || len(name) > 80 || len(raw) > 4096 {
@@ -373,12 +375,9 @@ func (c *Controller) Launch(id string) error {
 	if e != nil {
 		return e
 	}
-	args := append([]string(nil), app.Args...)
-	if !app.Console && isChromium(app) {
-		args = append(args, "--proxy-server="+bridge.URL(), "--proxy-bypass-list=localhost;127.0.0.1;[::1]", "--disable-quic")
-	}
+	args, env := launchProxySettings(app, bridge.URL(), runtime.GOOS)
 	cmd := exec.Command(app.Path, args...)
-	cmd.Env = childEnvironment(bridge.URL())
+	cmd.Env = env
 	cmd.Dir = filepath.Dir(app.Path)
 	prepareProcess(cmd)
 	if e = cmd.Start(); e != nil {
@@ -466,50 +465,6 @@ func (c *Controller) Close() {
 		case <-time.After(5 * time.Second):
 		}
 	}
-}
-func isChromium(a App) bool {
-	n := strings.ToLower(a.ID + " " + a.Name + " " + filepath.Base(a.Path))
-	for _, v := range []string{"antigravity", "codex", "cursor", "code", "windsurf", "vscodium", "electron"} {
-		if strings.Contains(n, v) {
-			return true
-		}
-	}
-	return false
-}
-func DiscoverApps() []App {
-	home, _ := os.UserHomeDir()
-	local := os.Getenv("LOCALAPPDATA")
-	result := []App{}
-	entries := []struct{ id, name, command, folder string }{{"antigravity", "Antigravity", "antigravity", "Antigravity"}, {"antigravity-ide", "Antigravity IDE", "antigravity-ide", "Antigravity IDE"}, {"codex", "Codex CLI", "codex", "Codex"}, {"vscode", "Visual Studio Code", "code", "Microsoft VS Code"}, {"cursor", "Cursor", "cursor", "Cursor"}, {"windsurf", "Windsurf", "windsurf", "Windsurf"}}
-	for _, v := range entries {
-		a := App{ID: v.id, Name: v.name, Console: v.id == "codex"}
-		candidates := []string{}
-		if runtime.GOOS == "windows" {
-			file := v.folder + ".exe"
-			if v.id == "vscode" {
-				file = "Code.exe"
-			}
-			if v.id == "antigravity" {
-				file = "Antigravity.exe"
-			}
-			candidates = append(candidates, filepath.Join(local, "Programs", v.folder, file))
-		} else if runtime.GOOS == "darwin" {
-			candidates = append(candidates, "/Applications/"+v.folder+".app", filepath.Join(home, "Applications", v.folder+".app"))
-		}
-		if p, e := exec.LookPath(v.command); e == nil {
-			candidates = append(candidates, p)
-		}
-		for _, p := range candidates {
-			if r, e := resolveExecutable(p); e == nil {
-				if fi, e := os.Stat(r); e == nil && fi.Mode().IsRegular() {
-					a.Path = r
-					break
-				}
-			}
-		}
-		result = append(result, a)
-	}
-	return result
 }
 func (c *Controller) profileProxy() (string, error) {
 	c.mu.Lock()

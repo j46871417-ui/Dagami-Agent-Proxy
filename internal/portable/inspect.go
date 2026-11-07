@@ -1,3 +1,5 @@
+//go:build !routing_only
+
 package portable
 
 import (

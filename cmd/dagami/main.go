@@ -67,7 +67,11 @@ func run() error {
 		return e
 	}
 	defer s.Close()
-	fmt.Println("Dagami Agent Proxy · Go + Rust")
+	if portable.RoutingOnly {
+		fmt.Println("Dagami Agent Proxy · Routing")
+	} else {
+		fmt.Println("Dagami Agent Proxy · Go + Rust")
+	}
 	fmt.Println("Локальный интерфейс: " + s.URL + "/#" + s.Token)
 	if !*headless {
 		if e = s.Open(); e != nil {

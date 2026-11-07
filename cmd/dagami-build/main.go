@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -49,7 +50,33 @@ func run() error {
 	native := flag.Bool("windows-native", false, "also build feature-complete WinForms version without Python")
 	nativeChecks := flag.Bool("native-checks", false, "run selected WinForms preview/fixture checks")
 	source := flag.Bool("source", false, "also package desktop source without the legacy Python application")
+	routing := flag.Bool("routing-only", false, "build only app routing and connectivity checks, without DNS changes or binary inspection")
+	signTool := flag.String("sign-tool", "", "path to Windows SDK SignTool.exe")
+	thumbprint := flag.String("sign-thumbprint", "", "thumbprint of a code signing certificate in the current user's store")
+	timestamp := flag.String("timestamp-url", "", "HTTPS RFC 3161 timestamp URL for Windows signing")
 	flag.Parse()
+	if *routing && (*native || *nativeChecks) {
+		return errors.New("routing-only cannot be combined with WinForms builds or checks")
+	}
+	var sign func(string) error
+	if *signTool != "" || *thumbprint != "" || *timestamp != "" {
+		u, err := url.Parse(*timestamp)
+		if runtime.GOOS != "windows" || *signTool == "" || !regexp.MustCompile(`^[[:xdigit:]]{40}$`).MatchString(*thumbprint) || err != nil || u.Scheme != "https" || u.Hostname() == "" || u.User != nil {
+			return errors.New("Windows signing requires SignTool, a 40-digit certificate thumbprint and an HTTPS timestamp URL")
+		}
+		if *target != "windows/amd64" && *target != "all" && !*native && !*nativeChecks {
+			return errors.New("signing requires a Windows target")
+		}
+		sign = func(exe string) error {
+			if err := execRun(*signTool, nil, "sign", "/sha1", *thumbprint, "/fd", "SHA256", "/tr", *timestamp, "/td", "SHA256", exe); err != nil {
+				return fmt.Errorf("Authenticode signing: %w", err)
+			}
+			if err := execRun(*signTool, nil, "verify", "/pa", "/tw", exe); err != nil {
+				return fmt.Errorf("Authenticode verification: %w", err)
+			}
+			return nil
+		}
+	}
 	if _, e := os.Stat("go.mod"); e != nil {
 		return errors.New("run from the repository root")
 	}
@@ -65,11 +92,17 @@ func run() error {
 		return e
 	}
 	defer os.RemoveAll(tmp)
-	if e = prepare(tmp); e != nil {
-		return e
+	if !*routing {
+		if e = prepare(tmp); e != nil {
+			return e
+		}
 	}
 	if *check {
-		if e = execRun("go", nil, "test", "./..."); e != nil {
+		args := []string{"test"}
+		if *routing {
+			args = append(args, "-tags", "routing_only")
+		}
+		if e = execRun("go", nil, append(args, "./...")...); e != nil {
 			return e
 		}
 	}
@@ -89,7 +122,7 @@ func run() error {
 			return fmt.Errorf("unsupported target %q", t)
 		}
 		parts := strings.Split(t, "/")
-		bundle, e := buildPortable(tmp, dir, parts[0], parts[1])
+		bundle, e := buildPortable(tmp, dir, parts[0], parts[1], *routing, sign)
 		if e != nil {
 			return e
 		}
@@ -98,7 +131,7 @@ func run() error {
 		}
 	}
 	if *native || *nativeChecks {
-		exe, e := buildWindows(filepath.Join(dir, "windows-native"))
+		exe, e := buildWindows(filepath.Join(dir, "windows-native"), sign)
 		if e != nil {
 			return e
 		}
@@ -149,7 +182,7 @@ func prepare(tmp string) error {
 	}
 	return copyFile("src/SystemDns.ps1", "internal/portable/system_dns.ps1", 0644)
 }
-func buildPortable(tmp, out, osName, arch string) (string, error) {
+func buildPortable(tmp, out, osName, arch string, routing bool, sign func(string) error) (string, error) {
 	label := osName + "-" + arch
 	build := filepath.Join(tmp, label)
 	if e := os.MkdirAll(build, 0755); e != nil {
@@ -160,10 +193,21 @@ func buildPortable(tmp, out, osName, arch string) (string, error) {
 		binary = nativeExe
 	}
 	path := filepath.Join(build, binary)
-	if e := execRun("go", []string{"GOOS=" + osName, "GOARCH=" + arch, "CGO_ENABLED=0"}, "build", "-trimpath", "-buildvcs=false", "-mod=readonly", "-ldflags", "-s -w -buildid=", "-o", path, "./cmd/dagami"); e != nil {
+	args := []string{"build", "-trimpath", "-buildvcs=false", "-mod=readonly", "-ldflags", "-s -w -buildid="}
+	variant := "Portable"
+	if routing {
+		args = append(args, "-tags", "routing_only")
+		variant = "Routing"
+	}
+	if e := execRun("go", []string{"GOOS=" + osName, "GOARCH=" + arch, "CGO_ENABLED=0"}, append(args, "-o", path, "./cmd/dagami")...); e != nil {
 		return "", e
 	}
-	archive := filepath.Join(out, "Dagami-Portable-"+label+".zip")
+	if osName == "windows" && sign != nil {
+		if e := sign(path); e != nil {
+			return "", e
+		}
+	}
+	archive := filepath.Join(out, "Dagami-"+variant+"-"+label+".zip")
 	e := writeZIP(archive, func(z *zip.Writer) error {
 		if osName == "darwin" {
 			base := "Dagami Agent Proxy.app/Contents/"
@@ -178,10 +222,13 @@ func buildPortable(tmp, out, osName, arch string) (string, error) {
 				return e
 			}
 		}
-		for _, name := range []string{"NATIVE_NEXT.md", "LICENSE", "THIRD_PARTY_NOTICES.md"} {
+		for _, name := range []string{"NATIVE_NEXT.md", "APP_ROUTING.md", "LICENSE", "THIRD_PARTY_NOTICES.md"} {
 			if e := zipFile(z, name, name, 0644); e != nil {
 				return e
 			}
+		}
+		if routing {
+			return nil
 		}
 		dep, e := exec.Command("go", "list", "-m", "-f", "{{.Dir}}", "github.com/tetratelabs/wazero").Output()
 		if e != nil {
@@ -198,7 +245,7 @@ func buildPortable(tmp, out, osName, arch string) (string, error) {
 func compiler() string {
 	return filepath.Join(os.Getenv("WINDIR"), "Microsoft.NET", "Framework64", "v4.0.30319", "csc.exe")
 }
-func buildWindows(dir string) (string, error) {
+func buildWindows(dir string, sign func(string) error) (string, error) {
 	if runtime.GOOS != "windows" {
 		return "", errors.New("WinForms compilation requires Windows")
 	}
@@ -222,6 +269,11 @@ func buildWindows(dir string) (string, error) {
 	args = append(args, "/win32manifest:src/app.manifest", "/win32icon:devproxy_pkg/assets/dagami-agent-proxy.ico", "/resource:devproxy_pkg/assets/dagami-agent-proxy.ico,Dagami.AgentProxy.ico", "/resource:devproxy_pkg/assets/icon-64.png,Dagami.AgentProxy.png", "/resource:src/SystemDns.ps1,DevProxy.SystemDns.ps1")
 	if e = execRun(compiler(), nil, args...); e != nil {
 		return "", e
+	}
+	if sign != nil {
+		if e = sign(ready); e != nil {
+			return "", e
+		}
 	}
 	if e = copyFile(ready, out, 0755); e != nil {
 		return "", e
@@ -331,7 +383,7 @@ func zipText(z *zip.Writer, name, text string) error {
 	return e
 }
 func sourceZip(path string) error {
-	names := []string{"go.mod", "go.sum", "LICENSE", "NATIVE_NEXT.md", "THIRD_PARTY_NOTICES.md", "CHANGELOG.md", "src/SystemDns.ps1", "src/app.manifest", "devproxy_pkg/assets/dagami-agent-proxy.ico", "devproxy_pkg/assets/icon-64.png", "native/core/Cargo.toml", "native/core/Cargo.lock", "native/core/src/lib.rs"}
+	names := []string{"go.mod", "go.sum", "LICENSE", "NATIVE_NEXT.md", "APP_ROUTING.md", "THIRD_PARTY_NOTICES.md", "CHANGELOG.md", "src/SystemDns.ps1", "src/app.manifest", "devproxy_pkg/assets/dagami-agent-proxy.ico", "devproxy_pkg/assets/icon-64.png", "native/core/Cargo.toml", "native/core/Cargo.lock", "native/core/src/lib.rs"}
 	for _, s := range nativeSources {
 		names = append(names, "src/"+s)
 	}
