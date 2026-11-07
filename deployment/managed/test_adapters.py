@@ -41,7 +41,7 @@ class AdapterTests(unittest.TestCase):
         controller = load("controller_fixture", folder / "controller.py")
         secret = base64.urlsafe_b64encode(b"z" * 32).decode().rstrip("=")
         (folder / "secret").write_text(secret)
-        with patch.dict(os.environ, DAGAMI_MANAGED_BRIDGE_KEY_FILE=str(folder / "secret"), DAGAMI_MANAGED_REQUIRE_DEVICE="0"):
+        with patch.dict(os.environ, DAGAMI_MANAGED_BRIDGE_KEY_FILE=str(folder / "secret"), DAGAMI_MANAGED_ALLOW_LEGACY="0"):
             auth = controller.Controller({"route_count": 1, "nodes": {"us": {}}, "database": str(folder / "fixture.db"),
                                           "google_networks": [], "google_hosts": ["example.test"], "google_suffixes": [], "upstream_auth": "Basic fixture"})
         self.addCleanup(auth.db.close)
@@ -50,6 +50,9 @@ class AdapterTests(unittest.TestCase):
                        "subject": "42", "allowed": ["us"], "preferred": "us", "scope": "google"}]})
         basic = "Basic " + base64.b64encode(b"fixture:fixture-password").decode()
         self.assertEqual(auth.authorize(basic, "example.test:443")[0], 407)
+        auth.allow_legacy = True
+        self.assertEqual(auth.authorize(basic, "example.test:443")[0], 200)
+        auth.allow_legacy = False
         self.assertEqual(auth.authorize("Dagami-Local fake.fixture", "example.test:443")[0], 407)
         header = "Dagami-Local " + secret + ".fixture"
         self.assertEqual(auth.authorize(header, "127.0.0.1:443")[0], 403)
@@ -81,6 +84,9 @@ class AdapterTests(unittest.TestCase):
         self.assertEqual(adapter.start_code("/start dagami_" + code), code)
         self.assertEqual(adapter.start_code("/start dagami_bad"), "")
         self.assertIsNone(adapter.start_code("/proxy"))
+        for old_button in ("get_proxy_grant", "agw3:creds", "dagami_refresh:old"):
+            self.assertEqual(menu.legacy_action(old_button), "home")
+        self.assertEqual(menu.legacy_action("dagami_warp"), "warp")
         answers = []
 
         async def answer(text, **kwargs):

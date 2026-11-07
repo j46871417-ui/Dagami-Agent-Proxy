@@ -1,13 +1,15 @@
 --- a/dagami_menu.py
 +++ b/dagami_menu.py
-@@ -1,5 +1,6 @@
+@@ -1,24 +1,24 @@
  """Private Dagami screens, persistent navigation and serialized user actions."""
  import asyncio
 +import bot_access
  import dataclasses
  import html
  import json
-@@ -8,7 +9,6 @@
+ import logging
++import os
+ import pathlib
  import secrets
  import sqlite3
  import time
@@ -15,11 +17,22 @@
 
  from aiogram import BaseMiddleware, types
  from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError
-@@ -88,98 +88,42 @@
+ from warp_menu import WarpMenu, Store as WarpStore, VIEWS as WARP_VIEWS
+
+-ENTRY = 'test-dns.dagami.ru:50128'
++MANAGED_ENDPOINT = os.environ.get('DAGAMI_MANAGED_URL', '')
+ CHANNEL = 'https://t.me/dagamivibe'
+ GROUP = 'https://t.me/dagamvi/49'
+ TRIBUTE = 'https://pay.cloudtips.ru/p/671fda86'
+-RELEASES = 'https://github.com/j46871417-ui/Dagami-Agent-Proxy/releases'
+ NAMES = {'us': 'США'}
+ SLOTS = ('Основная', 'Резерв 1', 'Резерв 2')
+ VIEWS = {'home', 'routes', 'country', 'help', 'rules', 'renew', 'donate', 'gate', 'key'} | WARP_VIEWS
+@@ -88,102 +88,44 @@
      return updated
 
 
--def connection(account, scheme=''):
+-def connection(account, scheme='https://'):
 -    login, password = account['login'], account['password']
 -    if scheme:
 -        return scheme + quote(login, safe='') + ':' + quote(password, safe='') + '@' + ENTRY
@@ -35,7 +48,7 @@
 -            lic_str = '\n<b>Ключ лицензии:</b> <code>' + html.escape(lic) + '</code>'
 -        except Exception:
 -            pass
--    return ('<b>Протокол:</b> HTTP / HTTPS CONNECT\n'
+-    return ('<b>Протокол:</b> HTTPS CONNECT (TLS)\n'
 -            '<b>Сервер:</b> <code>test-dns.dagami.ru</code>\n<b>Порт:</b> <code>50128</code>\n'
 -            '<b>Логин:</b> <code>' + html.escape(account['login']) + '</code>\n'
 -            '<b>Пароль:</b> <code>' + html.escape(account['password']) + '</code>' + lic_str + '\n\n'
@@ -69,9 +82,10 @@
 +    help_button = button('Как подключить', 'help')
      view = session.view
 -    if policy and policy.get('routes') == ['us'] and view in ('home', 'routes', 'slot'):
--        text = '<b>Прокси Dagami · США</b>\n\n' + credential_text(account, session.user_id)
+-        text = '<b>Доступы к антигравити</b>\n\n' + credential_text(account, session.user_id)
 -        if view == 'home':
 -            rows = [links(), [help_button, rules], [donate, copy()], [button('♻️Перевыпуск', 'renew'), button('🔑Ключ лицензии', 'key')]]
+-            rows.append([button('🌀 WARP-файл', 'warp')])
 -        else:
 -            rows = [[help_button, rules], [copy()], [back, home]]
 -        if session.user_id in ADMIN_IDS:
@@ -82,11 +96,12 @@
 -        text += 'Для доступа к прокси подпишитесь на канал ' + CHANNEL + ' и группу ' + GROUP + ', затем нажмите «Проверить подписки».\n\nОбе подписки обязательны. После подтверждения бот покажет актуальные реквизиты.'
 -        rows = [links(), [button('🔄Проверить подписки', 'check')]]
 -    elif view in ('home', 'routes'):
--        text = '<b>Прокси Dagami · США</b>\n\n' + credential_text(account, session.user_id)
+-        text = '<b>Доступы к антигравити</b>\n\n' + credential_text(account, session.user_id)
 -        if view == 'home':
 -            key_btn = button('🔑Ключ лицензии', 'key')
--            warp_btn = button('📖Подключение', 'help', 'primary')
+-            warp_btn = button('🌀 WARP-файл', 'warp', 'primary')
 -            rows = [links(), [help_button, rules], [donate, copy()], [button('♻️Перевыпуск', 'renew'), key_btn]]
+-            rows.append([warp_btn])
 -        else:
 -            rows = [[help_button, rules], [copy()], [back, home]]
 -    elif view == 'country':
@@ -97,9 +112,11 @@
 +        text += 'Подпишитесь на канал и группу, затем подтвердите привязку из приложения Dagami.'
 +        rows = [links, [button('Проверить подписки', 'check')]]
      elif view == 'help':
--        text = '<b>Инструкция по настройке confeden/Antigravity</b>\n\n1. Откройте релизы проекта:\n' + RELEASES + '\n2. Скачайте версию для своей системы и запустите анлокер.\n3. В версии с режимом «Свой прокси / Own proxy» выберите этот режим. Интерфейс может отличаться между версиями.\n4. Вставьте свой адрес прокси:\n<code>' + html.escape(connection(account, 'http://')) + '</code>\nЕсли клиент поддерживает TLS к прокси, используйте HTTPS-ссылку с главного экрана.\n5. Примените настройки и проверьте подключение. Проверка шлюза Google подтверждает доступность сети; затем отправьте запрос модели в своей IDE.\n6. Если пункта своего прокси нет, сверяйтесь с инструкцией вашей версии проекта. Доступность модели также зависит от аккаунта Google и её лимитов.'
+-        text = '<b>Доступы к антигравити — подключение</b>\n\n1. Скачайте Dagami Agent Proxy для своей системы:\n' + RELEASES + '\n2. Добавьте свой прокси и выберите протокол HTTPS (TLS к прокси).\n3. Вставьте HTTPS-ссылку:\n<code>' + html.escape(connection(account)) + '</code>\n4. Примените настройки и запустите Antigravity через приложение.\n\nОбычный HTTP-вход отключён. Имя пользователя и пароль остались прежними. Доступность модели также зависит от аккаунта и лимитов Google.'
 -        rows = [links(), [rules], [donate, home]]
 +        text = '<b>Подключение Dagami</b>\n\n1. В приложении откройте «Подключение → Dagami через Telegram».\n2. Нажмите «Открыть Telegram» и проверьте окончание кода.\n3. Подтвердите устройство здесь и проверьте привязку в Dagami.'
++        if MANAGED_ENDPOINT:
++            text += '\n\nHTTPS-адрес шлюза <code>' + html.escape(MANAGED_ENDPOINT) + '</code>'
 +        rows = [links, [home]]
      elif view == 'rules':
 -        usage = policy.get('usage') or {}
@@ -130,16 +147,18 @@
 +        rows = [[types.InlineKeyboardButton(text='Скопировать ключ', copy_text=types.CopyTextButton(text=key))], [home]]
      else:
 -        raise ValueError('invalid screen')
+-    if view == 'home' and session.user_id in ADMIN_IDS:
+-        rows.append([types.InlineKeyboardButton(text='👑 Администрирование', callback_data='admin_panel')])
 -    return (text, types.InlineKeyboardMarkup(inline_keyboard=rows))
 +        text = '<b>Прокси Dagami</b>\n\nОткройте Dagami на своём устройстве и начните привязку в разделе «Подключение».'
-+        rows = [links, [help_button, button('Лимит', 'rules')], [button('Лицензия приложения', 'key'), button('Отозвать устройства', 'renew')], [button('Поддержать проект', 'donate')]]
++        rows = [links, [help_button, button('Лимит', 'rules')], [button('Лицензия приложения', 'key'), button('Отозвать устройства', 'renew')], [button('Поддержать проект', 'donate'), button('WARP-файл', 'warp')]]
 +        if session.user_id in ADMIN_IDS:
 +            rows.append([types.InlineKeyboardButton(text='Администрирование', callback_data='admin_panel')])
 +    return text, types.InlineKeyboardMarkup(inline_keyboard=rows)
 
 
  class DagamiMenu:
-@@ -250,22 +194,52 @@
+@@ -254,22 +196,52 @@
              self.ns['authorize_user'](uid, target.from_user.username, target.from_user.first_name, role='dagami')
          return True
 
@@ -153,8 +172,7 @@
      async def show_current(self, target, session):
 -        if session.view in WARP_VIEWS:
 -            session.navigate('help')
--        if session.view == 'gate':
-+        if session.view == 'gate' or session.view in WARP_VIEWS:
+         if session.view == 'gate':
              session.navigate('home')
 -        if session.view in ('donate', 'renew') or session.view in WARP_VIEWS:
 -            return await self.present(target, session)
@@ -206,7 +224,7 @@
 
      async def retire_previous(self, uid, previous_id, session):
          if not previous_id or not session.message_id or previous_id == session.message_id:
-@@ -360,19 +334,16 @@
+@@ -364,19 +336,16 @@
                      if session.view != 'renew' or not token or token != session.confirm_token:
                          return await self.ack(call, 'Откройте подтверждение заново.')
                      if self.clock() > session.confirm_until:
@@ -229,7 +247,7 @@
                      session.navigate('home')
                  else:
                      return
-@@ -386,7 +357,7 @@
+@@ -390,7 +359,7 @@
                  # Reusing the current message prevents a burst of duplicate error messages.
                  try:
                      await self.ns['bot'].edit_message_text(chat_id=uid, message_id=session.message_id,
@@ -238,23 +256,32 @@
                          reply_markup=types.InlineKeyboardMarkup(inline_keyboard=[[types.InlineKeyboardButton(text='🏠В меню', callback_data=f'dgm:{session.revision}:home')]]),parse_mode=None)
                  except Exception:
                      pass
-@@ -412,6 +383,10 @@
-                     await state.clear()
+@@ -417,6 +386,10 @@
                  if not await self.access(message, session, refresh=command == 'start'):
                      await self.retire_previous(uid, previous_id, session)
-+                    return
+                     return
 +                code = bot_access.start_code(message.text) if command == 'start' else None
 +                if code is not None:
 +                    await self.pair_prompt(message, code)
-                     return
++                    return
                  session.navigate({'start': 'home', 'proxy': 'home', 'route': 'home', 'help': 'help', 'copy': 'home', 'key': 'key', 'license': 'key', 'warp': 'warp'}[command])
                  await self.show_current(message, session)
-@@ -446,21 +421,10 @@
- def install(ns, config_path='/etc/agw-bot/bridge.json', store_path=None):
-     global ADMIN_IDS
+                 await self.retire_previous(uid, previous_id, session)
+@@ -430,9 +403,9 @@
+
+ def legacy_action(value):
+     if value in ('main_menu', 'menu_dagami_view', 'agw3:menu'):return 'home'
+-    if value in ('menu_tg', 'menu_vless', 'menu_awg', 'menu_http', 'menu_help', 'dagami_warp'):return 'help'
++    if value in ('menu_tg', 'menu_vless', 'menu_awg', 'menu_http', 'menu_help'):return 'help'
+     if value == 'check_channel_sub':return 'check'
+-    if value in ('dagami_refresh', 'menu_dagami', 'get_proxy_info', 'get_proxy_grant'):return 'home'
++    if value.startswith('dagami_refresh') or value in ('menu_dagami', 'get_proxy_info', 'get_proxy_grant'):return 'home'
+     if value.startswith('dagami_instructions_'):return 'help'
+     if value in ('dagami_rules',):return 'rules'
+     if value in ('dagami_donate',):return 'donate'
+@@ -452,19 +425,8 @@
      ADMIN_IDS = set(ns['ADMIN_IDS'])
--    from account_store import get, issue, cooldown
-+    from account_store import issue, cooldown
+     from account_store import get, issue, cooldown
      from bot_bridge import GatewayClient
 -    from bot_routes import credentials
      cfg = json.loads(pathlib.Path(config_path).read_text());client = GatewayClient(cfg)
@@ -271,22 +298,44 @@
 -
          def issue(self, uid, force=False):
              try:
-                 account = issue(uid, 'us', force, cfg, enforce_cooldown=force and uid not in ns['ADMIN_IDS'])
-@@ -481,6 +445,8 @@
-         async def __call__(self, handler, event, data):
-             if isinstance(event, types.CallbackQuery):
+                 previous = get(uid, cfg)
+@@ -490,6 +452,8 @@
                  value = event.data or ''
+                 if value.startswith(('admin_', 'usadmin:')) and event.from_user.id != ns['ADMIN_ID']:
+                     return await event.answer('Доступ только у владельца бота.', show_alert=True)
 +                if value.startswith('dgp:'):
 +                    return await menu.pair_approve(event)
                  mapped = legacy_action(value)
                  if value.startswith('dgm:') or mapped is not None:
                      return await menu.callback(event, mapped)
-@@ -504,7 +470,7 @@
+@@ -499,7 +463,7 @@
+                 if command in ('/start', '/proxy', '/route', '/copy', '/help', '/key', '/license', '/warp'):
+                     # Preserve the existing BrightVPN/admin root; its proxy buttons open Dagami.
+                     keep_root = command == '/start' and (event.from_user.id in ns['ADMIN_IDS'] or (ns['is_user_authorized'](event.from_user.id) and ns['get_user_role'](event.from_user.id) == 'full'))
+-                    if not keep_root:
++                    if not keep_root or bot_access.start_code(event.text) is not None:
+                         return await menu.command(event, command[1:], state)
+                 elif event.chat.type == 'private' and event.from_user.id not in ns['ADMIN_IDS']:
+                     entered = (event.text or '').strip()
+@@ -513,8 +477,20 @@
      ns['dp'].callback_query.outer_middleware(MenuMiddleware())
      ns['dp'].message.outer_middleware(MenuMiddleware())
      ns['_dagami_menu'] = menu
 -    ns['_dagami_handles_callback'] = lambda value: value.startswith('dgm:') or legacy_action(value) is not None
 +    ns['_dagami_handles_callback'] = lambda value: value.startswith(('dgm:', 'dgp:')) or legacy_action(value) is not None
      async def polling_ready(**kwargs):
++        commands = [
++            types.BotCommand(command='start', description='Главное меню'),
++            types.BotCommand(command='proxy', description='Привязка устройства Dagami'),
++            types.BotCommand(command='help', description='Как подключить приложение'),
++            types.BotCommand(command='key', description='Лицензия приложения'),
++            types.BotCommand(command='warp', description='Управление WARP'),
++        ]
++        try:
++            await ns['bot'].set_my_commands(commands, request_timeout=5)
++            log.info('Dagami managed commands updated')
++        except Exception as exc:
++            log.warning('Could not update managed bot commands: %s', type(exc).__name__)
          log.info('Dagami polling startup ready')
      ns['dp'].startup.register(polling_ready)
+     log.info('Dagami eight-screen menu installed: persistent navigation and required channel+chat')

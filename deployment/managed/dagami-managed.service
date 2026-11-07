@@ -1,23 +1,29 @@
 [Unit]
 Description=Dagami managed HTTPS proxy gateway
-After=network.target agw-controller.service dagami-us-gateway.service
+After=network-online.target agw-controller.service dagami-us-gateway.service
+Wants=network-online.target
 
 [Service]
 Type=simple
 User=dagami-managed
 Group=dagami-managed
 EnvironmentFile=/etc/dagami-managed/gateway.env
+LoadCredential=tls-chain:/etc/dagami-managed/tls-chain.pem
+LoadCredential=tls-key:/etc/dagami-managed/tls-key.pem
+LoadCredential=bridge-key:/etc/dagami-managed/bridge-key
 RuntimeDirectory=dagami-managed
 RuntimeDirectoryMode=0750
 StateDirectory=dagami-managed
 StateDirectoryMode=0700
 UMask=0077
-ExecStart=/opt/dagami-managed/dagami-gateway -listen ${DAGAMI_LISTEN} -endpoint ${DAGAMI_ENDPOINT} -cert ${DAGAMI_TLS_CERT} -key ${DAGAMI_TLS_KEY} -state /var/lib/dagami-managed/devices.json -bot-socket /run/dagami-managed/bot.sock -upstream ${DAGAMI_LEGACY_LOOPBACK} -bridge-key-file ${DAGAMI_MANAGED_BRIDGE_KEY_FILE}
+ExecStart=/opt/dagami-managed/dagami-gateway -listen ${DAGAMI_LISTEN} -endpoint ${DAGAMI_ENDPOINT} -cert %d/tls-chain -key %d/tls-key -state /var/lib/dagami-managed/devices.json -bot-socket /run/dagami-managed/bot.sock -upstream ${DAGAMI_UPSTREAM} -bridge-key-file %d/bridge-key
 Restart=on-failure
+RestartSec=2s
 NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict
 ProtectHome=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
 
 [Install]
 WantedBy=multi-user.target

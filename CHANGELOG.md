@@ -1,5 +1,9 @@
 # Changelog
 
+- Prepare the managed gateway for a parallel deployment with the legacy entry.
+  Preserve existing bot administration and WARP while replacing proxy details
+  with device approval.
+
 - Show pairing progress and gateway errors where the Telegram actions are used.
   Move service probes to Diagnostics and keep one shared application route.
 - Keep the pairing actions visible after opening Telegram in the portable client.
