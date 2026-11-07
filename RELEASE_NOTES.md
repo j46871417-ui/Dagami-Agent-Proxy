@@ -1,3 +1,5 @@
+**[Группа Dagami](https://t.me/dagamvi) | [Канал Dagami](https://t.me/dagamivibe) | [Донаты](https://pay.cloudtips.ru/p/671fda86) | dns.dagami.ru | [Обсуждение и техподдержка](https://t.me/dagamvi/2140) | [Сообщить об ошибке](https://dns.dagami.ru/support/agent-proxy/)**
+
 # Dagami Agent Proxy 0.5.0 beta
 
 Подробный список изменений относительно опубликованной 0.4.1 beta. В этом выпуске переработаны подключение к Dagami, интерфейс Windows и переносимые сборки для macOS и Linux.
@@ -31,6 +33,8 @@
 - Исправлено падение при закрытии меню темы щелчком снаружи. Уточнены состояния запуска, настройки и повреждённых ярлыков.
 - Кнопки Telegram и проверки привязки показывают ход операции, ожидание подтверждения и ошибки в текущем окне.
 - Выбор Gemini, Cursor, Codex, Claude или Antigravity перенесён в диагностику. Он задаёт адрес тестового запроса через общий маршрут.
+
+**[Группа Dagami](https://t.me/dagamvi) | [Канал Dagami](https://t.me/dagamivibe) | [Донаты](https://pay.cloudtips.ru/p/671fda86) | dns.dagami.ru | [Обсуждение и техподдержка](https://t.me/dagamvi/2140) | [Сообщить об ошибке](https://dns.dagami.ru/support/agent-proxy/)**
 
 ## Запуск приложений и производительность
 
@@ -69,3 +73,5 @@
 Полное сравнение исходников и инструкции доступны по ссылкам ниже.
 
 [Сравнение с 0.4.1 beta](https://github.com/j46871417-ui/Dagami-Agent-Proxy/compare/v0.4.1-beta...v0.5.0-beta) · [Требования и пакеты](https://github.com/j46871417-ui/Dagami-Agent-Proxy/blob/v0.5.0-beta/NATIVE_NEXT.md) · [Подключение](https://github.com/j46871417-ui/Dagami-Agent-Proxy/blob/v0.5.0-beta/MANAGED_ACCESS.md) · [История изменений](https://github.com/j46871417-ui/Dagami-Agent-Proxy/blob/v0.5.0-beta/CHANGELOG.md)
+
+**[Группа Dagami](https://t.me/dagamvi) | [Канал Dagami](https://t.me/dagamivibe) | [Донаты](https://pay.cloudtips.ru/p/671fda86) | dns.dagami.ru | [Обсуждение и техподдержка](https://t.me/dagamvi/2140) | [Сообщить об ошибке](https://dns.dagami.ru/support/agent-proxy/)**

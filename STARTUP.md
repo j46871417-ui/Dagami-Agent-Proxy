@@ -28,3 +28,5 @@ DNS запрашивает права отдельно. Встроенное о�
 
 Пакеты macOS и Linux используют другой клиент. Его возможности и требования
 описаны в [NATIVE_NEXT.md](NATIVE_NEXT.md).
+
+**[Группа Dagami](https://t.me/dagamvi) | [Канал Dagami](https://t.me/dagamivibe) | [Донаты](https://pay.cloudtips.ru/p/671fda86) | dns.dagami.ru | [Обсуждение и техподдержка](https://t.me/dagamvi/2140) | [Сообщить об ошибке](https://dns.dagami.ru/support/agent-proxy/)**

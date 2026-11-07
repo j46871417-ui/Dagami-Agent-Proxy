@@ -1,3 +1,5 @@
+**[Группа Dagami](https://t.me/dagamvi) | [Канал Dagami](https://t.me/dagamivibe) | [Донаты](https://pay.cloudtips.ru/p/671fda86) | dns.dagami.ru | [Обсуждение и техподдержка](https://t.me/dagamvi/2140) | [Сообщить об ошибке](https://dns.dagami.ru/support/agent-proxy/)**
+
 # Dagami Agent Proxy
 
 <p align="center">
@@ -10,8 +12,6 @@ macOS — AppKit, Linux — GTK 3.
 [Скачать 0.5.0 beta](https://github.com/j46871417-ui/Dagami-Agent-Proxy/releases/tag/v0.5.0-beta)
 · [Изменения релиза](RELEASE_NOTES.md)
 · [Бот доступа](https://t.me/bright26bot)
-· [Группа](https://t.me/dagamvi)
-· [Канал](https://t.me/dagamivibe)
 
 **[Быстрый старт](docs/QUICK_START.md)** ·
 **[Руководство пользователя](docs/USER_GUIDE.md)** ·
@@ -41,6 +41,8 @@ macOS и Linux проверены кросс-компиляцией. Сборк�
 Перед заменой Windows EXE завершите Dagami через «Выход» в трее.
 
 [Пакеты, сборка и требования](NATIVE_NEXT.md) · [Маршрутизация](APP_ROUTING.md)
+
+**[Группа Dagami](https://t.me/dagamvi) | [Канал Dagami](https://t.me/dagamivibe) | [Донаты](https://pay.cloudtips.ru/p/671fda86) | dns.dagami.ru | [Обсуждение и техподдержка](https://t.me/dagamvi/2140) | [Сообщить об ошибке](https://dns.dagami.ru/support/agent-proxy/)**
 
 ## Сборка и проверки
 
@@ -94,3 +96,5 @@ SHA-256 появятся в `dist-portable/native-next`. На Windows испол
 Проверка маршрута подтверждает сетевой ответ, а вход и доступ к моделям проверяются
 в самом сервисе. Системный DNS и его полный сброс доступны отдельными действиями
 с резервной копией и подтверждением.
+
+**[Группа Dagami](https://t.me/dagamvi) | [Канал Dagami](https://t.me/dagamivibe) | [Донаты](https://pay.cloudtips.ru/p/671fda86) | dns.dagami.ru | [Обсуждение и техподдержка](https://t.me/dagamvi/2140) | [Сообщить об ошибке](https://dns.dagami.ru/support/agent-proxy/)**

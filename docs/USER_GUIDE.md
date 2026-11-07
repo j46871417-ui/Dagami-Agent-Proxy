@@ -190,3 +190,5 @@ Windows WinForms использует `%APPDATA%\devproxy`; при пробле�
 сессии и выйдите из Dagami. При отказе от управляемого доступа отзовите устройства
 в боте. Затем удалите файлы программы; настройки и резервные копии удаляйте
 после проверки успешного отката. [Автозапуск Windows](../STARTUP.md).
+
+**[Группа Dagami](https://t.me/dagamvi) | [Канал Dagami](https://t.me/dagamivibe) | [Донаты](https://pay.cloudtips.ru/p/671fda86) | dns.dagami.ru | [Обсуждение и техподдержка](https://t.me/dagamvi/2140) | [Сообщить об ошибке](https://dns.dagami.ru/support/agent-proxy/)**

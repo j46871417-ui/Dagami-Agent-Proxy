@@ -2,6 +2,8 @@
 
 ## Documentation after 0.5.0 beta
 
+- Add the shared Dagami community, support and donation header to README,
+  release notes and user guides, plus GitHub funding metadata.
 - Add a short Russian quick start, a platform-specific user guide with
   troubleshooting and a fork maintainer guide covering build, configuration,
   infrastructure, tests, licensing and release packaging.

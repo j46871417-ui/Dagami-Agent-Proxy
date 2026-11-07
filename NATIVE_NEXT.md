@@ -73,3 +73,5 @@ CLI через активный профиль. На Windows в PowerShell ук�
 Переключения в DNS и патчи на живых приложениях при проверке не запускались.
 Производительность реальной модели и выходов VPN зависит от сети; результаты
 loopback-тестов не подтверждают скорость или доступность аккаунта.
+
+**[Группа Dagami](https://t.me/dagamvi) | [Канал Dagami](https://t.me/dagamivibe) | [Донаты](https://pay.cloudtips.ru/p/671fda86) | dns.dagami.ru | [Обсуждение и техподдержка](https://t.me/dagamvi/2140) | [Сообщить об ошибке](https://dns.dagami.ru/support/agent-proxy/)**
