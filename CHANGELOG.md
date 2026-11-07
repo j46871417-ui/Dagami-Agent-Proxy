@@ -1,5 +1,7 @@
 # Changelog
 
+- Fix a WinForms crash when dismissing the appearance menu with an outside click.
+
 ## Native appearance and managed Dagami access
 
 - Add system, light and dark appearance modes to the WinForms client.

@@ -352,17 +352,19 @@ namespace DevProxyApp
             }
         }
 
-        private void ShowThemeMenu() {
+        private ContextMenuStrip CreateThemeMenu() {
             var menu = new ContextMenuStrip();
             foreach (string[] entry in new[]{new[]{"system","Системная"},new[]{"light","Светлая"},new[]{"dark","Тёмная"}}) {
                 string mode = entry[0];
-                var option = new ToolStripMenuItem(entry[1]) { Checked = mode == _themeMode };
+                var option = new ToolStripMenuItem(entry[1]) { Tag = mode };
                 option.Click += (s,e) => ExecuteNativeAction(() => ApplyThemeChoice(mode));
                 menu.Items.Add(option);
             }
-            FluentTheme.ApplyMenu(menu);
-            menu.Closed += (s,e) => menu.Dispose();
-            menu.Show(_themeLink, 0, _themeLink.Height);
+            menu.Opening += (s,e) => {
+                foreach (ToolStripMenuItem option in menu.Items) option.Checked = (string)option.Tag == _themeMode;
+            };
+            Disposed += (s,e) => { menu.Close(); menu.Dispose(); };
+            return menu;
         }
 
         private void SaveJournalToFile()
@@ -429,7 +431,8 @@ namespace DevProxyApp
             sidebar.Controls.Add(nav, 0, 1);
             var footer = new FlowLayoutPanel { Dock = DockStyle.Fill, FlowDirection = FlowDirection.TopDown, WrapContents = false, Margin = Padding.Empty };
             _themeLink = new LinkLabel { Name = "AppearanceMenuLink", AutoSize = true, LinkColor = FluentTheme.Accent, Margin = new Padding(0,0,0,7), AccessibleName = "Выбрать цветовую тему" };
-            _themeLink.LinkClicked += (s,e) => ShowThemeMenu();
+            _themeLink.ContextMenuStrip = CreateThemeMenu();
+            _themeLink.LinkClicked += (s,e) => _themeLink.ContextMenuStrip.Show(_themeLink, 0, _themeLink.Height);
             footer.Controls.Add(_themeLink);
             _updateLink = new LinkLabel { Text = "Обновления\n"+Brand.ReleaseTag, Size = new Size(168,38), AutoSize=false, Font=new Font("Segoe UI",9), LinkColor=FluentTheme.Muted, LinkBehavior=LinkBehavior.HoverUnderline, AccessibleName="Обновления GitHub; установлено "+Brand.ReleaseTag, Margin=new Padding(0,0,0,8) };
             _updateLink.LinkClicked+=(sender,e)=>ExecuteNativeAction(OpenUpdates);

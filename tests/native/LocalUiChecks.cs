@@ -13,11 +13,19 @@ class LocalUiChecks {
  static void Picture(MainForm form, string name) { using (var bitmap = new Bitmap(form.Width, form.Height)) { form.DrawToBitmap(bitmap, new Rectangle(Point.Empty, form.Size)); bitmap.Save(name); } }
  static int Buttons(Control parent,string text){int count=0;foreach(Control child in parent.Controls){if(child is Button&&child.Text==text)count++;count+=Buttons(child,text);}return count;}
  static int VisibleButtons(Control parent){int count=0;foreach(Control child in parent.Controls)if(child.Visible){if(child is Button)count++;count+=VisibleButtons(child);}return count;}
+ static void DismissThemeMenu(MainForm form, ContextMenuStrip menu) {
+    Assert(menu.Visible,"Theme menu did not open");
+    var outside=Message.Create(form.Handle,0x0201,new IntPtr(1),new IntPtr((80<<16)|600));
+    Application.FilterMessage(ref outside);
+    Application.DoEvents();
+    Assert(!menu.Visible&&!menu.IsDisposed,"An outside click must dismiss the reusable theme menu");
+ }
  [STAThread] static int Main() {
   try {
    Application.EnableVisualStyles();
    Application.SetUnhandledExceptionMode(UnhandledExceptionMode.ThrowException);
    Console.WriteLine("UI fixture: constructing preview");Console.Out.Flush();
+   ContextMenuStrip themeMenu;
    using (var form = new MainForm(null, false, true)) {
     Console.WriteLine("UI fixture: rendering pages");Console.Out.Flush();
     Assert(typeof(MainForm).GetMethod("AntigravitySession",Private).Invoke(form,null)==null,"Login lookup crashes on missing application paths without a session");
@@ -55,9 +63,18 @@ class LocalUiChecks {
     Assert(Get(form,"_sessionRefreshTimer")==null,"Static preview starts background polling");
     Assert(form.Controls.Find("AppearanceMenuLink",true).Length==1,"Appearance menu missing");
     Assert(form.Controls.Find("ManagedPairLink",true).Length==1,"Managed pairing entry missing");
+    var appearance=(LinkLabel)Get(form,"_themeLink");
+    themeMenu=appearance.ContextMenuStrip;
+    themeMenu.Show(appearance,0,appearance.Height);
+    DismissThemeMenu(form,themeMenu);
     Color light=form.BackColor;
-    Call(form,"ApplyThemeChoice","dark");
+    themeMenu.Show(appearance,0,appearance.Height);
+    themeMenu.Items[2].PerformClick();
+    Application.DoEvents();
     Assert(form.BackColor.GetBrightness()<0.2f&&form.ForeColor.GetBrightness()>0.8f,"Dark theme colors missing");
+    themeMenu.Show(appearance,0,appearance.Height);
+    Assert(((ToolStripMenuItem)themeMenu.Items[2]).Checked,"Theme menu lost the active theme");
+    DismissThemeMenu(form,themeMenu);
     Bounds(form);Picture(form,"dark-apps.png");
     Call(form,"ShowFluentPage",1);Bounds(form);Picture(form,"dark-connection.png");
     Call(form,"ApplyThemeChoice","light");
@@ -68,6 +85,7 @@ class LocalUiChecks {
     for(int index=0;index<5;index++){Call(form,"ShowFluentPage",index);Bounds(form);Picture(form,"local-page-"+index+"-min.png");}
 
    }
+   Assert(themeMenu.IsDisposed,"Theme menu must be disposed when the form is disposed");
    string reportLog=Path.Combine(Environment.CurrentDirectory,"report-fixture.log");File.WriteAllText(reportLog,"[TEST] Interactive console regression fixture\nAuthorization: Bearer fixture-secret\n[TEST] HTTP bridge ready on loopback\n");
    using(var report=new BugReportDialog(reportLog)){
     report.StartPosition=FormStartPosition.Manual;report.Location=new Point(-30000,-30000);report.Show();Application.DoEvents();
