@@ -2,6 +2,7 @@ package managed
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"crypto/ecdsa"
 	"crypto/elliptic"
@@ -17,6 +18,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -145,6 +147,17 @@ func TestManagedPairTunnelAndRevoke(t *testing.T) {
 		t.Fatalf("revocation did not close established tunnel: %v", err)
 	}
 	connect(sign(target), 407)
+	gateway.CloseTunnels()
+	if err := gateway.FlushTraffic(); err != nil {
+		t.Fatal(err)
+	}
+	meter, err := openTraffic(state + ".traffic.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if counters := meter.snapshot(); counters.UploadBytes != 4 || counters.DownloadBytes != 11 || counters.Since.IsZero() {
+		t.Fatalf("unexpected tunnel traffic: %+v", counters)
+	}
 }
 
 func TestWindowsProofInteroperability(t *testing.T) {
@@ -167,17 +180,22 @@ func TestWindowsProofInteroperability(t *testing.T) {
 }
 
 func TestAccessCodeDiscoveryAndDeviceBinding(t *testing.T) {
-	var gateway *Gateway
-	public := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { gateway.Public(w, r) }))
+	var gateway atomic.Pointer[Gateway]
+	public := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { gateway.Load().Public(w, r) }))
 	endpoint, err := Endpoint("https://" + public.Listener.Addr().String())
 	if err != nil {
 		t.Fatal(err)
 	}
 	state := filepath.Join(t.TempDir(), "devices.json")
-	gateway, err = OpenGateway(state, endpoint.String(), "127.0.0.1:1", encoding.EncodeToString(make([]byte, 32)))
-	if err != nil {
-		t.Fatal(err)
+	reopen := func() {
+		t.Helper()
+		loaded, err := OpenGateway(state, endpoint.String(), "127.0.0.1:1", encoding.EncodeToString(make([]byte, 32)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		gateway.Store(loaded)
 	}
+	reopen()
 	public.StartTLS()
 	defer public.Close()
 
@@ -195,7 +213,7 @@ func TestAccessCodeDiscoveryAndDeviceBinding(t *testing.T) {
 		t.Helper()
 		request := httptest.NewRequest(http.MethodPost, path, strings.NewReader(payload))
 		response := httptest.NewRecorder()
-		gateway.Private(response, request)
+		gateway.Load().Private(response, request)
 		if response.Code != want {
 			t.Fatalf("%s: HTTP %d; want %d", path, response.Code, want)
 		}
@@ -223,27 +241,101 @@ func TestAccessCodeDiscoveryAndDeviceBinding(t *testing.T) {
 		}
 		return key
 	}
-	device, other := generate(), generate()
-	redeem := func(key *ecdsa.PrivateKey, code string, want bool) {
+	device, other, third, fourth := generate(), generate(), generate(), generate()
+	redeem := func(key *ecdsa.PrivateKey, code string, want int) {
 		t.Helper()
 		body, err := json.Marshal(map[string]string{"code": code})
 		if err != nil {
 			t.Fatal(err)
 		}
-		result, err := sendActivation(context.Background(), public.Client(), endpoint, key, http.MethodPost, "/v1/redeem", body)
-		if want && (err != nil || !result.Active) || !want && err == nil {
-			t.Fatalf("unexpected activation: active=%t err=%v want=%t", result.Active, err, want)
+		proof, err := Sign(key, endpoint.Host, http.MethodPost, "/v1/redeem")
+		if err != nil {
+			t.Fatal(err)
+		}
+		request, err := http.NewRequest(http.MethodPost, endpoint.String()+"/v1/redeem", bytes.NewReader(body))
+		if err != nil {
+			t.Fatal(err)
+		}
+		request.Header.Set("Authorization", proof)
+		response, err := public.Client().Do(request)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer response.Body.Close()
+		if response.StatusCode != want {
+			t.Fatalf("activation HTTP %d; want %d", response.StatusCode, want)
+		}
+		if want == http.StatusOK {
+			var result PairStatus
+			if json.NewDecoder(response.Body).Decode(&result) != nil || !result.Active {
+				t.Fatal("activation was not confirmed")
+			}
 		}
 	}
-	first, current := issue(), issue()
-	redeem(device, first, false)
-	redeem(device, current, true)
-	redeem(device, current, true)
-	redeem(other, current, false)
-	pending := issue()
+	current := issue()
+	if issue() != current {
+		t.Fatal("repeated issuance changed the key")
+	}
+	redeem(device, current, http.StatusOK)
+	reopen()
+	if issue() != current {
+		t.Fatal("restart changed the key")
+	}
+	redeem(device, current, http.StatusOK)
+	redeem(other, current, http.StatusOK)
+	checkStats := func(want keyStats) {
+		t.Helper()
+		r := httptest.NewRecorder()
+		gateway.Load().Private(r, httptest.NewRequest(http.MethodGet, "/private/stats", nil))
+		var fields map[string]json.RawMessage
+		if r.Code != http.StatusOK || json.Unmarshal(r.Body.Bytes(), &fields) != nil || len(fields) != 7 {
+			t.Fatal("statistics response is not the aggregate-only schema")
+		}
+		for _, field := range []string{"issued", "activated", "current_keys", "devices", "upload_bytes", "download_bytes", "traffic_since"} {
+			if _, ok := fields[field]; !ok {
+				t.Fatalf("missing aggregate field %s", field)
+			}
+		}
+		var got keyStats
+		if json.Unmarshal(r.Body.Bytes(), &got) != nil || got != want {
+			t.Fatalf("stats = %+v, want %+v", got, want)
+		}
+	}
+	checkStats(keyStats{keyTotals{1, 1}, 1, 2})
+	rotated := admin("/private/rotate-access", `{"subject":"42","login":"agw_0123456789abcdef01234567"}`, 200).Code
+	if !ValidAccessCode(rotated) || rotated == current || issue() != rotated {
+		t.Fatal("rotation did not install a different current key")
+	}
+	checkStats(keyStats{keyTotals{2, 1}, 1, 2})
+	redeem(third, current, http.StatusGone)
+	reopen()
+	redeem(third, current, http.StatusGone)
+	status, err := activation(context.Background(), public.Client(), endpoint, device, false)
+	if err != nil || !status.Active {
+		t.Fatal("rotation removed an existing device")
+	}
+	redeem(third, rotated, http.StatusOK)
+	redeem(fourth, rotated, http.StatusConflict)
+	checkStats(keyStats{keyTotals{2, 2}, 1, 3})
+	response, err := public.Client().Get(endpoint.String() + "/private/stats")
+	if err != nil {
+		t.Fatal(err)
+	}
+	response.Body.Close()
+	if response.StatusCode != http.StatusNotFound {
+		t.Fatalf("private stats exposed publicly: HTTP %d", response.StatusCode)
+	}
 	admin("/private/revoke", `{"subject":"42"}`, 204)
-	redeem(device, current, false)
-	redeem(other, pending, false)
+	reopen()
+	checkStats(keyStats{keyTotals{2, 2}, 0, 0})
+	redeem(device, current, http.StatusGone)
+	redeem(device, rotated, http.StatusGone)
+	replacement := issue()
+	if replacement == current {
+		t.Fatal("revocation reused the old key")
+	}
+	redeem(fourth, replacement, http.StatusOK)
+	checkStats(keyStats{keyTotals{3, 3}, 1, 1})
 }
 
 func TestPairExpiryAndDeviceLimit(t *testing.T) {
@@ -287,5 +379,23 @@ func TestProofBoundToAudienceAndTime(t *testing.T) {
 		guard.verify(proof, "gateway.test", "GET", "/v1/status", now+proofWindow+1) != "" ||
 		guard.verify(proof, "gateway.test", "GET", "/v1/status", now) == "" {
 		t.Fatal("proof did not respect endpoint or time binding")
+	}
+}
+
+func TestActivationClockToleranceRejectsReplay(t *testing.T) {
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().Unix()
+	proof, err := Sign(key, "gateway.test", "POST", "/v1/redeem")
+	if err != nil {
+		t.Fatal(err)
+	}
+	guard := &replayGuard{}
+	if guard.verifyWithin(proof, "gateway.test", "POST", "/v1/redeem", now+redeemProofWindow+2, redeemProofWindow) != "" ||
+		guard.verifyWithin(proof, "gateway.test", "POST", "/v1/redeem", now+120, redeemProofWindow) == "" ||
+		guard.verifyWithin(proof, "gateway.test", "POST", "/v1/redeem", now+121, redeemProofWindow) != "" {
+		t.Fatal("activation window or replay protection failed")
 	}
 }

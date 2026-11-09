@@ -18,6 +18,7 @@ import (
 )
 
 const proofWindow = 30
+const redeemProofWindow = 5 * 60
 
 var encoding = base64.RawURLEncoding
 
@@ -90,6 +91,10 @@ type replayGuard struct {
 }
 
 func (g *replayGuard) verify(header, audience, method, target string, now int64) string {
+	return g.verifyWithin(header, audience, method, target, now, proofWindow)
+}
+
+func (g *replayGuard) verifyWithin(header, audience, method, target string, now, window int64) string {
 	if !strings.HasPrefix(header, "Dagami v1.") || len(header) > 250 {
 		return ""
 	}
@@ -101,7 +106,7 @@ func (g *replayGuard) verify(header, audience, method, target string, now int64)
 	timestamp, e2 := strconv.ParseInt(parts[1], 10, 64)
 	nonce, e3 := encoding.DecodeString(parts[2])
 	signature, e4 := encoding.DecodeString(parts[3])
-	if e1 != nil || e2 != nil || e3 != nil || e4 != nil || len(public) != 65 || len(nonce) != 16 || len(signature) != 64 || timestamp < now-proofWindow || timestamp > now+proofWindow {
+	if e1 != nil || e2 != nil || e3 != nil || e4 != nil || len(public) != 65 || len(nonce) != 16 || len(signature) != 64 || timestamp < now-window || timestamp > now+window {
 		return ""
 	}
 	curve := elliptic.P256()
@@ -122,7 +127,7 @@ func (g *replayGuard) verify(header, audience, method, target string, now int64)
 	}
 	if g.lastPrune != now {
 		for second, bucket := range g.buckets {
-			if second < now-proofWindow {
+			if second < now-window {
 				g.entryCount -= len(bucket)
 				delete(g.buckets, second)
 			}

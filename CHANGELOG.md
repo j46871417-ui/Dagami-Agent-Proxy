@@ -1,5 +1,35 @@
 # Changelog
 
+- Windows: явный выбор своего прокси, Dagami по ключу или публичного прокси. Выбор публичного адреса сохраняет настройки своего прокси.
+
+- Windows: адрес сценария PAC для выборочного прокси по ключу доступен на вкладке подключения.
+
+- Исправлена подготовка локальной службы DNS: актуализированы DoH и резервный адрес, выбранный DNS сохраняется при установке службы.
+
+- Добавлен проверяемый преобразователь TCP-пакетов IPv4/IPv6 для ClientHello; захват и отправка пакетов пока не подключены.
+
+- Windows: поддержан SOCKS5-прокси с авторизацией через локальный мост; имя назначения передаётся прокси.
+
+## Managed access
+
+- Update the gateway IP used when system DNS cannot resolve its hostname.
+- Use the verified gateway's time for Windows device signatures and retry
+  once after a clock-related 401 without changing the system clock.
+- Allow users to rotate their access key and invalidate the old code without
+  removing paired devices or resetting their limit.
+- Add private, aggregate key and traffic statistics for the Telegram bot owner.
+- Keep one revocable Telegram access key per account for up to three devices.
+  Repeated requests and gateway restarts preserve the key and paired devices.
+- Allow bounded clock drift during key redemption and clarify activation errors.
+
+## Smart DNS
+
+- Launch manually added Chromium browsers through the selected Windows proxy
+  route in a separate profile. Use the Dagami key route for Gemini and ChatGPT
+  when the direct Smart DNS connection stalls during TLS.
+- Route the Microsoft 365 Copilot chat endpoints through Dagami in the
+  Windows Smart DNS preset.
+
 ## Documentation after 0.5.0 beta
 
 - Add the shared Dagami community, support and donation header to README,

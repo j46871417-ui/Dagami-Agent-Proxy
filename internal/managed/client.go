@@ -21,7 +21,7 @@ const BotURL = BotChat + "?start=dagami_"
 const BotKeyURL = BotChat + "?start=dagamikey"
 const Bootstrap = "https://test-dns.dagami.ru:9443"
 const bootstrapAuthority = "test-dns.dagami.ru:9443"
-const bootstrapFallback = "45.86.65.240:9443"
+const bootstrapFallback = "31.76.61.24:9443"
 
 var preferFallbackUntil atomic.Int64
 
@@ -141,7 +141,9 @@ func sendActivation(ctx context.Context, client *http.Client, endpoint *url.URL,
 		if path == "/v1/redeem" {
 			switch response.StatusCode {
 			case http.StatusGone:
-				return PairStatus{}, fmt.Errorf("ключ истёк или уже использован. Получите новый через /key")
+				return PairStatus{}, fmt.Errorf("ключ не найден или отозван. Проверьте действующий ключ через /key")
+			case http.StatusUnauthorized:
+				return PairStatus{}, fmt.Errorf("шлюз не принял подпись устройства. Проверьте автоматическую синхронизацию времени и попробуйте снова")
 			case http.StatusConflict:
 				return PairStatus{}, fmt.Errorf("достигнут лимит устройств. Отзовите старые устройства в Telegram")
 			}

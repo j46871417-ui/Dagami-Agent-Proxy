@@ -108,6 +108,14 @@ namespace DevProxyApp
                 return;
             }
 
+            if(args!=null&&args.Length==1&&args[0]=="--install-windivert"){
+                Environment.ExitCode=WinDivertPacketTest.Run(args);return;
+            }
+            if(args!=null&&args.Length>0&&(args[0]=="--packet-test"||args[0]=="--packet-test-local")){
+                EnsureConsole(); ConfigureConsoleEncoding();
+                Environment.ExitCode=WinDivertPacketTest.Run(args);return;
+            }
+
             if(args!=null&&args.Length==1&&args[0]=="--dns-service"){DnsServiceHost.Run();return;}
 
             // A DNS helper never enters shim, console, tray or GUI startup.
@@ -344,7 +352,7 @@ namespace DevProxyApp
 
             {
 
-                ConfigManager.Instance.ChangeConnection(cfg => cfg.LastProxy = norm);
+                ConfigManager.Instance.ChangeConnection(cfg => { cfg.LastProxy = norm; cfg.PublicProxySelected = false; });
                 ProxyEngine.ApplyProxyAll(norm);
                 return;
 
@@ -740,6 +748,7 @@ namespace DevProxyApp
         private int _upstreamPort;
 
         private bool _isHttps;
+        private Uri _socksProxy;
 
         private string _authHeader;
         private ManagedAccess _managed;
@@ -759,6 +768,7 @@ namespace DevProxyApp
         public int ActiveConnections {get{return Interlocked.CompareExchange(ref _activeConnections,0,0);}}
 
         public int BoundPort { get; private set; }
+        public bool ServesSelectivePac { get { return _running && _managed != null; } }
 
         public bool Start(int port, string proxyUrl, string dnsHost = null)
 
@@ -787,8 +797,9 @@ namespace DevProxyApp
 
                     if (!UpstreamProxyDiagnostics.TryParse(proxyUrl, out u))
 
-                        throw new ArgumentException("Укажите HTTP/HTTPS proxy URL без пути, query и fragment.");
+                        throw new ArgumentException("Укажите HTTP/HTTPS/SOCKS5 proxy URL без пути, query и fragment.");
 
+                    _socksProxy = u.Scheme == "socks5" || u.Scheme == "socks5h" ? u : null;
                     _upstreamHost = u.Host;
 
                     _upstreamPort = u.Port > 0 ? u.Port : 8080;
@@ -819,6 +830,7 @@ namespace DevProxyApp
 
                 {
 
+                    _socksProxy = null;
                     _upstreamHost = null;
 
                     _upstreamPort = 0;
@@ -1027,6 +1039,19 @@ namespace DevProxyApp
                 string target = parts[1];
 
                 Uri requestDestination=HttpDestination(method,target,headerText);
+
+                if (method == "GET" && target == SelectiveProxyRules.Path &&
+                    requestDestination.Host == "127.0.0.1" && requestDestination.Port == BoundPort) {
+                    byte[] body = _managed == null ? new byte[0] :
+                        Encoding.UTF8.GetBytes(SelectiveProxyRules.BuiltInPac(BoundPort));
+                    string status = _managed == null ? "404 Not Found" : "200 OK";
+                    byte[] headers = Encoding.ASCII.GetBytes("HTTP/1.1 " + status +
+                        "\r\nContent-Type: application/x-ns-proxy-autoconfig\r\nCache-Control: no-store" +
+                        "\r\nConnection: close\r\nContent-Length: " + body.Length + "\r\n\r\n");
+                    clientStream.Write(headers, 0, headers.Length);
+                    clientStream.Write(body, 0, body.Length);
+                    return;
+                }
 
                 if (requestDestination.Host.Equals("metadata.google.internal",StringComparison.OrdinalIgnoreCase) && requestDestination.Port==80)
 
@@ -1266,6 +1291,23 @@ namespace DevProxyApp
 
                     }
 
+                }
+
+                if (_socksProxy != null && dnsEndpoint == null && !isDirect) {
+                    Uri destination = HttpDestination(method, target, headerText);
+                    Socks5Transport.Connect(upstreamStream, _socksProxy, destination.IdnHost, destination.Port);
+                    if (method.Equals("CONNECT", StringComparison.OrdinalIgnoreCase)) {
+                        byte[] success = Encoding.ASCII.GetBytes("HTTP/1.1 200 Connection established\r\n\r\n");
+                        clientStream.Write(success, 0, success.Length); clientStream.Flush(); tunnelEstablished = true;
+                        if (bodyOffset < totalRead) upstreamStream.Write(buffer, bodyOffset, totalRead - bodyOffset);
+                        Relay(clientStream, upstreamStream, client, upstream, connection); relaying = true; return;
+                    }
+                    string outgoingSocks = HttpWire.RequestHeaders(headerText, destination, false, null);
+                    byte[] socksBody = new byte[totalRead-bodyOffset];
+                    if (socksBody.Length > 0) Buffer.BlockCopy(buffer,bodyOffset,socksBody,0,socksBody.Length);
+                    relaying = HttpWire.Exchange(clientStream,upstreamStream,headerText,outgoingSocks,socksBody,
+                        (input,output)=>Relay(input,output,client,upstream,connection),()=>tunnelEstablished=true);
+                    return;
                 }
 
                 if (method.Equals("CONNECT", StringComparison.OrdinalIgnoreCase))
@@ -1978,12 +2020,18 @@ namespace DevProxyApp
 
         public string LastProxy { get; set; }
         public string CustomProxy { get; set; }
+        public bool PublicProxySelected { get; set; }
         public string SavedCustomProxy {
-            get { return ManagedAccess.IsProfile(LastProxy) || string.IsNullOrWhiteSpace(LastProxy) ? CustomProxy ?? "" : LastProxy; }
+            get { return PublicProxySelected || ManagedAccess.IsProfile(LastProxy) || string.IsNullOrWhiteSpace(LastProxy) ? CustomProxy ?? "" : LastProxy; }
         }
-        internal void SelectCustomRoute(string proxy) {
+        internal void SelectCustomRoute(string proxy) { SelectExplicitProxy(proxy,false); }
+        internal void SelectPublicRoute(string proxy) { SelectExplicitProxy(proxy,true); }
+
+        void SelectExplicitProxy(string proxy,bool publicProxy) {
             ChangeConnection(cfg => {
-                cfg.LastProxy = cfg.CustomProxy = proxy;
+                cfg.CustomProxy = publicProxy ? cfg.SavedCustomProxy : proxy;
+                cfg.LastProxy = proxy;
+                cfg.PublicProxySelected = publicProxy;
                 cfg.UseProxy = true;
                 cfg.UseDagamiDns = false;
             });
@@ -2148,6 +2196,7 @@ namespace DevProxyApp
                 sb.AppendLine("  \"connection_policy_version\": 1,");
 
                 sb.AppendFormat("  \"last_proxy_protected\": \"{0}\",\n", EscapeJson(ProtectString(LastProxy)));
+                sb.AppendFormat("  \"public_proxy_selected\": {0},\n", PublicProxySelected ? "true" : "false");
                 string customProxy = SavedCustomProxy;
                 if (!string.IsNullOrEmpty(customProxy) && customProxy != LastProxy)
                     sb.AppendFormat("  \"custom_proxy_protected\": \"{0}\",\n", EscapeJson(ProtectString(customProxy)));
@@ -2273,11 +2322,12 @@ namespace DevProxyApp
         {
             string proxy = LastProxy, customProxy = CustomProxy, dns = DnsHost, dpiMode = DpiDesyncMode;
             bool useProxy = UseProxy, useDns = UseDagamiDns, obfuscation = DnsObfuscation, block = BlockAntigravityUpdates;
-            bool prepare = PrepareAntigravityClient, systemEnv = SetSystemEnv;
+            bool prepare = PrepareAntigravityClient, systemEnv = SetSystemEnv, publicProxy = PublicProxySelected;
             try {
                 update(this);
                 if (!Save()) throw new IOException(LastSaveError);
             } catch {
+                PublicProxySelected = publicProxy;
                 LastProxy = proxy; CustomProxy = customProxy; DnsHost = dns; DpiDesyncMode = dpiMode;
                 UseProxy = useProxy; UseDagamiDns = useDns; DnsObfuscation = obfuscation; BlockAntigravityUpdates = block;
                 PrepareAntigravityClient = prepare; SetSystemEnv = systemEnv;
@@ -2319,6 +2369,7 @@ namespace DevProxyApp
 
             // use_dagami_dns
 
+            PublicProxySelected = Regex.IsMatch(json, @"""public_proxy_selected""\s*:\s*true\b");
             Match mUseProxy = Regex.Match(json, @"\""use_proxy\""\s*:\s*(true|false)");
             if (mUseProxy.Success) UseProxy = mUseProxy.Groups[1].Value.ToLower() == "true";
             Match mDns = Regex.Match(json, @"\""use_dagami_dns\""\s*:\s*(true|false)");
@@ -4304,7 +4355,7 @@ namespace DevProxyApp
 
                 {
 
-                    Logger.Log("[!] В поле прокси указан DNS-сервер. Укажите адрес HTTP/HTTPS-прокси или явно выберите прямой режим.");
+                    Logger.Log("[!] В поле прокси указан DNS-сервер. Укажите адрес HTTP/HTTPS/SOCKS5-прокси или явно выберите прямой режим.");
 
                     return;
 
@@ -4328,7 +4379,7 @@ namespace DevProxyApp
 
                         {
 
-                            Logger.Log("[-] Мост Windows поддерживает HTTP и HTTPS. Для SOCKS5 используйте переносимый клиент Dagami.");
+                            Logger.Log("[-] Укажите корректный адрес HTTP, HTTPS или SOCKS5 прокси.");
 
                             return;
 
@@ -4675,9 +4726,16 @@ namespace DevProxyApp
 
         }
 
+        private void DisableWindowsProxyOnBridgeStop()
+        {
+            try { WindowsSelectiveProxy.Disable(); }
+            catch (Exception error) { Logger.Log("[Windows proxy] " + error.GetType().Name); }
+        }
+
         private void RestartRescueBridge()
 
         {
+            DisableWindowsProxyOnBridgeStop();
 
             DpiEngineManager.StopExternal();
 
@@ -4755,6 +4813,7 @@ namespace DevProxyApp
 
             }
 
+            DisableWindowsProxyOnBridgeStop();
             _exitRequested = true;
 
             if (_trayIcon != null)

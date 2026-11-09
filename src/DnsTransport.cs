@@ -48,9 +48,9 @@ namespace DevProxyApp {
     return true;
    }catch(InvalidDataException){return false;}
   }
-  public static byte[] Exchange(DnsEndpoint endpoint,byte[] query,int timeout=4000) {
+  public static byte[] Exchange(DnsEndpoint endpoint,byte[] query,int timeout=4000,bool? obfuscationOverride=null) {
    QuestionEnd(query);if(query.Length>65535)throw new InvalidDataException("DNS query too large.");
-   bool obfuscate=ConfigManager.Instance.DnsObfuscation;
+   bool obfuscate=obfuscationOverride ?? ConfigManager.Instance.DnsObfuscation;
    string proto=(endpoint.Protocol??"HTTPS").ToUpperInvariant();
    if(proto=="UDP"||proto=="TCP") {
     byte[] plainResp=ExchangeUdpTcp(endpoint,query,proto=="TCP",timeout,obfuscate);
@@ -69,7 +69,7 @@ namespace DevProxyApp {
    if(obfuscate)wire=EdnsPadding.PadQuery(wire);
    string path=string.IsNullOrEmpty(endpoint.Path)?"/dns-query":endpoint.Path;
    int port=endpoint.Port>0?endpoint.Port:443;
-   byte[] response=Request(endpoint.Address,endpoint.Host,path,"POST",wire,"application/dns-message",65535,timeout,port);
+   byte[] response=Request(endpoint.Address,endpoint.Host,path,"POST",wire,"application/dns-message",65535,timeout,port,obfuscationOverride);
    if(response.Length<12||response[0]!=0||response[1]!=0||(response[2]&128)==0||(response[2]&120)!=0||!SameQuestion(wire,response))throw new InvalidDataException("DoH response does not match the DNS question.");
    response[0]=query[0];response[1]=query[1];return response;
   }
@@ -158,7 +158,7 @@ namespace DevProxyApp {
     return output.ToArray();
    }
   }
-  public static byte[] Request(string address,string host,string path,string method,byte[] body,string expectedType,int limit,int timeout=6000,int port=443) {
+  public static byte[] Request(string address,string host,string path,string method,byte[] body,string expectedType,int limit,int timeout=6000,int port=443,bool? obfuscationOverride=null) {
    IPAddress ip;if(!IPAddress.TryParse(address,out ip))throw new ArgumentException("HTTPS endpoint must be a literal IP.");
    if(Uri.CheckHostName(host)==UriHostNameType.Unknown||!path.StartsWith("/",StringComparison.Ordinal)||path.IndexOfAny(new[]{'\r','\n'})>=0)throw new ArgumentException("Invalid HTTPS authority/path.");
    var watch=Stopwatch.StartNew();
@@ -166,7 +166,7 @@ namespace DevProxyApp {
     client.NoDelay=true;
     var pending=client.BeginConnect(ip,port>0?port:443,null,null);using(pending.AsyncWaitHandle){if(!pending.AsyncWaitHandle.WaitOne(timeout))throw new TimeoutException("HTTPS connection timeout.");client.EndConnect(pending);}
     Stream net=client.GetStream();
-    if(ConfigManager.Instance.DnsObfuscation){
+    if(obfuscationOverride ?? ConfigManager.Instance.DnsObfuscation){
      var dpiMode=DpiDesyncStream.ParseMode(ConfigManager.Instance.DpiDesyncMode);
      if(dpiMode!=DpiDesyncMode.Off&&dpiMode!=DpiDesyncMode.ExternalEngine)net=new DpiDesyncStream(net,client.Client,dpiMode);
     }

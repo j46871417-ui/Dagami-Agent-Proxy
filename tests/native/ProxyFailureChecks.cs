@@ -32,6 +32,12 @@ class ProxyFailureChecks {
   var worker=new Thread(()=>{try{using(var peer=server.AcceptTcpClient()){peer.GetStream().ReadTimeout=5000;received=Header(peer.GetStream());byte[] response=Encoding.ASCII.GetBytes("HTTP/1.1 204 No Content\r\nConnection: close\r\n\r\n");peer.GetStream().Write(response,0,response.Length);}}catch(Exception e){failure=e;}});worker.IsBackground=true;worker.Start();
   try{using(var bridge=new LocalProxyBridge()){
    Assert(bridge.Start(0,"http://127.0.0.1:"+((IPEndPoint)server.LocalEndpoint).Port),"Metadata fixture bridge failed");
+   using(var client=new TcpClient("127.0.0.1",bridge.BoundPort)){
+    var stream=client.GetStream();stream.ReadTimeout=5000;
+    byte[] request=Encoding.ASCII.GetBytes("GET "+SelectiveProxyRules.Path+" HTTP/1.1\r\nHost: 127.0.0.1:"+bridge.BoundPort+"\r\n\r\n");
+    stream.Write(request,0,request.Length);
+    Assert(Header(stream).Contains(" 404 "),"PAC must not advertise an unkeyed bridge");
+   }
    using(var c=new TcpClient("127.0.0.1",bridge.BoundPort)){c.GetStream().ReadTimeout=5000;byte[] b=Encoding.ASCII.GetBytes("GET http://metadata.google.internal/computeMetadata/v1/ HTTP/1.1\r\nHost: metadata.google.internal\r\n\r\n");c.GetStream().Write(b,0,b.Length);Assert(Header(c.GetStream()).Contains(" 404 "),"Metadata endpoint not intercepted");}
    using(var c=new TcpClient("127.0.0.1",bridge.BoundPort)){c.GetStream().ReadTimeout=5000;var stream=c.GetStream();byte[] b=Encoding.ASCII.GetBytes("CONNECT metadata.google.internal:80 HTTP/1.1\r\nHost: metadata.google.internal:80\r\n\r\n");stream.Write(b,0,b.Length);Assert(Header(stream).Contains(" 200 "),"Metadata CONNECT tunnel not established");b=Encoding.ASCII.GetBytes("GET /computeMetadata/v1/ HTTP/1.1\r\nHost: metadata.google.internal\r\nMetadata-Flavor: Google\r\n\r\n");stream.Write(b,0,b.Length);Assert(Header(stream).Contains(" 404 "),"Metadata CONNECT request did not receive 404");}
    using(var c=new TcpClient("127.0.0.1",bridge.BoundPort)){c.GetStream().ReadTimeout=5000;var stream=c.GetStream();byte[] b=Encoding.ASCII.GetBytes("CONNECT metadata.google.internal:80 HTTP/1.1\r\nHost: metadata.google.internal:80\r\n\r\nGET / HTTP/1.1\r\nHost: metadata.google.internal\r\n\r\n");stream.Write(b,0,b.Length);Assert(Header(stream).Contains(" 200 ")&&Header(stream).Contains(" 404 "),"Pipelined metadata CONNECT request lost bytes");}
@@ -39,8 +45,61 @@ class ProxyFailureChecks {
    Assert(worker.Join(5000)&&failure==null&&received.StartsWith("GET http://example.test/"),"Unrelated request did not reach configured proxy");
   }}finally{server.Stop();worker.Join(1000);}
  }
+ static void SocksBridge(bool rejectAuth) {
+  var server=new TcpListener(IPAddress.Loopback,0);server.Start();Exception failure=null;string observedHost=null;
+  var worker=new Thread(()=>{try{using(var peer=server.AcceptTcpClient()){var stream=peer.GetStream();stream.ReadTimeout=4000;
+   byte[] greeting=new byte[3];for(int i=0;i<greeting.Length;i++)greeting[i]=(byte)stream.ReadByte();if(greeting[0]!=5||greeting[1]!=1||greeting[2]!=2)throw new Exception("SOCKS auth was not mandatory");
+   stream.Write(new byte[]{5,2},0,2);int version=stream.ReadByte(),ulen=stream.ReadByte();byte[] u=new byte[ulen];for(int i=0;i<ulen;i++)u[i]=(byte)stream.ReadByte();int plen=stream.ReadByte();byte[] pass=new byte[plen];for(int i=0;i<plen;i++)pass[i]=(byte)stream.ReadByte();
+   if(version!=1||Encoding.UTF8.GetString(u)!="fixture@user"||Encoding.UTF8.GetString(pass)!="fixture#password")throw new Exception("SOCKS credentials incorrect");
+   stream.Write(new byte[]{1,(byte)(rejectAuth?1:0)},0,2);if(rejectAuth)return;
+   byte[] h=new byte[4];for(int i=0;i<4;i++)h[i]=(byte)stream.ReadByte();if(h[0]!=5||h[1]!=1||h[3]!=3)throw new Exception("SOCKS request invalid");
+   int n=stream.ReadByte();byte[] host=new byte[n];for(int i=0;i<n;i++)host[i]=(byte)stream.ReadByte();observedHost=Encoding.ASCII.GetString(host);int hi=stream.ReadByte(),lo=stream.ReadByte();if(hi*256+lo!=443)throw new Exception("Wrong SOCKS port");
+   byte[] answer={5,0,0,1,127,0,0,1,0,1};stream.Write(answer,0,answer.Length);byte[] data=new byte[4];for(int i=0;i<4;i++)data[i]=(byte)stream.ReadByte();stream.Write(data,0,data.Length);
+  }}catch(Exception e){failure=e;}});worker.IsBackground=true;worker.Start();
+  try{using(var bridge=new LocalProxyBridge()){Assert(bridge.Start(0,"socks5://fixture%40user:fixture%23password@127.0.0.1:"+((IPEndPoint)server.LocalEndpoint).Port),"SOCKS bridge failed to start");
+   using(var client=new TcpClient("127.0.0.1",bridge.BoundPort)){client.GetStream().ReadTimeout=5000;var stream=client.GetStream();byte[] req=Encoding.ASCII.GetBytes("CONNECT example.test:443 HTTP/1.1\r\nHost: example.test:443\r\n\r\n");stream.Write(req,0,req.Length);string header=Header(stream);
+    Assert(header.Contains(rejectAuth?" 502 ":" 200 "),"Unexpected SOCKS bridge response");if(!rejectAuth){byte[] ping=Encoding.ASCII.GetBytes("PING");stream.Write(ping,0,ping.Length);for(int i=0;i<4;i++)Assert(stream.ReadByte()==ping[i],"SOCKS relay lost data");}
+   }
+   Assert(worker.Join(5000)&&failure==null,"SOCKS fixture failed: "+failure);if(!rejectAuth)Assert(observedHost=="example.test","SOCKS hostname was resolved locally");
+  }}finally{server.Stop();worker.Join(1000);}
+ }
+ sealed class SocksFixtureStream:Stream {
+  readonly MemoryStream input;public readonly MemoryStream output=new MemoryStream();public SocksFixtureStream(byte[] response){input=new MemoryStream(response);}
+  public override bool CanRead{get{return true;}}public override bool CanWrite{get{return true;}}public override bool CanSeek{get{return false;}}
+  public override long Length{get{throw new NotSupportedException();}}public override long Position{get{throw new NotSupportedException();}set{throw new NotSupportedException();}}
+  public override int Read(byte[] b,int o,int n){return input.Read(b,o,Math.Min(n,1));}public override void Write(byte[] b,int o,int n){output.Write(b,o,n);}public override void Flush(){}
+  public override long Seek(long o,SeekOrigin p){throw new NotSupportedException();}public override void SetLength(long n){throw new NotSupportedException();}
+ }
+ static void SocksProtocolFixtures(){
+  var proxy=new Uri("socks5://127.0.0.1:1080");
+  foreach(byte[] response in new[]{new byte[]{4,0},new byte[]{5,255},new byte[]{5,0,5,1,0,1},new byte[]{5,0,5,0,1,1},new byte[]{5,0,5,0,0,99},new byte[]{5,0,5,0,0,1,127}}){
+   bool rejected=false;try{Socks5Transport.Connect(new SocksFixtureStream(response),proxy,"example.test",443);}catch(IOException){rejected=true;}Assert(rejected,"Malformed or failed SOCKS response accepted");
+  }
+  var ipv6=new SocksFixtureStream(new byte[]{5,0,5,0,0,1,127,0,0,1,0,1});Socks5Transport.Connect(ipv6,proxy,"2001:db8::1",443);byte[] sent=ipv6.output.ToArray();
+  Assert(sent.Length==25&&sent[6]==4&&sent[7]==0x20&&sent[8]==0x01&&sent[23]==1&&sent[24]==0xbb,"IPv6 SOCKS address encoded incorrectly");
+  var downgrade=new SocksFixtureStream(new byte[]{5,0});bool denied=false;try{Socks5Transport.Connect(downgrade,new Uri("socks5://user:pass@127.0.0.1:1080"),"example.test",443);}catch(IOException){denied=true;}Assert(denied,"SOCKS authentication downgrade accepted");
+ }
+ static void SocksHttp() {
+  var server=new TcpListener(IPAddress.Loopback,0);server.Start();Exception failure=null;string received=null;
+  var worker=new Thread(()=>{try{using(var peer=server.AcceptTcpClient()){var stream=peer.GetStream();stream.ReadTimeout=4000;
+   byte[] greeting=new byte[3];for(int i=0;i<3;i++)greeting[i]=(byte)stream.ReadByte();if(greeting[0]!=5||greeting[1]!=1||greeting[2]!=0)throw new Exception("Unexpected no-auth greeting");
+   stream.Write(new byte[]{5,0},0,2);byte[] h=new byte[4];for(int i=0;i<4;i++)h[i]=(byte)stream.ReadByte();if(h[0]!=5||h[1]!=1||h[3]!=3)throw new Exception("Bad request");
+   int n=stream.ReadByte();byte[] host=new byte[n];for(int i=0;i<n;i++)host[i]=(byte)stream.ReadByte();int high=stream.ReadByte(),low=stream.ReadByte();if(Encoding.ASCII.GetString(host)!="example.test"||high*256+low!=8080)throw new Exception("Wrong destination");
+   byte[] response={5,0,0,1,127,0,0,1,0,1};stream.Write(response,0,response.Length);received=Header(stream);byte[] ok=Encoding.ASCII.GetBytes("HTTP/1.1 204 No Content\r\nConnection: close\r\n\r\n");stream.Write(ok,0,ok.Length);
+  }}catch(Exception e){failure=e;}});worker.IsBackground=true;worker.Start();
+  try {using(var bridge=new LocalProxyBridge()){Assert(bridge.Start(0,"socks5://127.0.0.1:"+((IPEndPoint)server.LocalEndpoint).Port),"SOCKS HTTP bridge failed");
+   using(var client=new TcpClient("127.0.0.1",bridge.BoundPort)){client.GetStream().ReadTimeout=5000;byte[] req=Encoding.ASCII.GetBytes("GET http://example.test:8080/hello?q=1 HTTP/1.1\r\nHost: example.test:8080\r\nProxy-Authorization: Basic should-not-leak\r\nConnection: close\r\n\r\n");client.GetStream().Write(req,0,req.Length);Assert(Header(client.GetStream()).Contains(" 204 "),"SOCKS HTTP request failed");}
+   Assert(worker.Join(5000)&&failure==null,"SOCKS HTTP fixture failed: "+failure);Assert(received.StartsWith("GET /hello?q=1 HTTP/1.1")&&!received.Contains("should-not-leak")&&!received.Contains("Proxy-Authorization"),"SOCKS HTTP sent wrong request or leaked credentials");
+  }}finally{server.Stop();worker.Join(1000);}
+ }
  static int Main(){try {
+  string builtInPac=SelectiveProxyRules.BuiltInPac(53200);
+  Assert(builtInPac.Contains("gemini.google.com")&&builtInPac.Contains("ttvnw.net")&&!builtInPac.Contains("test-dns.dagami.ru"),"Packaged PAC rules are missing or route the gateway");
+  string pac=SelectiveProxyRules.GeneratePac(new[]{"exact.example",".sub.example"},53200);
+  Assert(pac.Contains("host === \"exact.example\"")&&pac.Contains("dnsDomainIs(host, \".sub.example\")")&&pac.Contains("PROXY 127.0.0.1:53200")&&pac.Contains("return \"DIRECT\""),"Selective PAC rules invalid");
+  foreach(string bad in new[]{"evil.example\";alert(1)",".com/other","localhost\nreturn DIRECT"}){bool denied=false;try{SelectiveProxyRules.GeneratePac(new[]{bad},53200);}catch(InvalidDataException){denied=true;}Assert(denied,"Unsafe PAC input accepted");}
   FailedProxyMustNotConnectDirectly();
+  SocksBridge(false);SocksBridge(true);SocksHttp();SocksProtocolFixtures();
   foreach(int status in new[]{200,407,403,503})Probe(status);
   MetadataHostIsExact();
   Assert(UpstreamProxyDiagnostics.IsDnsEndpointMistakenForProxy("http://dns.dagami.ru:50128"),"Known DNS endpoint not identified");
@@ -49,7 +108,7 @@ class ProxyFailureChecks {
   var destination=(Uri)typeof(LocalProxyBridge).GetMethod("HttpDestination",BindingFlags.Static|BindingFlags.NonPublic).Invoke(null,new object[]{"GET","http://example.test:8080/a?q=1","GET http://example.test:8080/a?q=1 HTTP/1.1\r\nHost: example.test\r\nProxy-Authorization: Basic secret\r\n\r\n"});
   string direct=HttpWire.RequestHeaders("GET http://example.test:8080/a?q=1 HTTP/1.1\r\nHost: example.test\r\nProxy-Authorization: Basic secret\r\n\r\n",destination,false,null);
   Assert(destination.Host=="example.test"&&destination.Port==8080&&direct.StartsWith("GET /a?q=1 HTTP/1.1")&&!direct.Contains("secret")&&!direct.Contains("Proxy-Authorization"),"Direct request leaked proxy credentials or used wrong target");
-  foreach(string bad in new[]{"socks5://127.0.0.1:1","http://user:bad#password@127.0.0.1:1","http://127.0.0.1:1/path","http://127.0.0.1:1/?token=fixture"}) {
+  foreach(string bad in new[]{"http://user:bad#password@127.0.0.1:1","http://127.0.0.1:1/path","http://127.0.0.1:1/?token=fixture"}) {
    var result=UpstreamProxyDiagnostics.Check(bad);Assert(!result.Available&&result.Status==0,"Malformed proxy URL accepted");
   }
   var occupied=new List<TcpListener>();int preferred=0;

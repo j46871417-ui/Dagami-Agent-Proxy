@@ -123,7 +123,7 @@ namespace DevProxyApp
             if (operation != request.Operation) throw new ArgumentException("Operation mismatch.");
             data = Encoding.UTF8.GetBytes(new JavaScriptSerializer().Serialize(request));
             ProtectStore();
-            if(request.Operation=="Apply"&&request.EncryptedStub)try{DnsServiceHost.SaveCustomUpstream(request.CustomUpstreamSpec);DnsServiceHost.EnsureInstalled();request.StubIpv6=request.ChangeAdapters&&DnsServiceHost.Probe(IPAddress.IPv6Loopback);data=Encoding.UTF8.GetBytes(new JavaScriptSerializer().Serialize(request));}catch(Exception error){
+            if(request.Operation=="Apply"&&request.EncryptedStub)try{DnsServiceHost.EnsureInstalled(request.CustomUpstreamSpec);request.StubIpv6=request.ChangeAdapters&&DnsServiceHost.Probe(IPAddress.IPv6Loopback);data=Encoding.UTF8.GetBytes(new JavaScriptSerializer().Serialize(request));}catch(Exception error){
                 string jobs=Path.Combine(StoreRoot,"jobs");Directory.CreateDirectory(jobs);var permissions=new DirectorySecurity();AddStoreRules(permissions,true);Directory.SetAccessControl(jobs,permissions);
                 File.WriteAllText(Path.Combine(jobs,request.JobId+".json"),new JavaScriptSerializer().Serialize(new{Success=false,Message="Не удалось подготовить службу шифрованного DNS. Настройки сети не менялись. "+error.Message}),new UTF8Encoding(true));return 1;
             }

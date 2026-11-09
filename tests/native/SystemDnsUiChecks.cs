@@ -32,7 +32,7 @@ class SystemDnsUiChecks {
    string payload=SystemDnsManager.EncodeRequest(request);
    Assert(SystemDnsManager.MatchesServerFamily("46.29.165.108, 89.125.103.139, 2001:db8::53",new[]{"46.29.165.108","89.125.103.139"}),"Status rejects backup DNS list");
    var poolRequest=new SystemDnsRequest{JobId=Guid.NewGuid().ToString("N"),Operation="Apply",Server="45.147.31.32",Preset="Full",UseNrpt=true,Adapters=new SystemDnsAdapter[0]};
-   SystemDnsManager.Validate(poolRequest);Assert(poolRequest.Servers.Length==7,"Dagami and MagicDNS backup pool not included in request");
+   SystemDnsManager.Validate(poolRequest);Assert(poolRequest.Servers.Length==4,"Dagami and MagicDNS backup pool not included in request");
    var encrypted=new SystemDnsRequest{JobId=Guid.NewGuid().ToString("N"),Operation="Apply",Server="127.0.0.1",EncryptedStub=true,Preset="Development",UseNrpt=true,Adapters=new SystemDnsAdapter[0]};
    SystemDnsManager.Validate(encrypted);Assert(encrypted.Servers.Length==1&&encrypted.Servers[0]=="127.0.0.1","Encrypted request escaped local resolver");
    encrypted.Server="8.8.8.8";Reject(()=>SystemDnsManager.Validate(encrypted));
@@ -137,3 +137,4 @@ class SystemDnsUiChecks {
   }catch(Exception ex){Console.Error.WriteLine(ex);return 1;}
  }
 }
+

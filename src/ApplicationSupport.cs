@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
+using System.Text;
 using System.Web.Script.Serialization;
 
 namespace DevProxyApp {
@@ -14,6 +15,9 @@ namespace DevProxyApp {
    if(id=="codex-gui"||Name(target,"Codex.exe"))return "codex-desktop";
    if(id=="claude-gui"||Name(target,"Claude.exe"))return "claude-desktop";
    if(id=="opencode-gui"||Name(target,"OpenCode.exe"))return "opencode-desktop";
+   if(Name(target,"chrome.exe","msedge.exe","brave.exe") ||
+      (Name(target,"browser.exe") && target.ExePath.Replace('/','\\').IndexOf(@"\YandexBrowser\",StringComparison.OrdinalIgnoreCase)>=0))
+    return "chromium-browser";
    if(id.StartsWith("jb_")||IsJetBrains(target.ExePath))return "jetbrains";
    if(id=="git"||Name(target,"git.exe"))return "git";
    if(Name(target,"cmd.exe","powershell.exe","pwsh.exe"))return "terminal";
@@ -70,6 +74,27 @@ namespace DevProxyApp {
   }
   public static void ConfigureLaunch(AppTarget target,ProcessStartInfo start,string localProxy) {
    ConfigureProcess(start,localProxy);string kind=Kind(target);
+   if(kind=="chromium-browser") {
+    var arguments=new List<string>();
+    string[] original=NativeCliApps.SplitArguments(start.Arguments);
+    int separator=Array.IndexOf(original,"--");
+    int optionCount=separator<0?original.Length:separator;
+    for(int i=0;i<optionCount;i++) {
+     if(original[i].StartsWith("--user-data-dir=",StringComparison.OrdinalIgnoreCase))continue;
+     if(original[i].Equals("--user-data-dir",StringComparison.OrdinalIgnoreCase)) {
+      if(i+1<optionCount&&!original[i+1].StartsWith("--",StringComparison.Ordinal))i++;
+      continue;
+     }
+     arguments.Add(NativeShortcuts.Quote(original[i]));
+    }
+    string executable=Path.GetFullPath(target.ExePath).ToUpperInvariant();
+    string id=AntigravityIntegration.Hash(Encoding.UTF8.GetBytes(executable)).Substring(0,16);
+    string profile=Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+     "devproxy","browser-profiles",Path.GetFileNameWithoutExtension(target.ExePath)+"-"+id);
+    arguments.Add(NativeShortcuts.Quote("--user-data-dir="+profile));
+    start.Arguments=AppProxyPolicy.ManagedChromiumArguments(string.Join(" ",arguments),localProxy);
+    for(int i=optionCount;i<original.Length;i++)start.Arguments+=" "+NativeShortcuts.Quote(original[i]);
+   }
    if(kind=="opencode-desktop") {
     string current=start.EnvironmentVariables["WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS"];
     start.EnvironmentVariables["WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS"]=AppProxyPolicy.ManagedChromiumArguments(current,localProxy);
@@ -108,6 +133,7 @@ namespace DevProxyApp {
     case "codex-desktop":return "Патч: ярлыки, Chromium и окружение backend. config.toml и настройки sandbox не меняются.";
     case "claude-desktop":return "Запуск: параметры Chromium и окружение. Для Cowork и удалённых коннекторов проверьте маршрут отдельно.";
     case "opencode-desktop":return "Патч: ярлыки, Electron/WebView2 по структуре установки и окружение backend. Старый фоновый сервер нужно закрыть. JSON-ключ proxy не добавляется.";
+    case "chromium-browser":return "Запуск через локальный мост Dagami с отдельным профилем браузера. Для Gemini и ChatGPT выберите прокси по ключу. В новый профиль нужно войти отдельно.";
     case "jetbrains":return "Патч: proxy.settings.xml, JVM и ярлыки. Gradle/Maven/SSH могут иметь отдельные настройки.";
     case "git":return "Патч: отдельная команда dagami-git и HTTP(S)-окружение. Обычный git и глобальный .gitconfig сохраняются; SSH требует своей настройки.";
     case "terminal":return "Патч: ярлык терминала с окружением прокси для дочерних команд. Системные команды в PATH не заменяются.";

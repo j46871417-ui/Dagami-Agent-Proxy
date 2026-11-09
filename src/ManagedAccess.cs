@@ -1,5 +1,7 @@
 using System;
+using System.Collections.Concurrent;
 using System.Diagnostics;
+using System.Globalization;
 using System.IO;
 using System.Net;
 using System.Net.Sockets;
@@ -18,9 +20,10 @@ namespace DevProxyApp {
   public const string BotLink = BotChat + "?start=dagami_";
   public const string BotKeyLink = BotChat + "?start=dagamikey";
   public const string Bootstrap = "https://test-dns.dagami.ru:9443";
-  const string FallbackIp = "45.86.65.240";
+  const string FallbackIp = "31.76.61.24";
   static readonly Uri BootstrapUri = new Uri(Bootstrap);
   static long fallbackUntil;
+  static readonly ConcurrentDictionary<Uri,GatewayClock> Clocks=new ConcurrentDictionary<Uri,GatewayClock>();
   static readonly byte[] Entropy=Encoding.UTF8.GetBytes("Dagami.Managed.Device.v1");
   static readonly Regex PairCode=new Regex(@"^[A-Za-z0-9_-]{43}$");
   static readonly Regex AccessCode=new Regex(@"\ADAGAMI1-[A-Za-z0-9_-]{43}\z");
@@ -34,6 +37,29 @@ namespace DevProxyApp {
   public sealed class Stored {public string Endpoint {get;set;} public string Key {get;set;} }
   public sealed class Result { public bool active {get;set;} public string code {get;set;} }
   sealed class Discovery { public string endpoint {get;set;} }
+  sealed class GatewayClock {
+   public readonly object Sync=new object();
+   long timestamp;
+   long sampledAt;
+   long lastProbe;
+   public bool Fresh {get {return sampledAt!=0&&(Stopwatch.GetTimestamp()-sampledAt)/Stopwatch.Frequency<600;}}
+   public long Now {get {return Fresh?timestamp+(Stopwatch.GetTimestamp()-sampledAt)/Stopwatch.Frequency:DateTimeOffset.UtcNow.ToUnixTimeSeconds();}}
+   public bool StartProbe() {
+    long now=Stopwatch.GetTimestamp();
+    if(Fresh||(lastProbe!=0&&(now-lastProbe)/Stopwatch.Frequency<60))return false;
+    lastProbe=now;
+    return true;
+   }
+   public void Observe(string date) {
+    DateTimeOffset server;
+    if(!DateTimeOffset.TryParseExact(date,"r",CultureInfo.InvariantCulture,DateTimeStyles.AssumeUniversal,out server))return;
+    if(Math.Abs(server.ToUnixTimeSeconds()-DateTimeOffset.UtcNow.ToUnixTimeSeconds())>86400)return;
+    timestamp=server.ToUnixTimeSeconds();
+    sampledAt=Stopwatch.GetTimestamp();
+   }
+  }
+
+  static GatewayClock Clock(Uri address){return Clocks.GetOrAdd(address,_=>new GatewayClock());}
 
   ManagedAccess(Uri endpoint,byte[] key){Endpoint=endpoint;privateKey=key;}
   public static Uri ParseEndpoint(string raw) {
@@ -51,8 +77,15 @@ namespace DevProxyApp {
    return new ManagedAccess(null,Convert.FromBase64String(encodedKey)).Proof(audience,method,target);
   }
   string Proof(string audience,string method,string target) {
+   var clock=Endpoint==null?null:Clock(Endpoint);
+   long now;
+   if(clock==null)now=DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+   else lock(clock.Sync)now=clock.Now;
+   return ProofAt(audience,method,target,now);
+  }
+  string ProofAt(string audience,string method,string target,long now) {
    var nonce=new byte[16];using(var rng=RandomNumberGenerator.Create())rng.GetBytes(nonce);
-   string timestamp=DateTimeOffset.UtcNow.ToUnixTimeSeconds().ToString(System.Globalization.CultureInfo.InvariantCulture), random=Base64Url(nonce);
+   string timestamp=now.ToString(CultureInfo.InvariantCulture), random=Base64Url(nonce);
    byte[] message=Encoding.UTF8.GetBytes(string.Join("\n",new[]{"dagami-proxy-v1",audience,method,target,timestamp,random}));
    using(var key=CngKey.Import(privateKey,CngKeyBlobFormat.EccPrivateBlob))
    using(var signer=new ECDsaCng(key)) {
@@ -103,7 +136,7 @@ namespace DevProxyApp {
   }
   public Result Request(bool start) {
    string method=start?"POST":"GET",path=start?"/v1/pair":"/v1/status";
-   var response=Send(Endpoint,method,path,Proof(Endpoint.Authority.ToLowerInvariant(),method,path),null);
+   var response=SendSigned(method,path,null);
    if(response.Item1!=200)throw new IOException("Шлюз Dagami вернул HTTP "+response.Item1+".");
    var value=new JavaScriptSerializer().Deserialize<Result>(response.Item2);
    if(value==null||(start&&!value.active&&!PairCode.IsMatch(value.code??"")))throw new IOException("Шлюз вернул неверный код привязки.");
@@ -128,8 +161,9 @@ namespace DevProxyApp {
    var device=Pair(address,true);
    const string path="/v1/redeem";
    byte[] body=Encoding.UTF8.GetBytes(new JavaScriptSerializer().Serialize(new {code=code}));
-   var response=Send(address,"POST",path,device.Proof(address.Authority.ToLowerInvariant(),"POST",path),body);
-   if(response.Item1==410)throw new InvalidOperationException("Ключ истёк или уже использован. Получите новый через /key.");
+   var response=device.SendSigned("POST",path,body);
+   if(response.Item1==410)throw new InvalidOperationException("Ключ не найден или отозван. Проверьте действующий ключ через /key.");
+   if(response.Item1==401)throw new InvalidOperationException("Шлюз не принял подпись устройства. Проверьте автоматическую синхронизацию времени и попробуйте снова.");
    if(response.Item1==409)throw new InvalidOperationException("Достигнут лимит устройств. Отзовите старые устройства в боте.");
    if(response.Item1!=200)throw new IOException("Активация шлюза Dagami вернула HTTP "+response.Item1+".");
    var result=new JavaScriptSerializer().Deserialize<Result>(response.Item2);
@@ -161,11 +195,37 @@ namespace DevProxyApp {
    return tcp;
   }
   internal TcpClient ConnectTls(out Stream stream) {
+   var clock=Clock(Endpoint);
+   lock(clock.Sync) {
+    if(clock.StartProbe()) {
+     try {Send(Endpoint,"GET","/v1/config",null,null);}
+     catch(IOException){} catch(SocketException){} catch(WebException){} catch(TimeoutException){}
+    }
+   }
    var tcp=ConnectTcp(Endpoint);
    try {
     stream=TlsDiagnostics.Connect(tcp.GetStream(),Endpoint.IdnHost,"managed-proxy",15000);
     return tcp;
    } catch {tcp.Close();throw;}
+  }
+  Tuple<int,string> SendSigned(string method,string path,byte[] body) {
+   string audience=Endpoint.Authority.ToLowerInvariant();
+   var clock=Clock(Endpoint);
+   long signedAt,started=Stopwatch.GetTimestamp();
+   lock(clock.Sync)signedAt=clock.Now;
+   var response=Send(Endpoint,method,path,ProofAt(audience,method,path,signedAt),body);
+   if(response.Item1==401) {
+    long corrected;
+    lock(clock.Sync)corrected=clock.Now;
+    if(Math.Abs(corrected-signedAt-(Stopwatch.GetTimestamp()-started)/Stopwatch.Frequency)>5)
+     response=Send(Endpoint,method,path,ProofAt(audience,method,path,corrected),body);
+   }
+   return response;
+  }
+  static void ObserveClock(Uri address,int status,string date) {
+   if(status!=200&&status!=401)return;
+   var clock=Clock(address);
+   lock(clock.Sync)clock.Observe(date);
   }
   static Tuple<int,string> Send(Uri address,string method,string path,string proof,byte[] body) {
    if(address.Equals(BootstrapUri))return SendBootstrap(address,method,path,proof,body);
@@ -182,12 +242,17 @@ namespace DevProxyApp {
    }
    try {
     using(var response=(HttpWebResponse)request.GetResponse())
-    using(var stream=response.GetResponseStream())
+    using(var stream=response.GetResponseStream()) {
+     ObserveClock(address,(int)response.StatusCode,response.Headers["Date"]);
      return Tuple.Create((int)response.StatusCode,ReadLimited(stream,1024));
+    }
    } catch(WebException error) {
     var response=error.Response as HttpWebResponse;
     if(response==null)throw;
-    using(response)return Tuple.Create((int)response.StatusCode,"");
+    using(response) {
+     ObserveClock(address,(int)response.StatusCode,response.Headers["Date"]);
+     return Tuple.Create((int)response.StatusCode,"");
+    }
    }
   }
   static Tuple<int,string> SendBootstrap(Uri address,string method,string path,string proof,byte[] body) {
@@ -204,6 +269,11 @@ namespace DevProxyApp {
     int status,end=response.IndexOf("\r\n\r\n",StringComparison.Ordinal);
     if(end<12||!response.StartsWith("HTTP/1.1 ",StringComparison.Ordinal)||!int.TryParse(response.Substring(9,3),out status))
      throw new IOException("Шлюз вернул неверный ответ HTTP.");
+    foreach(string line in response.Substring(0,end).Split(new[]{"\r\n"},StringSplitOptions.None)) {
+     if(!line.StartsWith("Date:",StringComparison.OrdinalIgnoreCase))continue;
+     ObserveClock(address,status,line.Substring(5).Trim());
+     break;
+    }
     return Tuple.Create(status,response.Substring(end+4));
    }
   }
@@ -218,6 +288,7 @@ namespace DevProxyApp {
   }
   internal static void ApplyProfileSettings(ConfigManager cfg) {
    cfg.CustomProxy=cfg.SavedCustomProxy;
+   cfg.PublicProxySelected=false;
    cfg.LastProxy=Profile;cfg.UseProxy=true;cfg.UseDagamiDns=false;
   }
   public void Commit(Action commitConfig) {

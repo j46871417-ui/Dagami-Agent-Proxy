@@ -30,7 +30,7 @@ namespace DevProxyApp {
   static readonly object Sync=new object();
   static readonly string[] ProviderIds={"dagami","magicdns"};
   static readonly Dictionary<string,string> Hosts=new Dictionary<string,string>{
-   {"dagami","dns.dagami.ru"},
+   {"dagami","doh.dagami.ru"},
    {"magicdns","dns.magicdns.ru"},
    {"comss","dns.comss.one"},
    {"geohide","dns.geohide.ru"},
@@ -53,7 +53,7 @@ namespace DevProxyApp {
 
   static List<DnsEndpoint> Seeds(){
    var result=new List<DnsEndpoint>();
-   foreach(string address in new[]{"89.22.224.205","89.125.103.139","45.147.31.32","46.29.165.108"})result.Add(new DnsEndpoint("dagami",address,Hosts["dagami"]));
+   foreach(string address in new[]{"31.76.61.24"})result.Add(new DnsEndpoint("dagami",address,Hosts["dagami"]));
    foreach(string address in new[]{"2.56.175.196","109.120.132.43","94.249.177.102"})result.Add(new DnsEndpoint("magicdns",address,Hosts["magicdns"]));
    return result;
   }
@@ -83,7 +83,7 @@ namespace DevProxyApp {
   static string MatchBuiltInProvider(string value){
    if(string.IsNullOrEmpty(value))return null;
    string lower=value.ToLowerInvariant();
-   if(lower=="dns.dagami.ru"||lower=="dagami.ru"||lower=="dagami"||lower=="auto")return "dagami";
+   if(lower=="dns.dagami.ru"||lower=="doh.dagami.ru"||lower=="dagami.ru"||lower=="dagami"||lower=="auto")return "dagami";
    if(lower=="dns.magicdns.ru"||lower=="magicdns.ru"||lower=="magicdns")return "magicdns";
    if(lower=="dns.comss.one"||lower=="router.comss.one"||lower=="comss.one"||lower=="comss")return "comss";
    if(lower=="dns.geohide.ru"||lower=="geohide.ru"||lower=="geohide")return "geohide";
@@ -95,6 +95,7 @@ namespace DevProxyApp {
   public static DnsEndpoint[] ForServer(string server){
    string value=(server??"").Trim().TrimEnd('.');
    string provider=MatchBuiltInProvider(value);
+   if(Array.Exists(new[]{"89.22.224.205","89.125.103.139","45.147.31.32","46.29.165.108"},x=>x==value))provider="dagami";
    foreach(var endpoint in Seeds())if(value==endpoint.Address)provider=endpoint.Provider;
    foreach(var endpoint in Snapshot())if(value==endpoint.Address)provider=endpoint.Provider;
    if(provider=="dagami"||provider=="magicdns"){
@@ -458,6 +459,8 @@ namespace DevProxyApp {
    var json=new JavaScriptSerializer{MaxJsonLength=32768};var saved=json.Deserialize<Dictionary<string,object>>(File.ReadAllText(cachePath));
    if(Convert.ToInt32(saved["Version"])!=1)return;var values=new List<DnsEndpoint>();
    foreach(string provider in ProviderIds){var list=(System.Collections.IEnumerable)saved[provider];int count=0;foreach(object item in list){string address=Convert.ToString(item);if(!PublicAddress(address)||++count>8)throw new InvalidDataException("Invalid cached DNS endpoint.");if(!values.Exists(x=>x.Address==address))values.Add(new DnsEndpoint(provider,address,Hosts[provider]));}if(count==0)throw new InvalidDataException("Empty cached provider.");}
+   // A stale cache must not hide the last known official bootstrap address.
+   foreach(var seed in Seeds())if(seed.Provider=="dagami"&&!values.Exists(x=>x.Provider=="dagami"&&x.Address==seed.Address))values.Insert(0,seed);
    lock(Sync)endpoints=values;
   }catch{}}
   static void Save(){if(cachePath==null)return;string temporary=null;try{

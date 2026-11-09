@@ -12,16 +12,19 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 )
 
 type Gateway struct {
-	registry *registry
-	audience string
-	endpoint string
-	dial     func(context.Context, string, string) (net.Conn, int)
-	replay   replayGuard
-	slots    chan struct{}
+	registry     *registry
+	traffic      *trafficMeter
+	audience     string
+	endpoint     string
+	dial         func(context.Context, string, string) (net.Conn, int)
+	replay       replayGuard
+	redeemReplay replayGuard
+	slots        chan struct{}
 }
 
 func OpenGateway(stateFile, endpoint, upstream, bridgeKey string) (*Gateway, error) {
@@ -39,7 +42,11 @@ func OpenGateway(stateFile, endpoint, upstream, bridgeKey string) (*Gateway, err
 	if err != nil {
 		return nil, err
 	}
-	g := &Gateway{registry: r, audience: u.Host, endpoint: u.String(), slots: make(chan struct{}, 1024)}
+	traffic, err := openTraffic(stateFile + ".traffic.json")
+	if err != nil {
+		return nil, err
+	}
+	g := &Gateway{registry: r, traffic: traffic, audience: u.Host, endpoint: u.String(), slots: make(chan struct{}, 1024)}
 	g.dial = func(ctx context.Context, login, target string) (net.Conn, int) {
 		return dialLegacy(ctx, upstream, "Dagami-Local "+bridgeKey+"."+login, target)
 	}
@@ -86,7 +93,12 @@ func (g *Gateway) Public(w http.ResponseWriter, r *http.Request) {
 	now := time.Now()
 	device := ""
 	if values := r.Header.Values(header); len(values) == 1 {
-		device = g.replay.verify(values[0], g.audience, r.Method, target, now.Unix())
+		if r.Method == http.MethodPost && target == "/v1/redeem" {
+			// Initial activation can tolerate more clock drift without relaxing CONNECT.
+			device = g.redeemReplay.verifyWithin(values[0], g.audience, r.Method, target, now.Unix(), redeemProofWindow)
+		} else {
+			device = g.replay.verify(values[0], g.audience, r.Method, target, now.Unix())
+		}
 	}
 	if device == "" {
 		if r.Method == http.MethodConnect {
@@ -115,7 +127,7 @@ func (g *Gateway) Public(w http.ResponseWriter, r *http.Request) {
 				w.WriteHeader(http.StatusBadRequest)
 				return
 			}
-			switch g.registry.redeemAccess(input.Code, device, now) {
+			switch g.registry.redeemAccess(input.Code, device) {
 			case nil:
 				writeJSON(w, PairStatus{Active: true})
 			case errPair:
@@ -159,6 +171,14 @@ func readJSON(w http.ResponseWriter, r *http.Request, input any) bool {
 
 // Private must be served only on a permission-restricted Unix socket.
 func (g *Gateway) Private(w http.ResponseWriter, r *http.Request) {
+	if r.Method == http.MethodGet && r.URL.Path == "/private/stats" {
+		w.Header().Set("Cache-Control", "no-store")
+		writeJSON(w, struct {
+			keyStats
+			trafficSnapshot
+		}{g.registry.stats(), g.traffic.snapshot()})
+		return
+	}
 	if r.Method != http.MethodPost {
 		w.WriteHeader(http.StatusMethodNotAllowed)
 		return
@@ -172,8 +192,8 @@ func (g *Gateway) Private(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusBadRequest)
 		return
 	}
-	if r.URL.Path == "/private/issue-access" {
-		code, err := g.registry.issueAccess(binding{input.Subject, input.Login}, time.Now())
+	if r.URL.Path == "/private/issue-access" || r.URL.Path == "/private/rotate-access" {
+		code, err := g.registry.issueAccess(binding{input.Subject, input.Login}, r.URL.Path == "/private/rotate-access")
 		if err != nil {
 			w.WriteHeader(http.StatusServiceUnavailable)
 			return
@@ -234,7 +254,7 @@ func (g *Gateway) tunnel(w http.ResponseWriter, r *http.Request, device string, 
 		return
 	}
 	defer client.Close()
-	if !g.registry.track(device, b, client) {
+	if !g.registry.track(device, b, client, upstream) {
 		rw.WriteString("HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n")
 		rw.Flush()
 		return
@@ -248,15 +268,23 @@ func (g *Gateway) tunnel(w http.ResponseWriter, r *http.Request, device string, 
 	}
 	finished := make(chan struct{})
 	go func() {
-		relay(upstream, rw.Reader, client)
+		relay(upstream, rw.Reader, client, &g.traffic.upload)
 		close(finished)
 	}()
-	relay(client, upstream, upstream)
+	relay(client, upstream, upstream, &g.traffic.download)
 	<-finished
 }
 
-func relay(dst net.Conn, src io.Reader, source net.Conn) {
-	if _, err := io.Copy(dst, src); err != nil {
+func (g *Gateway) FlushTraffic() error {
+	return g.traffic.flush()
+}
+
+func (g *Gateway) CloseTunnels() {
+	g.registry.closeTunnels()
+}
+
+func relay(dst net.Conn, src io.Reader, source net.Conn, count *atomic.Uint64) {
+	if _, err := io.Copy(meteredWriter{dst, count}, src); err != nil {
 		dst.Close()
 		source.Close()
 		return

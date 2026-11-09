@@ -518,9 +518,9 @@ namespace DevProxyApp
             if (IsDirectProxyValue(proxy) || (string.IsNullOrEmpty(proxy) && useDns)) return "direct";
             Uri parsed;
             if (!TryParseSupportedProxy(proxy, out parsed))
-                throw new InvalidOperationException("Укажите HTTP или HTTPS proxy URL (например http://host:8080) или оставьте пустым для работы через Smart DNS.");
+                throw new InvalidOperationException("Укажите HTTP, HTTPS или SOCKS5 proxy URL (например http://host:8080) или оставьте пустым для работы через Smart DNS.");
             if (UpstreamProxyDiagnostics.IsDnsEndpointMistakenForProxy(proxy))
-                throw new InvalidOperationException("В поле прокси указан DNS-сервер. Укажите HTTP/HTTPS-прокси, а адрес DNS задайте отдельно.");
+                throw new InvalidOperationException("В поле прокси указан DNS-сервер. Укажите HTTP/HTTPS/SOCKS5-прокси, а адрес DNS задайте отдельно.");
             return proxy;
         }
 
@@ -531,7 +531,7 @@ namespace DevProxyApp
             if (!value.Contains("://") && value.Contains(":")) value = "http://" + value;
             Uri proxy;
             if (value.Length > 2048 || !TryParseSupportedProxy(value, out proxy) || UpstreamProxyDiagnostics.IsDnsEndpointMistakenForProxy(value))
-                throw new ArgumentException("Укажите адрес HTTP/HTTPS-прокси, например 127.0.0.1:7897, или введите direct для системного VPN.");
+                throw new ArgumentException("Укажите адрес HTTP/HTTPS/SOCKS5-прокси, например 127.0.0.1:7897, или введите direct для системного VPN.");
             if (LocalProxyBridge.IsBridgeEndpoint(proxy, bridgePort))
                 throw new ArgumentException("Этот порт занят мостом Dagami. Введите порт вашего прокси.");
             return value;
@@ -542,7 +542,7 @@ namespace DevProxyApp
             bool useProxy = _useProxyCheckBox != null ? _useProxyCheckBox.Checked : ConfigManager.Instance.UseProxy;
             bool useDns = _dnsEnabled.Checked;
             string proxy = NormalizeSavedProxy(ConfigManager.Instance.LastProxy, useProxy, useDns);
-            if (useProxy && ManagedAccess.IsProfile(proxy)) useDns = false;
+            if (useProxy && (ManagedAccess.IsProfile(proxy) || ConfigManager.Instance.PublicProxySelected)) useDns = false;
             string dns = _dnsBox.Text.Trim().TrimEnd('.');
             if (string.IsNullOrEmpty(dns)) dns = "dns.dagami.ru";
             if (!DnsProviders.IsValidSpec(dns))
@@ -749,11 +749,11 @@ namespace DevProxyApp
                 bool paired = ManagedAccess.HasActiveDevice();
                 bool needsPairing = managed && !paired;
                 string route = managed ? "Прокси Dagami" : config.UseProxy && !IsDirectProxyValue(config.LastProxy)
-                    ? "Свой прокси" : config.UseDagamiDns ? "Smart DNS" : "Системный маршрут / VPN";
+                    ? (config.PublicProxySelected ? "Публичный прокси" : "Свой прокси") : config.UseDagamiDns ? "Smart DNS" : "Системный маршрут / VPN";
                 string routeState = route + (needsPairing ? " · ожидает привязки в Telegram" : _bridgePort > 0 ? " · мост запущен" : "");
                 if (!string.IsNullOrEmpty(config.LastLoadError)) routeState = "Не удалось загрузить настройки. Сохраните подключение заново.";
                 _connectionSummary.Text = routeState + " · для всех запусков через Dagami";
-                if (_connectionRouteStatus != null) _connectionRouteStatus.Text = routeState;
+                RefreshWindowsProxyStatus(routeState);
                 if (_managedRouteAction != null) _managedRouteAction.Text = paired && !managed ? "Использовать Dagami" : "Подключить по ключу";
                 _connectionAction.Text = needsPairing ? "Подключить" : "Настройки";
             }

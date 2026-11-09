@@ -1,3 +1,11 @@
+# Dagami Agent Proxy 0.6.0 beta
+
+- Выбор маршрута в Windows: свой HTTP/HTTPS/SOCKS5-прокси, Dagami по ключу или публичный прокси.
+- Публичные прокси проверяются через CONNECT и TLS. Проверку Gemini можно потребовать отдельно.
+- Выборочный системный PAC и распаковываемое расширение Chrome / Edge.
+- Обновлена подготовка шифрованного DNS и добавлен повторный запрос при сбое экспериментального разделения TLS.
+- Пакетный WinDivert остаётся экспериментальным и не включается обычным интерфейсом.
+
 **[Группа Dagami](https://t.me/dagamvi) | [Канал Dagami](https://t.me/dagamivibe) | [Донаты](https://pay.cloudtips.ru/p/671fda86) | [dns.dagami.ru](https://dns.dagami.ru) | [Обсуждение и техподдержка](https://t.me/dagamvi/2140) | [Сообщить об ошибке](https://dns.dagami.ru/support/agent-proxy/)**
 
 # Dagami Agent Proxy 0.5.0 beta

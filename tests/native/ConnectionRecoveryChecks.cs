@@ -71,6 +71,12 @@ class ConnectionRecoveryChecks {
    var useCustom=typeof(ConfigManager).GetMethod("SelectCustomRoute",Private);
    useCustom.Invoke(reloaded,new object[]{reloaded.SavedCustomProxy});
    Assert(reloaded.EffectiveProxy==savedProxy&&reloaded.UseProxy&&!reloaded.UseDagamiDns,"Selecting custom kept a disabled proxy or a Smart DNS bypass");
+   const string publicProxy="http://198.51.100.7:3128";
+   typeof(ConfigManager).GetMethod("SelectPublicRoute",Private).Invoke(reloaded,new object[]{publicProxy});
+   Parse(legacy,File.ReadAllText(Path.Combine(root,"legacy","config.json")));
+   Assert(legacy.PublicProxySelected&&legacy.EffectiveProxy==publicProxy&&legacy.SavedCustomProxy==savedProxy,"Public route did not preserve the manual proxy across restart");
+   useCustom.Invoke(legacy,new object[]{legacy.SavedCustomProxy});
+   Assert(!legacy.PublicProxySelected&&legacy.EffectiveProxy==savedProxy,"Switching back to manual did not clear the public route");
    Parse(legacy,"{\"use_dagami_dns\":true,\"dns_host\":\"dns.dagami.ru\",\"dns_obfuscation\":true,\"block_antigravity_updates\":true}");
    Assert(!legacy.DnsObfuscation&&!legacy.BlockAntigravityUpdates&&legacy.UseDagamiDns,"Unsafe legacy flags survived migration or DNS was disabled");
    Parse(legacy,"{\"connection_policy_version\":1,\"dns_obfuscation\":true,\"block_antigravity_updates\":true}");

@@ -15,8 +15,9 @@ import (
 )
 
 const pairLifetime = 10 * time.Minute
-const accessLifetime = 15 * time.Minute
 const AccessPrefix = "DAGAMI1-"
+const registryVersion = 1
+const accountLimit = 10000
 
 var (
 	loginPattern   = regexp.MustCompile(`^agw_[a-f0-9]{24}$`)
@@ -36,9 +37,21 @@ type pendingPair struct {
 }
 
 type accessCode struct {
-	Binding binding
-	Expires time.Time
-	Device  string
+	Login     string `json:"login"`
+	Code      string `json:"code"`
+	Activated bool   `json:"activated,omitempty"`
+}
+
+type keyTotals struct {
+	Issued    uint64 `json:"issued"`
+	Activated uint64 `json:"activated"`
+}
+
+type registryState struct {
+	Version int                   `json:"version"`
+	Devices map[string]binding    `json:"devices"`
+	Keys    map[string]accessCode `json:"keys"`
+	Totals  *keyTotals            `json:"totals,omitempty"`
 }
 
 type registry struct {
@@ -46,12 +59,16 @@ type registry struct {
 	file    string
 	devices map[string]binding
 	pending map[[32]byte]pendingPair
-	codes   map[[32]byte]accessCode
-	tunnels map[string]map[net.Conn]struct{}
+	keys    map[string]accessCode
+	codes   map[[32]byte]binding
+	totals  keyTotals
+	tunnels map[string]map[net.Conn]net.Conn
+	closing bool
+	active  sync.WaitGroup
 }
 
 func openRegistry(path string) (*registry, error) {
-	r := &registry{file: path, devices: map[string]binding{}, pending: map[[32]byte]pendingPair{}, codes: map[[32]byte]accessCode{}, tunnels: map[string]map[net.Conn]struct{}{}}
+	r := &registry{file: path, devices: map[string]binding{}, pending: map[[32]byte]pendingPair{}, keys: map[string]accessCode{}, codes: map[[32]byte]binding{}, tunnels: map[string]map[net.Conn]net.Conn{}}
 	raw, err := os.ReadFile(path)
 	if errors.Is(err, os.ErrNotExist) {
 		return r, nil
@@ -59,19 +76,52 @@ func openRegistry(path string) (*registry, error) {
 	if err != nil {
 		return nil, err
 	}
-	if len(raw) > 4<<20 || json.Unmarshal(raw, &r.devices) != nil || r.devices == nil {
-		return nil, errors.New("не удалось прочитать реестр устройств")
+	invalid := errors.New("не удалось прочитать реестр устройств")
+	var fields map[string]json.RawMessage
+	if len(raw) > 4<<20 || json.Unmarshal(raw, &fields) != nil || fields == nil {
+		return nil, invalid
+	}
+	if _, versioned := fields["version"]; versioned {
+		var state registryState
+		if json.Unmarshal(raw, &state) != nil || state.Version != registryVersion || state.Devices == nil || state.Keys == nil || len(state.Keys) > accountLimit {
+			return nil, invalid
+		}
+		r.devices, r.keys = state.Devices, state.Keys
+		for subject, key := range state.Keys {
+			hash := sha256.Sum256([]byte(key.Code))
+			if !subjectPattern.MatchString(subject) || !loginPattern.MatchString(key.Login) || !ValidAccessCode(key.Code) || r.codes[hash].Subject != "" {
+				return nil, invalid
+			}
+			r.codes[hash] = binding{subject, key.Login}
+		}
+		if state.Totals != nil {
+			r.totals = *state.Totals
+		} else {
+			// The old format did not distinguish key activations from link pairings.
+			// Start the activation count with the first confirmed redemption.
+			r.totals.Issued = uint64(len(r.keys))
+		}
+	} else if json.Unmarshal(raw, &r.devices) != nil {
+		return nil, invalid
 	}
 	return r, nil
 }
 
-func (r *registry) saveLocked(devices map[string]binding) error {
-	f, err := os.CreateTemp(filepath.Dir(r.file), ".devices-*")
+func (r *registry) saveLocked(devices map[string]binding, keys map[string]accessCode, totals keyTotals) error {
+	if err := writeState(r.file, registryState{registryVersion, devices, keys, &totals}); err != nil {
+		return err
+	}
+	r.devices, r.keys, r.totals = devices, keys, totals
+	return nil
+}
+
+func writeState(path string, value any) error {
+	f, err := os.CreateTemp(filepath.Dir(path), ".state-*")
 	if err != nil {
 		return err
 	}
 	defer os.Remove(f.Name())
-	err = json.NewEncoder(f).Encode(devices)
+	err = json.NewEncoder(f).Encode(value)
 	if err == nil {
 		err = f.Sync()
 	}
@@ -82,11 +132,7 @@ func (r *registry) saveLocked(devices map[string]binding) error {
 	if closeErr != nil {
 		return closeErr
 	}
-	if err = os.Rename(f.Name(), r.file); err != nil {
-		return err
-	}
-	r.devices = devices
-	return nil
+	return os.Rename(f.Name(), path)
 }
 
 func (r *registry) get(device string) (binding, bool) {
@@ -135,11 +181,20 @@ func (r *registry) approve(code string, b binding, now time.Time) error {
 }
 
 func (r *registry) bindLocked(device string, b binding) error {
+	devices, err := r.prepareBinding(device, b)
+	if err != nil || devices == nil {
+		return err
+	}
+	return r.saveLocked(devices, r.keys, r.totals)
+}
+
+// A nil map means the same device is already registered to the account.
+func (r *registry) prepareBinding(device string, b binding) (map[string]binding, error) {
 	if current, ok := r.devices[device]; ok {
 		if current == b {
-			return nil
+			return nil, nil
 		}
-		return errPair
+		return nil, errPair
 	}
 	count := 0
 	for _, entry := range r.devices {
@@ -148,50 +203,105 @@ func (r *registry) bindLocked(device string, b binding) error {
 		}
 	}
 	if count >= 3 || len(r.devices) >= 10000 {
-		return errLimit
+		return nil, errLimit
 	}
 	devices := cloneBindings(r.devices)
 	devices[device] = b
-	return r.saveLocked(devices)
+	return devices, nil
 }
 
-func (r *registry) issueAccess(b binding, now time.Time) (string, error) {
+func (r *registry) issueAccess(b binding, rotate bool) (string, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if !subjectPattern.MatchString(b.Subject) || !loginPattern.MatchString(b.Login) {
 		return "", errPair
 	}
-	for hash, code := range r.codes {
-		if !now.Before(code.Expires) || code.Binding.Subject == b.Subject && code.Device == "" {
-			delete(r.codes, hash)
-		}
+	key, exists := r.keys[b.Subject]
+	if exists && !rotate && key.Login == b.Login {
+		return key.Code, nil
 	}
-	if len(r.codes) >= 2048 {
+	if !exists && len(r.keys) >= accountLimit {
 		return "", errLimit
 	}
-	var random [32]byte
-	if _, err := rand.Read(random[:]); err != nil {
+	devices := r.devices
+	totals := r.totals
+	previousCode := key.Code
+	if !exists || rotate {
+		var random [32]byte
+		if _, err := rand.Read(random[:]); err != nil {
+			return "", err
+		}
+		key.Code = AccessPrefix + encoding.EncodeToString(random[:])
+		if _, duplicate := r.codes[sha256.Sum256([]byte(key.Code))]; duplicate {
+			return "", errors.New("не удалось сгенерировать уникальный ключ")
+		}
+		key.Activated = false
+		totals.Issued++
+	}
+	// Keep already paired devices usable if the controller updates the account login.
+	for _, current := range r.devices {
+		if current.Subject == b.Subject && current.Login != b.Login {
+			devices = cloneBindings(r.devices)
+			for device, current := range devices {
+				if current.Subject == b.Subject {
+					devices[device] = b
+				}
+			}
+			break
+		}
+	}
+	key.Login = b.Login
+	keys := cloneKeys(r.keys)
+	keys[b.Subject] = key
+	if err := r.saveLocked(devices, keys, totals); err != nil {
 		return "", err
 	}
-	code := AccessPrefix + encoding.EncodeToString(random[:])
-	r.codes[sha256.Sum256([]byte(code))] = accessCode{Binding: b, Expires: now.Add(accessLifetime)}
-	return code, nil
+	if exists && rotate {
+		delete(r.codes, sha256.Sum256([]byte(previousCode)))
+	}
+	r.codes[sha256.Sum256([]byte(key.Code))] = b
+	return key.Code, nil
 }
 
-func (r *registry) redeemAccess(code, device string, now time.Time) error {
+func (r *registry) redeemAccess(code, device string) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	hash := sha256.Sum256([]byte(code))
 	issued, exists := r.codes[hash]
-	if !exists || !now.Before(issued.Expires) || issued.Device != "" && issued.Device != device {
+	if !exists {
 		return errPair
 	}
-	if err := r.bindLocked(device, issued.Binding); err != nil {
+	devices, err := r.prepareBinding(device, issued)
+	if err != nil {
 		return err
 	}
-	issued.Device = device
-	r.codes[hash] = issued
-	return nil
+	key := r.keys[issued.Subject]
+	if key.Activated && devices == nil {
+		return nil
+	}
+	if devices == nil {
+		devices = r.devices
+	}
+	keys, totals := r.keys, r.totals
+	if !key.Activated {
+		key.Activated = true
+		keys = cloneKeys(keys)
+		keys[issued.Subject] = key
+		totals.Activated++
+	}
+	return r.saveLocked(devices, keys, totals)
+}
+
+type keyStats struct {
+	keyTotals
+	CurrentKeys int `json:"current_keys"`
+	Devices     int `json:"devices"`
+}
+
+func (r *registry) stats() keyStats {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return keyStats{r.totals, len(r.keys), len(r.devices)}
 }
 
 func (r *registry) pendingExists(code string, now time.Time) bool {
@@ -209,6 +319,14 @@ func cloneBindings(devices map[string]binding) map[string]binding {
 	return copy
 }
 
+func cloneKeys(keys map[string]accessCode) map[string]accessCode {
+	copy := make(map[string]accessCode, len(keys))
+	for subject, key := range keys {
+		copy[subject] = key
+	}
+	return copy
+}
+
 func (r *registry) revoke(subject string) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -218,36 +336,39 @@ func (r *registry) revoke(subject string) error {
 			delete(devices, id)
 		}
 	}
-	if len(devices) != len(r.devices) {
-		if err := r.saveLocked(devices); err != nil {
+	key, issued := r.keys[subject]
+	if len(devices) != len(r.devices) || issued {
+		keys := cloneKeys(r.keys)
+		delete(keys, subject)
+		if err := r.saveLocked(devices, keys, r.totals); err != nil {
 			return err
 		}
 	}
-	for hash, code := range r.codes {
-		if code.Binding.Subject == subject {
-			delete(r.codes, hash)
-		}
+	if issued {
+		delete(r.codes, sha256.Sum256([]byte(key.Code)))
 	}
 	for id, tunnels := range r.tunnels {
 		if _, ok := devices[id]; !ok {
-			for conn := range tunnels {
+			for conn, upstream := range tunnels {
 				conn.Close()
+				upstream.Close()
 			}
 		}
 	}
 	return nil
 }
 
-func (r *registry) track(device string, b binding, conn net.Conn) bool {
+func (r *registry) track(device string, b binding, conn, upstream net.Conn) bool {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if r.devices[device] != b || len(r.tunnels[device]) >= 64 {
+	if r.closing || r.devices[device] != b || len(r.tunnels[device]) >= 64 {
 		return false
 	}
 	if r.tunnels[device] == nil {
-		r.tunnels[device] = make(map[net.Conn]struct{})
+		r.tunnels[device] = make(map[net.Conn]net.Conn)
 	}
-	r.tunnels[device][conn] = struct{}{}
+	r.tunnels[device][conn] = upstream
+	r.active.Add(1)
 	return true
 }
 
@@ -258,4 +379,18 @@ func (r *registry) untrack(device string, conn net.Conn) {
 	if len(r.tunnels[device]) == 0 {
 		delete(r.tunnels, device)
 	}
+	r.active.Done()
+}
+
+func (r *registry) closeTunnels() {
+	r.mu.Lock()
+	r.closing = true
+	for _, tunnels := range r.tunnels {
+		for client, upstream := range tunnels {
+			client.Close()
+			upstream.Close()
+		}
+	}
+	r.mu.Unlock()
+	r.active.Wait()
 }

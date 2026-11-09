@@ -83,6 +83,19 @@ class ApplicationSupportChecks {
    string desktop=Path.Combine(root,"desktop");Directory.CreateDirectory(Path.Combine(desktop,"resources"));File.WriteAllText(Path.Combine(desktop,@"resources\app.asar"),"fixture");
    var oc=new AppTarget{Id="opencode-gui",ExePath=Path.Combine(desktop,"OpenCode.exe")};var ocStart=new ProcessStartInfo(Self){UseShellExecute=false};ApplicationSupport.ConfigureLaunch(oc,ocStart,local);
    Assert(ocStart.Arguments.Contains("--proxy-server")&&ocStart.EnvironmentVariables["WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS"].Contains("--disable-quic"),"OpenCode generation-specific runtime flags missing");
+   foreach(string browser in new[]{"chrome.exe","msedge.exe","brave.exe",@"YandexBrowser\Application\browser.exe"}) {
+    var app=new AppTarget{ExePath=Path.Combine(root,browser)};
+    var launch=new ProcessStartInfo(app.ExePath,"--no-proxy-server --proxy-pac-url ignored --user-data-dir=usual -- https://gemini.google.com/");
+    ApplicationSupport.ConfigureLaunch(app,launch,local);
+    var browserArgs=NativeCliApps.SplitArguments(launch.Arguments);
+    int separator=Array.IndexOf(browserArgs,"--");
+    Assert(ApplicationSupport.Kind(app)=="chromium-browser"&&!ApplicationSupport.SupportsSettings(app),"Browser launch would change native settings");
+    Assert(Array.IndexOf(browserArgs,"--proxy-server="+local)>=0&&Array.IndexOf(browserArgs,"--proxy-server="+local)<separator
+     && !Array.Exists(browserArgs,a=>a=="--no-proxy-server"||a=="--proxy-pac-url"||a=="ignored"||a=="--user-data-dir=usual"),
+     "Browser can reuse the direct route or ignore the proxy after --");
+    Assert(Array.Exists(browserArgs,a=>a.StartsWith("--user-data-dir=")&&a.Contains(@"devproxy\browser-profiles\"))
+     &&browserArgs[browserArgs.Length-1]=="https://gemini.google.com/","Isolated browser profile or target URL missing");
+   }
    string[] values={"space value","","literal\"quote","trailing\\","&|<>%USERPROFILE%!","русский"};
    string joined=string.Join(" ",Array.ConvertAll(values,NativeShortcuts.Quote));var split=NativeCliApps.SplitArguments(joined);
    Assert(split.Length==values.Length,"Arguments count changed");for(int i=0;i<values.Length;i++)Assert(split[i]==values[i],"Argument changed at "+i);

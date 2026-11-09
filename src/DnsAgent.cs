@@ -89,7 +89,16 @@ namespace DevProxyApp {
     string key=endpoint.Protocol+":"+endpoint.Address+":"+endpoint.Port;
     int timeout=DnsProviders.AttemptTimeout(remaining,remainingAttempts--,2400);
     try{
-     byte[] response=DnsHttpsTransport.Exchange(endpoint,query,Math.Min(timeout,remaining));
+     byte[] response;
+     if(ConfigManager.Instance.DnsObfuscation){
+      var attempt=Stopwatch.StartNew();
+      try{response=DnsHttpsTransport.Exchange(endpoint,query,Math.Max(1,timeout/2),true);}
+      catch(Exception first){
+       if(!(first is IOException)&&!(first is SocketException)&&!(first is System.TimeoutException)&&!(first is System.Security.Authentication.AuthenticationException))throw;
+       int left=timeout-(int)attempt.ElapsedMilliseconds;if(left<=0)throw;
+       response=DnsHttpsTransport.Exchange(endpoint,query,left,false);
+      }
+     }else response=DnsHttpsTransport.Exchange(endpoint,query,Math.Min(timeout,remaining));
      if((response[3]&15)==2)throw new IOException("Resolver SERVFAIL.");
      lock(sync)cooldown.Remove(key);
      return response;
@@ -158,17 +167,33 @@ namespace DevProxyApp {
   static string Hash(string path){using(var input=File.OpenRead(path))using(var hash=System.Security.Cryptography.SHA256.Create())return BitConverter.ToString(hash.ComputeHash(input));}
   public static bool Probe(){return Probe(IPAddress.Loopback);}
   public static bool IsRunning(){try{var control=new WindowsDnsServiceControl();string executable=Path.Combine(DirectoryPath,"DagamiAgentProxy.exe"),marker=Path.Combine(DirectoryPath,"owner.json"),image=NativeShortcuts.Quote(executable)+" --dns-service";if(!control.Exists()||!File.Exists(marker)||control.ImagePath()!=image)return false;using(var service=new ServiceController(ServiceName))return service.Status==ServiceControllerStatus.Running;}catch{return false;}}
-  public static bool Probe(IPAddress address){try{byte[] question=DnsHttpsTransport.Question("example.com");using(var client=new UdpClient(address.AddressFamily)){client.Client.ReceiveTimeout=10000;client.Connect(address,53);client.Send(question,question.Length);IPEndPoint peer=null;byte[] answer=client.Receive(ref peer);int ttl;ScopedDnsResolver.ParseAnswer(answer,new byte[]{0,0},"example.com",out ttl);return true;}}catch{return false;}}
+  public static bool Probe(IPAddress address){try{byte[] question=DnsHttpsTransport.Question("example.com");using(var client=new UdpClient(address.AddressFamily)){client.Client.ReceiveTimeout=15000;client.Connect(address,53);client.Send(question,question.Length);IPEndPoint peer=null;byte[] answer=client.Receive(ref peer);int ttl;ScopedDnsResolver.ParseAnswer(answer,new byte[]{0,0},"example.com",out ttl);return true;}}catch{return false;}}
   public static void SaveCustomUpstream(string spec){
-   try{
+   {
     Directory.CreateDirectory(DirectoryPath);
     string customPath=Path.Combine(DirectoryPath,"dns-custom.json");
     string targetSpec=(spec??"").Trim();
     if(string.IsNullOrEmpty(targetSpec))targetSpec="dns.dagami.ru";
-    File.WriteAllText(customPath,new JavaScriptSerializer().Serialize(new{Spec=targetSpec,DnsObfuscation=ConfigManager.Instance.DnsObfuscation,DpiDesyncMode=ConfigManager.Instance.DpiDesyncMode}),new System.Text.UTF8Encoding(false));
-   }catch{}
+    string temporary=customPath+"."+Guid.NewGuid().ToString("N")+".tmp";
+    try {
+     File.WriteAllText(temporary,new JavaScriptSerializer().Serialize(new{Spec=targetSpec,DnsObfuscation=ConfigManager.Instance.DnsObfuscation,DpiDesyncMode=ConfigManager.Instance.DpiDesyncMode}),new System.Text.UTF8Encoding(false));
+     if(File.Exists(customPath))File.Replace(temporary,customPath,null);else File.Move(temporary,customPath);
+    } finally {if(File.Exists(temporary))File.Delete(temporary);}
+   }
   }
-  public static void EnsureInstalled(){SystemDnsManager.ProtectServiceDirectory(DirectoryPath);SaveCustomUpstream(ConfigManager.Instance.DnsHost);EnsureInstalled(DirectoryPath,Assembly.GetExecutingAssembly().Location,new WindowsDnsServiceControl(),Probe);}
+  public static void EnsureInstalled(){EnsureInstalled(ConfigManager.Instance.DnsHost);}
+  public static void EnsureInstalled(string upstream){
+   SystemDnsManager.ProtectServiceDirectory(DirectoryPath);
+   string custom=Path.Combine(DirectoryPath,"dns-custom.json");bool existed=File.Exists(custom);byte[] previous=existed?File.ReadAllBytes(custom):null;
+   try {SaveCustomUpstream(upstream);EnsureInstalled(DirectoryPath,Assembly.GetExecutingAssembly().Location,new WindowsDnsServiceControl(),Probe);}
+   catch(Exception failure) {
+    try {
+     if(existed){string temporary=custom+"."+Guid.NewGuid().ToString("N")+".restore";try{File.WriteAllBytes(temporary,previous);if(File.Exists(custom))File.Replace(temporary,custom,null);else File.Move(temporary,custom);}finally{if(File.Exists(temporary))File.Delete(temporary);}}
+     else if(File.Exists(custom))File.Delete(custom);
+    }catch(Exception restore){throw new IOException("Encrypted DNS setup failed and upstream configuration rollback failed: "+restore.GetType().Name,failure);}
+    throw;
+   }
+  }
   public static void StopOwned(){var control=new WindowsDnsServiceControl();if(!control.Exists())return;string executable=Path.Combine(DirectoryPath,"DagamiAgentProxy.exe"),marker=Path.Combine(DirectoryPath,"owner.json"),image=NativeShortcuts.Quote(executable)+" --dns-service";if(!File.Exists(marker)||control.ImagePath()!=image)throw new IOException("Foreign DNS service was not stopped.");var owner=new JavaScriptSerializer().Deserialize<Dictionary<string,object>>(File.ReadAllText(marker));if(Convert.ToString(owner["ImagePath"])!=image)throw new IOException("DNS service ownership mismatch.");control.Stop();}
   internal static void EnsureInstalled(string directory,string source,IDnsServiceControl control,Func<bool> probe){
    directory=Path.GetFullPath(directory);Directory.CreateDirectory(directory);if((File.GetAttributes(directory)&FileAttributes.ReparsePoint)!=0)throw new IOException("DNS service directory is a reparse point.");
@@ -204,3 +229,4 @@ namespace DevProxyApp {
   }
  }
 }
+

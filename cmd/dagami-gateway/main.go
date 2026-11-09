@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"crypto/tls"
 	"errors"
 	"flag"
@@ -8,7 +9,9 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"os/signal"
 	"strings"
+	"syscall"
 	"time"
 
 	"dagami.local/agentproxy/internal/managed"
@@ -65,7 +68,27 @@ func run() error {
 	failed := make(chan error, 2)
 	go func() { failed <- privateServer.Serve(private) }()
 	go func() { failed <- publicServer.Serve(tls.NewListener(public, publicServer.TLSConfig)) }()
-	return <-failed
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	checkpoint := time.NewTicker(15 * time.Second)
+	defer checkpoint.Stop()
+	var serveErr error
+	for running := true; running; {
+		select {
+		case <-ctx.Done():
+			running = false
+		case serveErr = <-failed:
+			running = false
+		case <-checkpoint.C:
+			if err := gateway.FlushTraffic(); err != nil {
+				fmt.Fprintln(os.Stderr, "traffic checkpoint:", err)
+			}
+		}
+	}
+	publicServer.Close()
+	privateServer.Close()
+	gateway.CloseTunnels()
+	return errors.Join(serveErr, gateway.FlushTraffic())
 }
 
 func server(handler http.HandlerFunc) *http.Server {

@@ -95,8 +95,9 @@ class DnsTransportChecks {
   }}finally{upstream.Stop();worker.Join(1000);}
  }
  static int Main(){typeof(Logger).GetField("_logFilePath",BindingFlags.Static|BindingFlags.NonPublic).SetValue(null,Path.Combine(Path.GetTempPath(),"DnsTransportChecks-proxy.log"));try {
-  Assert(ScopedDnsResolver.ServerCandidates("DNS.DAGAMI.RU.").Length==7,"Dagami/MagicDNS default pool missing");
-  Assert(ScopedDnsResolver.ServerCandidates("46.29.165.108")[0]=="46.29.165.108","Chosen node lost priority");
+  Assert(ScopedDnsResolver.ServerCandidates("DNS.DAGAMI.RU.").Length==4,"Dagami/MagicDNS default pool missing");
+  Assert(ScopedDnsResolver.ServerCandidates("31.76.61.24")[0]=="31.76.61.24","Chosen node lost priority");
+  Assert(ScopedDnsResolver.ServerCandidates("46.29.165.108")[0]=="31.76.61.24","Legacy node did not migrate to current Dagami bootstrap");
   Assert(ScopedDnsResolver.ServerCandidates("192.0.2.53").Length==1,"Custom DNS silently sent to Dagami");
   var priorityResolver=new ScopedDnsResolver("dns.dagami.ru");
   var pool=new[]{new DnsEndpoint("dagami","192.0.2.1","dns.example"),new DnsEndpoint("magicdns","192.0.2.2","dns.example")};

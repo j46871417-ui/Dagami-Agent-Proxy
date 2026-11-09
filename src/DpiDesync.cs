@@ -26,7 +26,7 @@ namespace DevProxyApp
             hostName = null;
             sniHostOffset = -1;
             sniMidOffset = -1;
-            if (buffer == null || count < 43 || offset < 0 || offset + count > buffer.Length) return false;
+            if (buffer == null || count < 43 || offset < 0 || offset > buffer.Length || count > buffer.Length - offset) return false;
             int end = offset + count;
             if (buffer[offset] != 0x16 || buffer[offset + 1] != 0x03 || buffer[offset + 2] > 0x04) return false;
             int recordLen = (buffer[offset + 3] << 8) | buffer[offset + 4];
@@ -35,6 +35,7 @@ namespace DevProxyApp
             if (buffer[hs] != 0x01) return false; // ClientHello
             int hsLen = (buffer[hs + 1] << 16) | (buffer[hs + 2] << 8) | buffer[hs + 3];
             if (hs + 4 + hsLen > offset + 5 + recordLen) return false;
+            end = hs + 4 + hsLen;
             int pos = hs + 4;
             if (pos + 34 > end) return false;
             pos += 34; // client_version (2) + random (32)
@@ -50,7 +51,8 @@ namespace DevProxyApp
             if (pos + 2 > end) return false;
             int extensionsLen = (buffer[pos] << 8) | buffer[pos + 1];
             pos += 2;
-            int extEnd = Math.Min(end, pos + extensionsLen);
+            if (extensionsLen != end - pos) return false;
+            int extEnd = end;
             while (pos + 4 <= extEnd) {
                 int extType = (buffer[pos] << 8) | buffer[pos + 1];
                 int extLen = (buffer[pos + 2] << 8) | buffer[pos + 3];
@@ -59,7 +61,8 @@ namespace DevProxyApp
                 if (extType == 0x0000 && extLen >= 5) {
                     int listLen = (buffer[pos] << 8) | buffer[pos + 1];
                     int itemPos = pos + 2;
-                    int listEnd = Math.Min(pos + extLen, itemPos + listLen);
+                    if (listLen != extLen - 2) return false;
+                    int listEnd = itemPos + listLen;
                     while (itemPos + 3 <= listEnd) {
                         byte nameType = buffer[itemPos];
                         int nameLen = (buffer[itemPos + 1] << 8) | buffer[itemPos + 2];
@@ -86,7 +89,7 @@ namespace DevProxyApp
             string host; int sniStart, sniMid;
             if (!TryFindSni(buffer, offset, count, out host, out sniStart, out sniMid)) return null;
             int recordLen = (buffer[offset + 3] << 8) | buffer[offset + 4];
-            if (5 + recordLen != count || sniMid <= 5 || sniMid >= count) return null;
+            if (5 + recordLen > count || sniMid <= 5 || sniMid >= 5 + recordLen) return null;
             int firstPayloadLen = sniMid - 5;
             int secondPayloadLen = recordLen - firstPayloadLen;
             if (firstPayloadLen <= 0 || secondPayloadLen <= 0) return null;
@@ -104,6 +107,8 @@ namespace DevProxyApp
             output[secondHeader + 3] = (byte)(secondPayloadLen >> 8);
             output[secondHeader + 4] = (byte)secondPayloadLen;
             Buffer.BlockCopy(buffer, offset + sniMid, output, secondHeader + 5, secondPayloadLen);
+            int trailing = count - 5 - recordLen;
+            if (trailing > 0) Buffer.BlockCopy(buffer, offset + 5 + recordLen, output, 10 + recordLen, trailing);
             return output;
         }
     }
@@ -114,6 +119,8 @@ namespace DevProxyApp
         private readonly Socket _socket;
         private readonly DpiDesyncMode _mode;
         private bool _firstWrite = true;
+        private MemoryStream _pending;
+        private const int MaxTlsRecordPayload = 18432;
 
         public DpiDesyncStream(Stream inner, Socket socket, DpiDesyncMode mode)
         {
@@ -143,7 +150,15 @@ namespace DevProxyApp
         public override long Length { get { throw new NotSupportedException(); } }
         public override long Position { get { throw new NotSupportedException(); } set { throw new NotSupportedException(); } }
 
-        public override void Flush() { _inner.Flush(); }
+        public override void Flush() {
+            // Honour Stream.Flush: never indefinitely withhold an incomplete record.
+            if (_pending != null) {
+                byte[] pending = _pending.ToArray();
+                _pending.Dispose(); _pending = null; _firstWrite = false;
+                _inner.Write(pending, 0, pending.Length);
+            }
+            _inner.Flush();
+        }
         public override int Read(byte[] buffer, int offset, int count) { return _inner.Read(buffer, offset, count); }
         public override long Seek(long offset, SeekOrigin origin) { throw new NotSupportedException(); }
         public override void SetLength(long value) { throw new NotSupportedException(); }
@@ -151,10 +166,22 @@ namespace DevProxyApp
         public override void Write(byte[] buffer, int offset, int count)
         {
             if (count == 0) { _inner.Write(buffer, offset, count); return; }
-            if (!_firstWrite || _mode == DpiDesyncMode.Off || _mode == DpiDesyncMode.ExternalEngine || count <= 5) {
+            if (!_firstWrite || _mode == DpiDesyncMode.Off || _mode == DpiDesyncMode.ExternalEngine) {
                 _firstWrite = false;
                 _inner.Write(buffer, offset, count);
                 return;
+            }
+            // Buffer only a plausible first TLS record, and never beyond the TLS limit.
+            // Flush sends an incomplete record unchanged, avoiding protocol deadlocks.
+            if (_pending != null || buffer[offset] == 0x16) {
+                if (_pending == null) _pending = new MemoryStream();
+                _pending.Write(buffer, offset, count);
+                byte[] pending = _pending.ToArray();
+                if (pending.Length < 5) return;
+                int recordLength = (pending[3] << 8) | pending[4];
+                if (pending[0] == 0x16 && pending[1] == 0x03 && pending[2] <= 0x04 && recordLength <= MaxTlsRecordPayload && pending.Length < 5 + recordLength) return;
+                _pending.Dispose(); _pending = null;
+                buffer = pending; offset = 0; count = pending.Length;
             }
             _firstWrite = false;
             try {
@@ -198,7 +225,7 @@ namespace DevProxyApp
 
         protected override void Dispose(bool disposing)
         {
-            if (disposing) _inner.Dispose();
+            if (disposing) { if (_pending != null) Flush(); _inner.Dispose(); }
             base.Dispose(disposing);
         }
     }
@@ -353,39 +380,46 @@ namespace DevProxyApp
             result.ExternalBinaryPresent = ext != null;
             result.ExternalBinaryPath = ext;
             IPAddress ip = null;
-            try {
-                var resolver = new ScopedDnsResolver(ConfigManager.Instance.DnsHost);
-                ip = resolver.Resolve(ScopedDnsResolver.IsScoped(testHost) ? testHost : "www.googleapis.com");
-            } catch {
+            bool scopedHost = ScopedDnsResolver.IsScoped(testHost);
+            if (scopedHost) {
+                try {
+                    var resolver = new ScopedDnsResolver(ConfigManager.Instance.DnsHost);
+                    ip = resolver.Resolve(testHost);
+                } catch { }
+            }
+            if (ip == null && !scopedHost) {
                 try {
                     foreach (IPAddress cand in Dns.GetHostAddresses(testHost))
-                        if (cand.AddressFamily == AddressFamily.InterNetwork) { ip = cand; break; }
+                        if (cand.AddressFamily == AddressFamily.InterNetwork || cand.AddressFamily == AddressFamily.InterNetworkV6) { ip = cand; break; }
                 } catch { }
             }
             if (ip == null) {
-                result.RecommendedMode = "AutoSplit";
-                result.Summary = "Не удалось разрешить IP для пробного TLS-соединения; оставлен безопасный режим AutoSplit (TLS Split + Padding).";
+                result.Summary = "Не удалось разрешить имя для проверки TLS; работоспособность стратегий не подтверждена.";
                 return result;
             }
-
             result.DirectTlsOk = ProbeTlsWithMode(ip, testHost, DpiDesyncMode.Off, timeoutMs);
             result.AutoSplitOk = ProbeTlsWithMode(ip, testHost, DpiDesyncMode.AutoSplit, timeoutMs);
             result.TlsRecordSplitOk = ProbeTlsWithMode(ip, testHost, DpiDesyncMode.TlsRecordSplit, timeoutMs);
 
-            if (result.AutoSplitOk) result.RecommendedMode = "AutoSplit";
-            else if (result.TlsRecordSplitOk) result.RecommendedMode = "TlsRecordSplit";
-            else if (result.DirectTlsOk) result.RecommendedMode = "Off";
-            else result.RecommendedMode = result.ExternalBinaryPresent ? "ExternalEngine" : "AutoSplit";
+            result.RecommendedMode = ChooseVerifiedMode(result.DirectTlsOk, result.AutoSplitOk, result.TlsRecordSplitOk);
 
             result.Summary = string.Format(
                 "Проверка обхода DPI ({0} → {1}): AutoSplit={2}, TlsRecordSplit={3}, Прямой TLS={4}. Рекомендован режим: {5}.{6}",
                 testHost, ip,
                 result.AutoSplitOk ? "ОК" : "сбой",
                 result.TlsRecordSplitOk ? "ОК" : "сбой",
-                result.DirectTlsOk ? "ОК" : "блок/сбой",
-                result.RecommendedMode,
+                result.DirectTlsOk ? "ОК" : "сбой",
+                result.RecommendedMode ?? "нет подтверждённой стратегии",
                 result.ExternalBinaryPresent ? " Найден внешний движок: " + Path.GetFileName(ext) + "." : "");
             return result;
+        }
+
+        public static string ChooseVerifiedMode(bool directOk, bool autoSplitOk, bool tlsRecordSplitOk)
+        {
+            if (directOk) return "Off";
+            if (tlsRecordSplitOk) return "TlsRecordSplit";
+            if (autoSplitOk) return "AutoSplit";
+            return null;
         }
 
         private static bool ProbeTlsWithMode(IPAddress ip, string host, DpiDesyncMode mode, int timeoutMs)

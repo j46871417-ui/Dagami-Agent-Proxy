@@ -108,7 +108,7 @@ namespace DevProxyApp {
                     var safe=new UriBuilder(proxy){UserName="",Password=""};Console.WriteLine(safe.Uri.AbsoluteUri);return true;
                 }
                 if(args.Length!=2||args[1]!="set")throw new ArgumentException("proxy set — скрытый ввод URL; proxy status — состояние.");
-                Console.Write("HTTP/HTTPS прокси или direct для Windows/VPN (ввод скрыт): ");var text=new System.Text.StringBuilder();
+                Console.Write("HTTP/HTTPS/SOCKS5 прокси или direct для Windows/VPN (ввод скрыт): ");var text=new System.Text.StringBuilder();
                 if(Console.IsInputRedirected)text.Append(Console.ReadLine());
                 else {while(true){var key=Console.ReadKey(true);if(key.Key==ConsoleKey.Enter)break;if(key.Key==ConsoleKey.Backspace){if(text.Length>0)text.Length--;continue;}if(!char.IsControl(key.KeyChar))text.Append(key.KeyChar);}}
                 Console.WriteLine();

@@ -25,7 +25,7 @@ import (
 
 const nativeExe = "DagamiAgentProxy.exe"
 
-var nativeSources = strings.Fields(`DevProxyApp.cs NativeUi.cs FluentUi.cs SimpleUi.cs AntigravityIntegration.cs CliRegionGate.cs ProxyDiagnostics.cs DnsProviders.cs DnsTransport.cs DnsAgent.cs DpiDesync.cs AntigravityUi.cs AntigravityLogin.cs NativeShortcuts.cs NativeLaunchBroker.cs NativeSessions.cs SystemDnsManager.cs NativeCli.cs Brand.cs LicenseManager.cs AppProxyPolicy.cs ApplicationSupport.cs JetBrainsProxySettings.cs ApplicationDiscovery.cs NativeCliApps.cs BugReports.cs NativeUpdates.cs UpdateInstaller.cs UpdateUi.cs NativeStartup.cs ManagedAccess.cs HttpWire.cs LoopbackPeer.cs SignedLicenses.cs`)
+var nativeSources = strings.Fields(`DevProxyApp.cs NativeUi.cs FluentUi.cs SimpleUi.cs AntigravityIntegration.cs CliRegionGate.cs ProxyDiagnostics.cs DnsProviders.cs DnsTransport.cs DnsAgent.cs DpiDesync.cs DpiPacketSplitter.cs WinDivertPacketTest.cs SelectiveProxyRules.cs AntigravityUi.cs AntigravityLogin.cs NativeShortcuts.cs NativeLaunchBroker.cs NativeSessions.cs SystemDnsManager.cs NativeCli.cs Brand.cs LicenseManager.cs AppProxyPolicy.cs ApplicationSupport.cs JetBrainsProxySettings.cs ApplicationDiscovery.cs NativeCliApps.cs BugReports.cs NativeUpdates.cs UpdateInstaller.cs UpdateUi.cs NativeStartup.cs ManagedAccess.cs HttpWire.cs LoopbackPeer.cs SignedLicenses.cs`)
 var references = strings.Fields("System.dll System.Core.dll System.Drawing.dll System.Windows.Forms.dll System.Security.dll System.Web.Extensions.dll System.IO.Compression.dll System.Xml.dll System.ServiceProcess.dll")
 var targets = []string{"windows/amd64", "darwin/amd64", "darwin/arm64", "linux/amd64", "linux/arm64"}
 var secretPatterns = map[string]*regexp.Regexp{
@@ -278,6 +278,8 @@ func buildPortable(tmp, out, osName, arch string, routing bool, winForms string,
 func compiler() string {
 	return filepath.Join(os.Getenv("WINDIR"), "Microsoft.NET", "Framework64", "v4.0.30319", "csc.exe")
 }
+var browserExtensionFiles = []string{"manifest.json", "popup.html", "popup.js"}
+
 func buildWindows(dir string, sign func(string) error) (string, error) {
 	if runtime.GOOS != "windows" {
 		return "", errors.New("WinForms compilation requires Windows")
@@ -299,7 +301,10 @@ func buildWindows(dir string, sign func(string) error) (string, error) {
 	for _, file := range nativeSources {
 		args = append(args, filepath.Join("src", file))
 	}
-	args = append(args, "/win32manifest:src/app.manifest", "/win32icon:assets/dagami-agent-proxy.ico", "/resource:assets/dagami-agent-proxy.ico,Dagami.AgentProxy.ico", "/resource:assets/icon-64.png,Dagami.AgentProxy.png", "/resource:src/SystemDns.ps1,DevProxy.SystemDns.ps1")
+	args = append(args, "/win32manifest:src/app.manifest", "/win32icon:assets/dagami-agent-proxy.ico", "/resource:assets/dagami-agent-proxy.ico,Dagami.AgentProxy.ico", "/resource:assets/icon-64.png,Dagami.AgentProxy.png", "/resource:src/SystemDns.ps1,DevProxy.SystemDns.ps1", "/resource:assets/dagami-proxy-domains.txt,DevProxy.SelectiveDomains")
+	for _, file := range browserExtensionFiles {
+		args = append(args, "/resource:browser-extension/"+file+",DevProxy.BrowserExtension."+file)
+	}
 	if e = execRun(compiler(), nil, args...); e != nil {
 		return "", e
 	}
@@ -416,8 +421,11 @@ func zipText(z *zip.Writer, name, text string) error {
 	return e
 }
 func sourceZip(path string) error {
-	names := []string{"go.mod", "go.sum", "LICENSE", "README.md", "NATIVE_NEXT.md", "APPLICATIONS.md", "APP_ROUTING.md", "MANAGED_ACCESS.md", "RELEASE_NOTES.md", "STARTUP.md", "SYSTEM_DNS.md", "BUG_REPORTS.md", "SOURCE_POLICY.md", "SECURITY_FIXES.md", "SIGNED_LICENSES.md", "THIRD_PARTY_NOTICES.md", "CHANGELOG.md", "src/SystemDns.ps1", "src/app.manifest", "assets/dagami-agent-proxy.ico", "assets/icon-64.png", "assets/dagami-logo.jpg", "tools/run_native_checks.py", "tests/native/README.md", "tests/native/SystemDnsChecks.ps1"}
+	names := []string{"go.mod", "go.sum", "LICENSE", "README.md", "NATIVE_NEXT.md", "APPLICATIONS.md", "APP_ROUTING.md", "MANAGED_ACCESS.md", "RELEASE_NOTES.md", "STARTUP.md", "SYSTEM_DNS.md", "BUG_REPORTS.md", "SOURCE_POLICY.md", "SECURITY_FIXES.md", "SIGNED_LICENSES.md", "THIRD_PARTY_NOTICES.md", "CHANGELOG.md", "src/SystemDns.ps1", "src/app.manifest", "assets/dagami-agent-proxy.ico", "assets/icon-64.png", "assets/dagami-logo.jpg", "assets/dagami-proxy-domains.txt", "tools/run_native_checks.py", "tools/Test-WinDivertTls.ps1", "tests/native/README.md", "tests/native/SystemDnsChecks.ps1"}
 	names = append(names, "docs/QUICK_START.md", "docs/USER_GUIDE.md", "docs/FORKING.md", "AGENTS.md", "bug_reports/README.md")
+	for _, file := range browserExtensionFiles {
+		names = append(names, "browser-extension/"+file)
+	}
 	for _, s := range nativeSources {
 		names = append(names, "src/"+s)
 	}
