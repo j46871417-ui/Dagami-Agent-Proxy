@@ -146,7 +146,7 @@ namespace DevProxyApp {
         readonly Label _errorLabel;
         readonly Button _activateBtn;
         readonly Button _botBtn;
-        readonly Button _exitBtn;
+        readonly Button _exitBtn, _saveOfflineBtn;
         readonly Func<bool> _canChangeRoute;
 
         public ActivationForm() : this(null) { }
@@ -223,7 +223,9 @@ namespace DevProxyApp {
                 ForeColor = FluentTheme.Text,
                 BackColor = FluentTheme.Background,
                 BorderStyle = BorderStyle.FixedSingle,
-                MaxLength = 4096
+                MaxLength = 4096,
+                UseSystemPasswordChar = true,
+                Text = ManagedAccess.ReadDeferredKey() ?? ""
             };
             _keyBox.KeyDown += (s, e) => {
                 if (e.KeyCode == Keys.Enter) {
@@ -285,9 +287,15 @@ namespace DevProxyApp {
             _activateBtn.Click += (s, e) => DoActivate();
             Controls.Add(_activateBtn);
 
+            _saveOfflineBtn = new Button {
+                Location = new Point(32,342), Size = new Size(240,26),
+                Text = "Сохранить ключ без сети"
+            };
+            _saveOfflineBtn.Click += (s,e) => SaveOffline();
+            Controls.Add(_saveOfflineBtn);
             _exitBtn = new Button {
-                Location = new Point(32, 342),
-                Size = new Size(456, 26),
+                Location = new Point(280, 342),
+                Size = new Size(208, 26),
                 FlatStyle = FlatStyle.Flat,
                 BackColor = Color.Transparent,
                 ForeColor = FluentTheme.Muted,
@@ -306,6 +314,17 @@ namespace DevProxyApp {
             CancelButton = _exitBtn;
         }
 
+        void SaveOffline() {
+            try {
+                ManagedAccess.SaveDeferredKey(_keyBox.Text.Trim());
+                DialogResult = DialogResult.Retry;
+                Close();
+            } catch (Exception error) {
+                _errorLabel.ForeColor = Color.FromArgb(255,107,107);
+                _errorLabel.Text = error.Message;
+            }
+        }
+
         async void DoActivate() {
             if (!_activateBtn.Enabled) return;
             string raw = _keyBox.Text.Trim();
@@ -315,7 +334,7 @@ namespace DevProxyApp {
                 _keyBox.Focus();
                 return;
             }
-            _activateBtn.Enabled = _keyBox.Enabled = false;
+            _activateBtn.Enabled = _keyBox.Enabled = _saveOfflineBtn.Enabled = false;
             try {
                 if (ManagedAccess.IsAccessCode(raw)) {
                     _errorLabel.ForeColor = FluentTheme.Muted;
@@ -327,6 +346,7 @@ namespace DevProxyApp {
                         return;
                     }
                     LicenseManager.ActivateDevice(device);
+                    ManagedAccess.ClearDeferredKey();
                 } else {
                     if (_canChangeRoute != null) throw new ArgumentException("Для прокси получите ключ DAGAMI1- через /key.");
                     string error;
@@ -342,7 +362,7 @@ namespace DevProxyApp {
                     : error.Message;
             } finally {
                 if (!IsDisposed && !Disposing && Visible) {
-                    _activateBtn.Enabled = _keyBox.Enabled = true;
+                    _activateBtn.Enabled = _keyBox.Enabled = _saveOfflineBtn.Enabled = true;
                     _keyBox.Focus();
                     _keyBox.SelectAll();
                 }

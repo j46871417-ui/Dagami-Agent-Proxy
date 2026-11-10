@@ -29,6 +29,8 @@ namespace DevProxyApp {
   static readonly Regex AccessCode=new Regex(@"\ADAGAMI1-[A-Za-z0-9_-]{43}\z");
   static readonly string Folder=Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),"devproxy");
   static readonly string Pending=Path.Combine(Folder,"managed-pairing.dat");
+  static readonly string DeferredKeyFile=Path.Combine(Folder,"managed-deferred-key.dat");
+  static readonly byte[] DeferredKeyEntropy=Encoding.UTF8.GetBytes("Dagami.Managed.DeferredKey.v1");
   static readonly string Active=Path.Combine(Folder,"managed-access.dat");
   readonly byte[] privateKey;
   public Uri Endpoint {get;private set;}
@@ -144,6 +146,29 @@ namespace DevProxyApp {
   }
 
   public static bool IsAccessCode(string code) { return AccessCode.IsMatch(code ?? ""); }
+
+  internal static void SaveDeferredKey(string code) {
+   if(!IsAccessCode(code))throw new ArgumentException("Вставьте полный ключ DAGAMI1- из команды /key.");
+   Write(DeferredKeyFile,ProtectedData.Protect(Encoding.UTF8.GetBytes(code),DeferredKeyEntropy,DataProtectionScope.CurrentUser));
+  }
+
+  internal static string ReadDeferredKey() {
+   try {
+    var file=new FileInfo(DeferredKeyFile);
+    if(!file.Exists||file.Length>4096)return null;
+    string code=Encoding.UTF8.GetString(ProtectedData.Unprotect(File.ReadAllBytes(DeferredKeyFile),
+        DeferredKeyEntropy,DataProtectionScope.CurrentUser));
+    return IsAccessCode(code)?code:null;
+   } catch(IOException) {return null;}
+   catch(UnauthorizedAccessException) {return null;}
+   catch(CryptographicException) {return null;}
+  }
+
+  internal static void ClearDeferredKey() {
+   try {File.Delete(DeferredKeyFile);}
+   catch(IOException) {}
+   catch(UnauthorizedAccessException) {}
+  }
 
   public static ManagedAccess Redeem(string code) {
    if(!IsAccessCode(code))throw new ArgumentException("Вставьте полный ключ из команды /key.");

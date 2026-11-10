@@ -273,6 +273,10 @@ namespace DevProxyApp {
    if(_preview)return;
    using(var dialog=new ActivationForm(()=>EnsureSessionsStoppedForRouteChange())) {
     ShowThemedDialog(dialog);
+    if(dialog.DialogResult==DialogResult.Retry) {
+     _connectionFeedback.Text="Ключ сохранён. Когда шлюз доступен, откройте «Подключить по ключу» и нажмите «Активировать».";
+     return;
+    }
     if(dialog.DialogResult!=DialogResult.OK)return;
    }
    RefreshManagedRoute();

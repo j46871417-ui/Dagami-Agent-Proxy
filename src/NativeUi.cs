@@ -834,9 +834,10 @@ namespace DevProxyApp
 
         private void ShowNativeWindow()
         {
-            if (!_preview && !LicenseManager.IsActivated()) {
+            if (!_preview && !LicenseManager.IsActivated() && ManagedAccess.ReadDeferredKey()==null) {
                 using (var activation = new ActivationForm()) {
-                    if (activation.ShowDialog() != DialogResult.OK) {
+                    var result=activation.ShowDialog();
+                    if (result != DialogResult.OK && result != DialogResult.Retry) {
                         return;
                     }
                 }
