@@ -94,6 +94,7 @@ namespace DevProxyApp
                             }
                         }
                     }
+                    if (!CoreBootstrapGate.EnsureReadyBeforeUiOrExit(true)) { return; }
                     string error = Send(UserName, initial ?? new NativeLaunchRequest(), 12000);
                     if (!string.IsNullOrEmpty(error)) MessageBox.Show(error, Brand.Name, MessageBoxButtons.OK, MessageBoxIcon.Warning);
                     return;
@@ -107,6 +108,7 @@ namespace DevProxyApp
                             }
                         }
                     }
+                    if (!CoreBootstrapGate.EnsureReadyBeforeUiOrExit(true)) { return; }
                     using (var form = new MainForm(initial == null ? null : initial.TargetId, initial != null, false, startInTray)) {
                         form.InitialShortcutKey = initial == null ? null : initial.ShortcutKey;
                         IntPtr handle = form.Handle;
@@ -114,7 +116,7 @@ namespace DevProxyApp
                             broker.Start(); Application.Run(form);
                         }
                     }
-                } finally { mutex.ReleaseMutex(); }
+                } finally { CoreBootstrapGate.Stop(); mutex.ReleaseMutex(); }
             }
         }
     }

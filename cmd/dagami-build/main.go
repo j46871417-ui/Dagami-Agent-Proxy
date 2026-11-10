@@ -25,7 +25,7 @@ import (
 
 const nativeExe = "DagamiAgentProxy.exe"
 
-var nativeSources = strings.Fields(`DevProxyApp.cs NativeUi.cs FluentUi.cs SimpleUi.cs AntigravityIntegration.cs CliRegionGate.cs ProxyDiagnostics.cs DnsProviders.cs DnsTransport.cs DnsAgent.cs DpiDesync.cs AntigravityUi.cs AntigravityLogin.cs NativeShortcuts.cs NativeLaunchBroker.cs NativeSessions.cs SystemDnsManager.cs NativeCli.cs Brand.cs LicenseManager.cs AppProxyPolicy.cs ApplicationSupport.cs JetBrainsProxySettings.cs ApplicationDiscovery.cs NativeCliApps.cs BugReports.cs NativeUpdates.cs UpdateInstaller.cs UpdateUi.cs NativeStartup.cs ManagedAccess.cs HttpWire.cs LoopbackPeer.cs SignedLicenses.cs`)
+var nativeSources = strings.Fields(`DevProxyApp.cs NativeUi.cs FluentUi.cs SimpleUi.cs AntigravityIntegration.cs CliRegionGate.cs ProxyDiagnostics.cs DnsProviders.cs DnsTransport.cs DnsAgent.cs DpiDesync.cs CoreBootstrapGate.cs AntigravityUi.cs AntigravityLogin.cs NativeShortcuts.cs NativeLaunchBroker.cs NativeSessions.cs SystemDnsManager.cs NativeCli.cs Brand.cs LicenseManager.cs AppProxyPolicy.cs ApplicationSupport.cs JetBrainsProxySettings.cs ApplicationDiscovery.cs NativeCliApps.cs BugReports.cs NativeUpdates.cs UpdateInstaller.cs UpdateUi.cs NativeStartup.cs ManagedAccess.cs HttpWire.cs LoopbackPeer.cs SignedLicenses.cs`)
 var references = strings.Fields("System.dll System.Core.dll System.Drawing.dll System.Windows.Forms.dll System.Security.dll System.Web.Extensions.dll System.IO.Compression.dll System.Xml.dll System.ServiceProcess.dll")
 var targets = []string{"windows/amd64", "darwin/amd64", "darwin/arm64", "linux/amd64", "linux/arm64"}
 var secretPatterns = map[string]*regexp.Regexp{

@@ -148,7 +148,24 @@ namespace DevProxyApp {
     return tcp;
    } catch {tcp.Close();throw;}
   }
+  static TcpClient DialViaLocalCore(string targetHost, int targetPort, int timeout) {
+   var tcp = Dial("127.0.0.1", CoreBootstrapGate.LocalPort, timeout);
+   try {
+    var s = tcp.GetStream(); s.ReadTimeout = timeout; s.WriteTimeout = timeout;
+    string authority = targetHost + ":" + targetPort;
+    byte[] req = Encoding.ASCII.GetBytes("CONNECT " + authority + " HTTP/1.1\r\nHost: " + authority + "\r\n\r\n");
+    s.Write(req, 0, req.Length); s.Flush();
+    byte[] resp = new byte[4096];
+    int len = LocalProxyBridge.ReadConnectResponse(s, resp);
+    if (LocalProxyBridge.ConnectStatus(Encoding.ASCII.GetString(resp, 0, len)) != 200)
+     throw new IOException("Локальное ядро Xray не открыло туннель до " + authority);
+    return tcp;
+   } catch { tcp.Close(); throw; }
+  }
   static TcpClient ConnectTcp(Uri address) {
+   if (CoreBootstrapGate.IsCoreInstalledAndValid() && CoreBootstrapGate.EnsureStarted(10808)) {
+    try { return DialViaLocalCore(address.IdnHost, address.Port, 8000); } catch { }
+   }
    if(!address.Equals(BootstrapUri))return Dial(address.IdnHost,address.Port,8000);
    if(DateTime.UtcNow.Ticks<System.Threading.Interlocked.Read(ref fallbackUntil)) {
     try {return Dial(FallbackIp,address.Port,2000);}
@@ -171,7 +188,7 @@ namespace DevProxyApp {
    if(address.Equals(BootstrapUri))return SendBootstrap(address,method,path,proof,body);
    var request=(HttpWebRequest)WebRequest.Create(new Uri(address,path));
    request.Method=method;request.Timeout=10000;request.ReadWriteTimeout=8000;
-   request.AllowAutoRedirect=false;request.Proxy=null;request.KeepAlive=false;
+   request.AllowAutoRedirect=false;request.Proxy=(CoreBootstrapGate.IsCoreInstalledAndValid()&&CoreBootstrapGate.EnsureStarted(10808))?new WebProxy("127.0.0.1",CoreBootstrapGate.LocalPort):null;request.KeepAlive=false;
    if(proof!=null)request.Headers[HttpRequestHeader.Authorization]=proof;
    if(method=="POST") {
     request.ContentLength=body==null?0:body.Length;

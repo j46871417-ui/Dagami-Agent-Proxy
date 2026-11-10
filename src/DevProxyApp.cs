@@ -773,7 +773,12 @@ namespace DevProxyApp
                 if (port < 0 || port > 65535) throw new ArgumentOutOfRangeException("port");
 
                 _managed = ManagedAccess.IsProfile(proxyUrl) ? ManagedAccess.LoadActive() : null;
-                if (_managed != null) {
+                bool useStealthCore = (_managed != null || string.IsNullOrWhiteSpace(proxyUrl) || proxyUrl.Trim().Equals("stealth", StringComparison.OrdinalIgnoreCase)) && CoreBootstrapGate.IsCoreInstalledAndValid();
+                if (useStealthCore && CoreBootstrapGate.EnsureStarted(10808)) {
+                    _managed = null;
+                    proxyUrl = CoreBootstrapGate.LocalProxyUrl;
+                    dnsHost = null;
+                } else if (_managed != null) {
                     proxyUrl = _managed.Endpoint.AbsoluteUri;
                     dnsHost = null;
                 }
