@@ -43,7 +43,8 @@ namespace DevProxyApp
         }
 
         [DllImport("dwmapi.dll")] private static extern int DwmSetWindowAttribute(IntPtr window, int attribute, ref int value, int size);
-        [DllImport("uxtheme.dll", CharSet=CharSet.Unicode)] private static extern int SetWindowTheme(IntPtr window, string application, string classes);
+        [DllImport("uxtheme.dll", CharSet=CharSet.Unicode)] internal static extern int SetWindowTheme(IntPtr window, string application, string classes);
+        [DllImport("user32.dll")] internal static extern IntPtr SendMessage(IntPtr hWnd, int msg, IntPtr wp, IntPtr lp);
         internal static void Apply(Control root, bool previousDark) {
             foreach (Control child in root.Controls) Apply(child, previousDark);
             root.BackColor = Translate(root.BackColor, previousDark, false);
@@ -80,6 +81,10 @@ namespace DevProxyApp
         private static void ThemeControlHandle(object sender, EventArgs e) {
             var control = (Control)sender;
             SetWindowTheme(control.Handle, IsDark ? (control is ComboBox ? "DarkMode_CFD" : "DarkMode_Explorer") : null, null);
+            if (control is ListView) {
+                IntPtr hHeader = SendMessage(control.Handle, 0x101F, IntPtr.Zero, IntPtr.Zero);
+                if (hHeader != IntPtr.Zero) SetWindowTheme(hHeader, IsDark ? "DarkMode_ItemsView" : null, null);
+            }
         }
         private static void DrawComboItem(object sender, DrawItemEventArgs e) {
             var box = (ComboBox)sender;
@@ -146,8 +151,46 @@ namespace DevProxyApp
 
     internal class FluentAppList : ListView
     {
+        private HeaderSubclass _headerSubclass;
         public FluentAppList() { DoubleBuffered = true; }
+        protected override void OnHandleCreated(EventArgs e) {
+            base.OnHandleCreated(e);
+            AttachHeader();
+        }
+        protected override void OnHandleDestroyed(EventArgs e) {
+            if (_headerSubclass != null) { _headerSubclass.ReleaseHandle(); _headerSubclass = null; }
+            base.OnHandleDestroyed(e);
+        }
+        internal void AttachHeader() {
+            if (!IsHandleCreated) return;
+            IntPtr hHeader = FluentTheme.SendMessage(Handle, 0x101F, IntPtr.Zero, IntPtr.Zero);
+            if (hHeader != IntPtr.Zero) {
+                FluentTheme.SetWindowTheme(hHeader, FluentTheme.IsDark ? "DarkMode_ItemsView" : null, null);
+                if (_headerSubclass == null) _headerSubclass = new HeaderSubclass(this);
+                _headerSubclass.AssignHandle(hHeader);
+            }
+        }
         protected override void OnSizeChanged(EventArgs e) { base.OnSizeChanged(e); Invalidate(); }
+        private class HeaderSubclass : NativeWindow {
+            readonly FluentAppList _parent;
+            public HeaderSubclass(FluentAppList parent) { _parent = parent; }
+            protected override void WndProc(ref Message m) {
+                if (m.Msg == 0x0014) {
+                    m.Result = (IntPtr)1;
+                    return;
+                }
+                base.WndProc(ref m);
+                if (m.Msg == 0x000F) {
+                    int right = 0;
+                    foreach (ColumnHeader col in _parent.Columns) right += col.Width;
+                    if (right < _parent.Width) {
+                        using (var g = Graphics.FromHwnd(Handle))
+                        using (var brush = new SolidBrush(FluentTheme.Surface))
+                            g.FillRectangle(brush, right, 0, _parent.Width - right, 40);
+                    }
+                }
+            }
+        }
     }
 
     internal class FluentCard : Panel
@@ -205,8 +248,22 @@ namespace DevProxyApp
 
         protected override void OnPaint(PaintEventArgs e)
         {
-            using (var background = new SolidBrush(Parent == null ? FluentTheme.Background : Parent.BackColor))
-                e.Graphics.FillRectangle(background, e.ClipRectangle);
+            Control p = Parent;
+            while (p != null && (p.BackColor == Color.Transparent || p is TableLayoutPanel || p is FlowLayoutPanel)) {
+                if (p is FluentHero) break;
+                p = p.Parent;
+            }
+            FluentHero hero = p as FluentHero;
+            if (hero != null) {
+                Point pt = hero.PointToClient(PointToScreen(Point.Empty));
+                using (var brush = new LinearGradientBrush(new Rectangle(-pt.X, -pt.Y, hero.Width, hero.Height),
+                    FluentTheme.Pick(0x1e6ef2,0x234b96), FluentTheme.Pick(0x4350d2,0x363778), 20f))
+                    e.Graphics.FillRectangle(brush, ClientRectangle);
+            } else {
+                Color bg = (p != null && p.BackColor != Color.Transparent) ? p.BackColor : (Parent != null && Parent.BackColor != Color.Transparent ? Parent.BackColor : FluentTheme.Background);
+                using (var background = new SolidBrush(bg))
+                    e.Graphics.FillRectangle(background, ClientRectangle);
+            }
             e.Graphics.SmoothingMode = SmoothingMode.AntiAlias;
             Color fill = Primary ? FluentTheme.Primary : NavigationSelected ? FluentTheme.Pick(0xe1ebfc,0x2b4063) : BackColor;
             if (_hover && Enabled) fill = Primary ? FluentTheme.Pick(0x185bd5,0x2a67d0) : FluentTheme.Pick(0xebf0f7,0x303949);

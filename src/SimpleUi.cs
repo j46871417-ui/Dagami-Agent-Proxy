@@ -7,7 +7,8 @@ using System.Windows.Forms;
 namespace DevProxyApp {
  public partial class MainForm {
   Label _dnsOverview,_dnsAddressDetails;
-  Label _connectionRouteStatus,_connectionFeedback;
+  Label _connectionRouteStatus;
+  TextBox _connectionFeedback;
   FluentButton _managedRouteAction, _windowsProxyAction;
   FluentButton _encryptedDnsAction;
   DateTime _nextDnsUiRead;
@@ -109,7 +110,9 @@ namespace DevProxyApp {
    _publicProxyMode.CheckedChanged+=(s,e)=>_requireGemini.Enabled=_publicProxyMode.Checked&&!_findingPublicProxy;
    SyncProxyModeSelection();
    rows.Controls.Add(manualActions,0,7);rows.SetColumnSpan(manualActions,2);
-   _connectionFeedback=new Label{Dock=DockStyle.Fill,ForeColor=FluentTheme.Muted,
+   _connectionFeedback=new TextBox{Dock=DockStyle.Fill,Multiline=true,ReadOnly=true,WordWrap=true,
+    ScrollBars=ScrollBars.Vertical,BorderStyle=BorderStyle.None,BackColor=FluentTheme.Surface,
+    ForeColor=FluentTheme.Muted,Font=new Font("Segoe UI",9),MinimumSize=new Size(0,50),TabStop=false,
     Text="Например, 127.0.0.1:7897. Введите direct для системного VPN."};
    rows.Controls.Add(_connectionFeedback,0,8);rows.SetColumnSpan(_connectionFeedback,2);card.Controls.Add(rows);
    _dnsEnabled=new CheckBox{Text="Шифрованный DNS для входа и приложений",AutoSize=true,Checked=ConfigManager.Instance.UseDagamiDns};
@@ -406,7 +409,7 @@ namespace DevProxyApp {
    var rows=new FluentLayout{Dock=DockStyle.Top,AutoSize=true,AutoSizeMode=AutoSizeMode.GrowAndShrink,ColumnCount=1,RowCount=3,Margin=Padding.Empty};
    rows.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,100));
    var advancedHeight=new RowStyle(SizeType.Absolute,0);
-   rows.RowStyles.Add(new RowStyle(SizeType.Absolute,318));
+   rows.RowStyles.Add(new RowStyle(SizeType.Absolute,430));
    rows.RowStyles.Add(new RowStyle(SizeType.Absolute,42));
    rows.RowStyles.Add(advancedHeight);
    var options=new FluentButton{Name="AdvancedConnectionButton",Text="Дополнительные настройки ▾",AutoSize=true,Margin=new Padding(12,0,0,0),Anchor=AnchorStyles.Left};

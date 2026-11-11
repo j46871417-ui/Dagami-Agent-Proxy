@@ -595,7 +595,7 @@ namespace DevProxyApp
                 _nativeColumnsPending = false;
                 if (_targetList.IsDisposed) return;
                 int statusWidth = Math.Max(130, TextRenderer.MeasureText("Требует восстановления", _targetList.Font).Width + 20);
-                _targetList.Columns[0].Width=Math.Max(180,_targetList.ClientSize.Width-statusWidth-10);
+                _targetList.Columns[0].Width=Math.Max(180,_targetList.ClientSize.Width-statusWidth);
                 _targetList.Columns[1].Width=statusWidth;_targetList.Columns[2].Width=0;
             }));
         }
