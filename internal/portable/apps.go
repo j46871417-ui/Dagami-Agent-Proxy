@@ -1,6 +1,7 @@
 package portable
 
 import (
+	"bytes"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -25,8 +26,14 @@ func launchProxySettings(app App, local, platform string) ([]string, []string) {
 	case "antigravity", "antigravity-ide", "vscode", "cursor", "windsurf", "claude-desktop", "codex-desktop":
 		chromium = true
 	}
+	if platform == "linux" && (app.ID == "antigravity" || app.ID == "antigravity-ide" || strings.Contains(strings.ToLower(app.Path), "antigravity")) {
+		patchAntigravityBackend(app.Path)
+	}
 	if chromium || gemini || electronBundle(app.Path, platform) {
 		args = append(args, "--proxy-server="+local, "--proxy-bypass-list=localhost;127.0.0.1;[::1]", "--disable-quic")
+		if platform == "linux" {
+			args = append(args, "--no-sandbox")
+		}
 	}
 	if gemini {
 		flags := "--proxy-server=" + local + " --proxy-bypass-list=localhost;127.0.0.1;[::1] --disable-quic"
@@ -120,4 +127,42 @@ func DiscoverApps() []App {
 		apps = append(apps, app)
 	}
 	return apps
+}
+
+
+func patchAntigravityBackend(appPath string) {
+	if appPath == "" {
+		return
+	}
+	dir := filepath.Dir(appPath)
+	candidates := []string{
+		filepath.Join(dir, "resources", "bin", "language_server"),
+		filepath.Join(dir, "resources", "language_server"),
+		filepath.Join(dir, "resources", "bin", "language_server.exe"),
+	}
+	for _, target := range candidates {
+		data, err := os.ReadFile(target)
+		if err != nil {
+			continue
+		}
+		if bytes.Contains(data, []byte("name=dpeligible,")) {
+			continue
+		}
+		if !bytes.Contains(data, []byte("name=ineligible,")) {
+			continue
+		}
+		_ = os.WriteFile(target+".bak", data, 0755)
+		replacements := [][2][]byte{
+			{[]byte("https_proxy"), []byte("AG_LS_PROXY")},
+			{[]byte("name=ineligible,"), []byte("name=dpeligible,")},
+			{[]byte("ineligible_tiers"), []byte("dpeligible_tiers")},
+			{[]byte("ineligibleTiers"), []byte("dpeligibleTiers")},
+			{[]byte("\x0A\x0Aineligible"), []byte("\x0A\x0Adpeligible")},
+			{[]byte("\x52\x0Aineligible\x12"), []byte("\x52\x0Adpeligible\x12")},
+		}
+		for _, r := range replacements {
+			data = bytes.ReplaceAll(data, r[0], r[1])
+		}
+		_ = os.WriteFile(target, data, 0755)
+	}
 }

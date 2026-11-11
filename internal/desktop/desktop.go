@@ -235,9 +235,30 @@ func (d *desktop) profiles(snapshot portable.Snapshot) {
 			})
 		}),
 		action("Проверить связь", d.probe),
+		action("Публичный прокси", d.publicProxy),
 		action("Dagami через бота", d.managedPair),
 	}
 	d.showPage(v)
+}
+
+func (d *desktop) publicProxy() {
+	search := func(requireGemini bool) func() {
+		return func() {
+			label := "Поиск публичного прокси"
+			d.run(label, func() (string, error) {
+				return d.controller.FindPublicProxy(d.ctx, requireGemini)
+			})
+		}
+	}
+	d.showPage(view{
+		title:  "Публичный прокси",
+		detail: "Автопоиск рабочего бесплатного HTTPS-прокси из списка ProxyScrape с проверкой CONNECT и TLS.",
+		actions: []button{
+			action("Найти (GitHub / ChatGPT)", search(false)),
+			action("Найти (Gemini / Antigravity)", search(true)),
+			action("Назад", d.render),
+		},
+	})
 }
 
 func (d *desktop) managedPair() {
