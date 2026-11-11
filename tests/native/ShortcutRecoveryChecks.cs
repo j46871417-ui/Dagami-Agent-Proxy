@@ -67,6 +67,18 @@ class ShortcutRecoveryChecks {
    store.EnablePrepared(app, manager, new[] { restoreFolder }, () => {}, () => {}, true); File.Move(beforeMove, afterMove);
    store.Restore(app.Id);
    Assert(Hash(afterMove) == moveOriginal && store.Count(app.Id) == 0, "Disable left a moved shortcut pointing at the manager");
+   string windowsApps=Path.Combine(root,"WindowsApps");
+   string oldCodex=Path.Combine(windowsApps,@"OpenAI.Codex_1.0.0.0_x64__2p2nqsd0c76g0\app\ChatGPT.exe");
+   string newCodex=Path.Combine(windowsApps,@"OpenAI.Codex_2.0.0.0_x64__2p2nqsd0c76g0\app\ChatGPT.exe");
+   Directory.CreateDirectory(Path.GetDirectoryName(oldCodex)); File.Copy(exe,oldCodex);
+   Directory.CreateDirectory(Path.GetDirectoryName(newCodex)); File.Copy(exe,newCodex);
+   var codex=new AppTarget{Id="codex-gui",DisplayName="Codex Desktop",ExePath=oldCodex};
+   string codexLink=Path.Combine(restoreFolder,"Codex.lnk"); Link(codexLink,oldCodex,"");
+   store.EnablePrepared(codex,manager,new[]{restoreFolder},()=>{},()=>{},true);
+   codex.ExePath=newCodex; File.Delete(oldCodex);
+   var updatedLinks=store.EnablePrepared(codex,relocatedManager,new[]{restoreFolder},()=>{},()=>{},true);
+   Assert(updatedLinks.Count==1&&updatedLinks[0]==codexLink&&store.VerifiedCount(codex.Id,out issue)==1&&issue==null,
+    "An MSIX version change prevented reconnecting the existing Codex shortcut");
    Console.WriteLine("PASS " + checks + " deleted/moved/recreated links, journal history, collisions, malformed links, disable and safe names"); return 0;
   } catch (Exception ex) { Console.Error.WriteLine(ex); return 1; }
   finally {

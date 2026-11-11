@@ -11,7 +11,7 @@ class DnsProviderChecks {
  sealed class TrackingStream:MemoryStream {public int Writes;public override void Write(byte[] data,int offset,int count){if(count>0)Writes++;base.Write(data,offset,count);}}
  static void Reject(Action action,string message){bool failed=false;try{action();}catch{failed=true;}Assert(failed,message);}
  static byte[] Profile(string provider,params string[] addresses){var values=new StringBuilder();foreach(string address in addresses)values.Append("<string>"+address+"</string>");return Encoding.UTF8.GetBytes("<?xml version='1.0'?><!DOCTYPE plist PUBLIC '-//Apple//DTD PLIST 1.0//EN' 'http://www.apple.com/DTDs/PropertyList-1.0.dtd'><plist><dict><key>PayloadContent</key><array><dict><key>DNSSettings</key><dict><key>DNSProtocol</key><string>HTTPS</string><key>ServerURL</key><string>https://"+DnsProviders.HostFor(provider)+"/dns-query</string><key>ServerAddresses</key><array>"+values+"</array></dict></dict></array></dict></plist>");}
- static byte[] ReadHttp(string response){try{return (byte[])typeof(DnsHttpsTransport).GetMethod("ReadResponse",BindingFlags.Static|BindingFlags.NonPublic).Invoke(null,new object[]{new MemoryStream(Encoding.ASCII.GetBytes(response)),32,"application/dns-message",Stopwatch.StartNew(),1000});}catch(TargetInvocationException error){throw error.InnerException;}}
+ static byte[] ReadHttp(string response){try{return (byte[])typeof(DnsHttpsTransport).GetMethod("ReadResponse",BindingFlags.Static|BindingFlags.NonPublic).Invoke(null,new object[]{new MemoryStream(Encoding.ASCII.GetBytes(response)),32,"application/dns-message",Stopwatch.StartNew(),1000,false});}catch(TargetInvocationException error){throw error.InnerException;}}
  static uint Checksum(uint sum,byte[] b,int offset,int length){for(int i=0;i<length;i+=2)sum+=(uint)(b[offset+i]<<8)|(uint)(i+1<length?b[offset+i+1]:0);while((sum>>16)!=0)sum=(sum&65535)+(sum>>16);return sum;}
  static void CheckPacketSplit(byte[] hello,bool ipv6){
   int ip=ipv6?40:20,tcp=ip,data=ip+20;byte[] packet=new byte[data+hello.Length];
@@ -35,19 +35,24 @@ class DnsProviderChecks {
   Reject(()=>DnsProviders.ParseProfile("magicdns",Profile("dagami","8.8.8.8")),"Profile changed TLS authority");
   Reject(()=>DnsProviders.ParseProfile("dagami",new byte[131073]),"Oversized profile accepted");
   Reject(()=>DnsProviders.ParseProfile("dagami",new byte[]{0x30,0x82,0,0}),"Malformed signed profile accepted");
-  DnsProviders.Initialize(Path.Combine(root,"cache.json"),false);
+  string cache=Path.Combine(root,"cache.json");
+  File.WriteAllText(cache,"{\"Version\":1,\"dagami\":[\"31.76.61.24\"],\"magicdns\":[\"9.9.9.9\"]}");
+  DnsProviders.Initialize(cache,false);
+  var migrated=DnsProviders.ForServer("31.76.61.24");
+  Assert(migrated[0].Address=="48.102.213.179"&&migrated[0].Host=="dns.dagami.ru","Public DoH bootstrap has the wrong TLS authority");
+  Assert(migrated[1].Address=="31.76.52.235"&&migrated[1].Host=="doh.dagami.ru","Stale DoH address remained in the cached catalogue");
   DnsProviders.Refresh(provider=>Profile(provider,provider=="dagami"?"8.8.4.4":"9.9.9.9"),endpoint=>endpoint.Address=="8.8.4.4"||endpoint.Address=="9.9.9.9");
   Assert(DnsProviders.LastError==null,"Verified update failed");var current=DnsProviders.Snapshot();Assert(current.Length==2&&current[0].Provider=="dagami"&&current[1].Provider=="magicdns","Provider priority lost");
   Assert(DnsProviders.ForServer("45.147.31.32")[0].Address=="8.8.4.4","Old configured provider IP did not adopt current addresses");
   Assert(DnsProviders.Addresses("192.0.2.53").Length==1&&DnsProviders.Addresses("192.0.2.53")[0]=="192.0.2.53","Custom DNS replaced");
   DnsProviders.Refresh(provider=>{throw new IOException("Fixture source down");},endpoint=>true);
   Assert(DnsProviders.Snapshot()[0].Address=="8.8.4.4"&&DnsProviders.LastError!=null,"Last good list lost when sources failed");
-  DnsProviders.Refresh(provider=>Profile(provider,provider=="dagami"?"8.8.4.4":"9.9.9.9"),endpoint=>endpoint.Address=="8.8.4.4"||endpoint.Address=="9.9.9.9"||endpoint.Address=="31.76.61.24");
-  Assert(Array.Exists(DnsProviders.Snapshot(),x=>x.Provider=="dagami"&&x.Address=="31.76.61.24"),"Verified owner-provided reserve missing from updated official profile");
+  DnsProviders.Refresh(provider=>Profile(provider,provider=="dagami"?"8.8.4.4":"9.9.9.9"),endpoint=>endpoint.Address=="8.8.4.4"||endpoint.Address=="9.9.9.9"||(endpoint.Address=="48.102.213.179"&&endpoint.Host=="dns.dagami.ru"));
+  Assert(Array.Exists(DnsProviders.Snapshot(),x=>x.Provider=="dagami"&&x.Address=="48.102.213.179"),"Verified reserve missing from updated official profile");
   DnsProviders.Refresh(provider=>Profile(provider,"1.0.0.1"),endpoint=>false);
-  Assert(DnsProviders.Snapshot()[0].Address=="8.8.4.4","Unverified endpoints adopted");
+  Assert(DnsProviders.Snapshot()[0].Address=="48.102.213.179","Unverified endpoints adopted");
   DnsProviders.Refresh(provider=>provider=="dagami"?Profile(provider,"8.8.1.1","8.8.1.2","8.8.1.3","8.8.1.4","8.8.1.5","8.8.1.6","8.8.1.7","8.8.1.8"):Profile(provider,"9.9.9.9"),endpoint=>true);
-  current=DnsProviders.Snapshot();Assert(Array.FindAll(current,x=>x.Provider=="dagami").Length==8&&Array.Exists(current,x=>x.Address=="31.76.61.24"),"Large profile lost reserved nodes or exceeded provider limit");
+  current=DnsProviders.Snapshot();Assert(Array.FindAll(current,x=>x.Provider=="dagami").Length==8&&Array.Exists(current,x=>x.Address=="31.76.52.235")&&Array.Exists(current,x=>x.Address=="48.102.213.179"),"Large profile lost reserved nodes or exceeded provider limit");
   Assert(File.Exists(Path.Combine(root,"cache.json"))&&Directory.GetFiles(root,"*.tmp").Length==0,"Cache write not atomic/clean");
   Assert(Encoding.ASCII.GetString(ReadHttp("HTTP/1.1 200 OK\r\nContent-Type: application/dns-message\r\nContent-Length: 3\r\n\r\nabc"))=="abc","DoH length body failed");
   Assert(Encoding.ASCII.GetString(ReadHttp("HTTP/1.1 200 OK\r\nContent-Type: application/dns-message\r\nTransfer-Encoding: chunked\r\n\r\n1\r\na\r\n2\r\nbc\r\n0\r\n\r\n"))=="abc","DoH chunked body failed");

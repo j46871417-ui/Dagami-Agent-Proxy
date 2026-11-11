@@ -66,13 +66,16 @@ namespace DevProxyApp {
  public static class SelectiveProxyRules {
   public const string Path = "/dagami-selective.pac";
 
-  internal static void ExportBrowserExtension(string directory) {
+  internal static void ExportBrowserExtension(string directory,int port) {
+   string config = "globalThis.dagamiConfig = " + new System.Web.Script.Serialization.JavaScriptSerializer().Serialize(
+       new { port=port, pac=GeneratePac(ReadBuiltInDomains(),port,true) }) + ";\n";
    Directory.CreateDirectory(directory);
-   foreach(string name in new[]{"manifest.json","popup.html","popup.js"}) {
+   foreach(string name in new[]{"popup.html","popup.js","route.js","background.js","config.js","manifest.json"}) {
     string destination = System.IO.Path.Combine(directory,name);
     string temporary = destination+"."+Guid.NewGuid().ToString("N")+".tmp";
     try {
-     using(var input = typeof(SelectiveProxyRules).Assembly.GetManifestResourceStream("DevProxy.BrowserExtension."+name)) {
+     if(name=="config.js")File.WriteAllText(temporary,config,new UTF8Encoding(false));
+     else using(var input = typeof(SelectiveProxyRules).Assembly.GetManifestResourceStream("DevProxy.BrowserExtension."+name)) {
       if(input == null)throw new InvalidOperationException("В сборке отсутствует файл расширения.");
       using(var output = new FileStream(temporary,FileMode.CreateNew))input.CopyTo(output);
      }
@@ -83,6 +86,10 @@ namespace DevProxyApp {
   }
 
   public static string BuiltInPac(int port) {
+   return GeneratePac(ReadBuiltInDomains(),port);
+  }
+
+  private static List<string> ReadBuiltInDomains() {
    var lines = new List<string>();
    using(var stream = typeof(SelectiveProxyRules).Assembly.GetManifestResourceStream("DevProxy.SelectiveDomains")) {
     if(stream == null) throw new InvalidOperationException("Dagami routing rules are missing.");
@@ -91,10 +98,14 @@ namespace DevProxyApp {
      while((line = reader.ReadLine()) != null) lines.Add(line);
     }
    }
-   return GeneratePac(lines,port);
+   return lines;
   }
 
   public static string GeneratePac(IEnumerable<string> lines,int port) {
+   return GeneratePac(lines,port,false);
+  }
+
+  private static string GeneratePac(IEnumerable<string> lines,int port,bool browserFallback) {
    if(lines==null)throw new ArgumentNullException("lines");
    if(port<1||port>65535)throw new ArgumentOutOfRangeException("port");
    var exact=new SortedSet<string>(StringComparer.Ordinal);var suffix=new SortedSet<string>(StringComparer.Ordinal);
@@ -106,8 +117,9 @@ namespace DevProxyApp {
    }
    if(exact.Count+suffix.Count==0)throw new InvalidDataException("Empty routing list");
    var s=new StringBuilder("function FindProxyForURL(url, host) {\n  host = host.toLowerCase();\n  if (host.charAt(host.length - 1) === '.') host = host.slice(0, -1);\n");
-   foreach(string host in exact)s.Append("  if (host === \"").Append(host).Append("\") return \"PROXY 127.0.0.1:").Append(port).Append("\";\n");
-   foreach(string host in suffix)s.Append("  if (host === \"").Append(host).Append("\" || dnsDomainIs(host, \".").Append(host).Append("\")) return \"PROXY 127.0.0.1:").Append(port).Append("\";\n");
+   string route="PROXY 127.0.0.1:"+port+(browserFallback?"; DIRECT":"");
+   foreach(string host in exact)s.Append("  if (host === \"").Append(host).Append("\") return \"").Append(route).Append("\";\n");
+   foreach(string host in suffix)s.Append("  if (host === \"").Append(host).Append("\" || dnsDomainIs(host, \".").Append(host).Append("\")) return \"").Append(route).Append("\";\n");
    return s.Append("  return \"DIRECT\";\n}\n").ToString();
   }
  }

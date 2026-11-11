@@ -4,6 +4,7 @@ using System.Diagnostics;
 using System.IO;
 using System.Net;
 using System.Net.Sockets;
+using System.Reflection;
 using System.Text;
 using System.Threading;
 using System.Web.Script.Serialization;
@@ -39,6 +40,8 @@ class CliChecks {
  }
  static int Main(string[] args){
   Console.InputEncoding = new UTF8Encoding(false);
+  if(args.Length==2&&args[0]=="doctor-fixture")
+   return NativeCli.Handle(new[]{"doctor",args[1]})?0:1;
   if(args.Length>0&&args[0]=="child")return Child(args);
   if(args.Length>0&&args[0]=="driver"){
    string[] forwarded=new string[args.Length-2];Array.Copy(args,2,forwarded,0,forwarded.Length);
@@ -52,6 +55,25 @@ class CliChecks {
    Assert(NativeCli.FailureHint("AuthenticationException: certificate error").Contains("TLS"),"TLS error misclassified");
    Assert(NativeCli.FailureHint("HTTP 429 RESOURCE_EXHAUSTED").Contains("квот"),"Quota error misclassified");
    Assert(!NativeCli.FailureHint("fixture-secret opaque-token").Contains("fixture-secret"),"Error classifier echoed report contents");
+   var doctor=typeof(NativeCli).GetMethod("AppDoctorJson",BindingFlags.Static|BindingFlags.NonPublic);
+   var doctorConfig=new ConfigManager{LastProxy="http://fixture-user:fixture-secret@proxy.example:8080",DnsHost="private-dns.example",UseProxy=true};
+   var missing=new AppTarget{Id="doctor-fixture-missing",DisplayName="fixture-secret",ExePath=Path.Combine(root,"private-missing.exe")};
+   string doctorJson=(string)doctor.Invoke(null,new object[]{missing,doctorConfig});
+   var report=new JavaScriptSerializer().Deserialize<Dictionary<string,object>>(doctorJson);
+   Assert(!(bool)report["installed"]&&(bool)report["connectionConfigured"],"Doctor conflated missing application with connection configuration");
+   Assert(!(bool)report["routeChecked"]&&!(bool)report["modelResponseVerified"],"Local doctor reported network or model success");
+   Assert(!doctorJson.Contains("fixture-secret")&&!doctorJson.Contains("proxy.example")&&!doctorJson.Contains("private-dns.example")&&!doctorJson.Contains("private-missing.exe"),
+    "Doctor exposed private settings");
+   foreach(string selector in new[]{"--apps","codex-gui"}) {
+    var startDoctor=new ProcessStartInfo(Self,"doctor-fixture "+selector){UseShellExecute=false,CreateNoWindow=true,
+      RedirectStandardOutput=true,RedirectStandardError=true,StandardOutputEncoding=Encoding.UTF8,StandardErrorEncoding=Encoding.UTF8};
+    using(var child=Process.Start(startDoctor)) {
+     Assert(child.WaitForExit(15000),"Doctor command did not finish");
+     string json=child.StandardOutput.ReadToEnd();
+     Assert(child.ExitCode==0&&child.StandardError.ReadToEnd().Length==0&&json.Contains("codex-gui"),"Doctor command returned no app data");
+     Assert(new JavaScriptSerializer().DeserializeObject(json)!=null,"Doctor command returned invalid JSON");
+    }
+   }
    string originalDir=Path.Combine(root,"original space");Directory.CreateDirectory(originalDir);
    string original=Path.Combine(originalDir,"agy.exe");File.Copy(Self,original);string originalHash=Hash(original);
    Assert(NativeCliApps.IsCli(new AppTarget{ExePath=original}),"Console PE not recognized");

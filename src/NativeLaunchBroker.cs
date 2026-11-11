@@ -81,32 +81,32 @@ namespace DevProxyApp
             return "Фоновый DevProxy не ответил. Откройте его через значок в трее и проверьте журнал.";
         }
         public void Dispose() { _running = false; try { if (_server != null) _server.Dispose(); } catch { } }
+        private static bool ConfirmStartup(bool shortcut)
+        {
+            if (LicenseManager.IsActivated()) return true;
+            if (!shortcut && ManagedAccess.ReadDeferredKey() != null) return true;
+            using (var activation = new ActivationForm())
+                return AcceptStartupResult(activation.ShowDialog(), shortcut);
+        }
+
+        internal static bool AcceptStartupResult(DialogResult result, bool shortcut)
+        {
+            return result == DialogResult.OK || (!shortcut && result == DialogResult.Retry);
+        }
+
         public static void Run(NativeLaunchRequest initial, bool startInTray = false) {
             bool owner = false;
             using (var mutex = new Mutex(false, @"Local\" + UserName)) {
                 try { owner = mutex.WaitOne(0); } catch (AbandonedMutexException) { owner = true; }
                 if (!owner) {
                     if(startInTray) return;
-                    if (!LicenseManager.IsActivated()) {
-                        using (var activation = new ActivationForm()) {
-                            if (activation.ShowDialog() != DialogResult.OK) {
-                                return;
-                            }
-                        }
-                    }
+                    if (initial != null && !ConfirmStartup(true)) return;
                     string error = Send(UserName, initial ?? new NativeLaunchRequest(), 12000);
                     if (!string.IsNullOrEmpty(error)) MessageBox.Show(error, Brand.Name, MessageBoxButtons.OK, MessageBoxIcon.Warning);
                     return;
                 }
                 try {
-                    if(startInTray && !LicenseManager.IsActivated()) return;
-                    if (!LicenseManager.IsActivated()) {
-                        using (var activation = new ActivationForm()) {
-                            if (activation.ShowDialog() != DialogResult.OK) {
-                                return;
-                            }
-                        }
-                    }
+                    if (startInTray ? !LicenseManager.IsActivated() : !ConfirmStartup(initial != null)) return;
                     using (var form = new MainForm(initial == null ? null : initial.TargetId, initial != null, false, startInTray)) {
                         form.InitialShortcutKey = initial == null ? null : initial.ShortcutKey;
                         IntPtr handle = form.Handle;

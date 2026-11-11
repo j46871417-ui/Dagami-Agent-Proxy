@@ -11,7 +11,6 @@ namespace DevProxyApp
         private TextBox _proxyBox;
         private TextBox _dnsBox;
         private CheckBox _dnsEnabled;
-        private CheckBox _systemEnvironment;
         private CheckBox _prepareAntigravity;
         private CheckBox _blockAntigravityUpdates;
         private bool _updatingBlockUpdates;
@@ -19,6 +18,11 @@ namespace DevProxyApp
         private TextBox _nativeLog;
         private Label _nativeStatus;
         private Label _targetDetails;
+        private LinkLabel _appRouteStatus, _appModelStatus;
+        private ToolTip _appStatusTip;
+        private AppRouteCheck _appRouteCheck;
+        private NativeSession _modelAnswerSession;
+        private LocalProxyBridge _modelAnswerBridge;
         private System.Windows.Forms.Timer _sessionRefreshTimer;
         private volatile bool _showNativeLog;
         private bool _logUpdateQueued;
@@ -43,9 +47,8 @@ namespace DevProxyApp
         private readonly List<Button> _nativeButtons = new List<Button>();
 
         private FluentButton _primaryAppAction;
-        private FluentButton _moreAppActions;
-        private ToolStripMenuItem _patchMenuItem;
-        private ToolStripMenuItem _unpatchMenuItem;
+        private FluentButton _checkAppAction;
+        private FluentButton _patchAppAction, _unpatchAppAction;
         private bool _patchInProgress;
         private Label _selectedAppHeading;
         private Label _shortcutExplanation;
@@ -53,7 +56,7 @@ namespace DevProxyApp
         private Label _shortcutState;
         private Label _clientPreparationStatus;
         private ContextMenuStrip _appActions;
-        private ToolStripMenuItem _stopAppItem, _removeAppItem, _restoreShortcutItem, _clientPreparationItem;
+        private ToolStripMenuItem _stopAppItem, _removeAppItem;
         private Panel[] _pageControls;
         private int _activeFluentPage;
         private string[] _pageNames, _pageDescriptions;
@@ -131,7 +134,7 @@ namespace DevProxyApp
 
         public static string PatchStatusLabel(int records, string issue, bool persistent)
         {
-            return !string.IsNullOrEmpty(issue) ? "Требует восстановления" :
+            return !string.IsNullOrEmpty(issue) ? "Проверить запуск" :
                 records > 0 || persistent ? "Пропатчено" : "Не пропатчено";
         }
 
@@ -193,6 +196,7 @@ namespace DevProxyApp
         private string _clientStatusKey, _clientStatusText;
         private int _clientStatusRevision;
         private bool _selectedPersistentPatch;
+        private bool _activationKeySaved;
         private readonly object _clientStatusLock = new object();
         private string _pendingClientPath;
         private int _pendingClientRevision;
@@ -264,59 +268,40 @@ namespace DevProxyApp
             return item;
         }
 
-        private void BuildAppActionsMenu()
+        private void BuildAppContextMenu()
         {
             _appActions = new ContextMenuStrip();
-            _patchMenuItem=AppMenuItem("Настроить обычный запуск",PatchSelectedNativeTarget);
-            _appActions.Items.Add(_patchMenuItem);
-            _unpatchMenuItem=AppMenuItem("Отменить патч (вернуть исходный запуск)",UnpatchSelectedNativeTarget);
-            _appActions.Items.Add(_unpatchMenuItem);
             _stopAppItem = AppMenuItem("Остановить", () => {
                 if (MessageBox.Show(this, "Завершить «" + SelectedNativeTarget().DisplayName + "»? Сохраните работу в приложении перед остановкой.",
                     "Остановить приложение", MessageBoxButtons.YesNo, MessageBoxIcon.Warning, MessageBoxDefaultButton.Button2) != DialogResult.Yes) return;
                 StopSelectedNativeSession(); _appFeedback.Text = "Приложение остановлено.";
             });
             _appActions.Items.Add(_stopAppItem);
-            var advanced = new ToolStripMenuItem("Дополнительно");
-            advanced.DropDownItems.Add(AppMenuItem("Записать настройки приложения", () => ApplySelectedNativeTarget(false)));
-            advanced.DropDownItems.Add(AppMenuItem("Восстановить исходные настройки (заменить ручные правки)", () => { if (ConfirmSettingsRestore()) ApplySelectedNativeTarget(true); }));
-            _restoreShortcutItem = AppMenuItem("Восстановить обычные ярлыки", () => { if (ConfirmSettingsRestore()) ConfigureNativeShortcuts(true); });
-            advanced.DropDownItems.Add(_restoreShortcutItem);
-            _clientPreparationItem = new ToolStripMenuItem("Бинарная подготовка Antigravity");
-            _clientPreparationItem.DropDownItems.Add(AppMenuItem("Подготовить клиент", () => RunAntigravityOperation("prepare")));
-            _clientPreparationItem.DropDownItems.Add(AppMenuItem("Отменить подготовку", () => RunAntigravityOperation("restore")));
-            advanced.DropDownItems.Add(_clientPreparationItem);
-            _appActions.Items.Add(advanced);
             _removeAppItem = AppMenuItem("Удалить из списка", () => {
-                if (_shortcutRecords > 0 || _shortcutIssue != null) throw new InvalidOperationException("Сначала восстановите обычные ярлыки через «Действия → Дополнительно».");
-                // session checked inside EnsureSessionStoppedForPatch
+                if (_unpatchAppAction.Enabled) throw new InvalidOperationException("Сначала нажмите «Отменить патч» в карточке приложения.");
                 NativeSession session; if (_nativeSessions.TryGetValue(SelectedNativeTarget().Id, out session) && session.RunningProcess != null)
                     throw new InvalidOperationException("Сначала остановите приложение.");
                 if (MessageBox.Show(this, "Удалить «" + SelectedNativeTarget().DisplayName + "» из списка Dagami Agent Proxy? Само приложение останется на компьютере.",
                     "Удалить из списка", MessageBoxButtons.YesNo, MessageBoxIcon.Question, MessageBoxDefaultButton.Button2) == DialogResult.Yes) RemoveNativeTarget();
             });
             _appActions.Items.Add(_removeAppItem);
+            _appActions.Opening += (sender, e) => {
+                e.Cancel = _nativeBusy || _targetList.SelectedItems.Count == 0 || (!_stopAppItem.Enabled && !_removeAppItem.Enabled);
+            };
+            _targetList.ContextMenuStrip = _appActions;
+            _targetList.MouseDown += (sender, e) => {
+                if (e.Button != MouseButtons.Right) return;
+                var row = _targetList.GetItemAt(e.X, e.Y);
+                if (row != null) { row.Selected = true; row.Focused = true; }
+                else if (_targetList.SelectedItems.Count > 0) _targetList.SelectedItems[0].Selected = false;
+            };
             Disposed += (sender, e) => _appActions.Dispose();
         }
 
-        private void ApplySelectedNativeTarget(bool restore)
-        {
-            var target = SelectedNativeTarget();
-            if (!restore && !SaveNativeSettings()) return;
-            string message;
-            bool ok = restore ? ProxyEngine.RestoreTarget(target, out message) : ProxyEngine.ApplyProxyToTarget(target, GetIdeProxyUrl(), out message);
-            Logger.Log((ok ? "[✓] " : "[-] ") + target.DisplayName + ": " + message);
-            if (!ok) throw new InvalidOperationException(message);
-            if (!restore && ConfigManager.Instance.SetSystemEnv) ProxyEngine.ApplySystemEnvironment(GetIdeProxyUrl());
-            // Restoring one application must not clear shared Windows environment for other apps.
-            UpdateNativeDetails();
-            _appFeedback.Text = target.DisplayName + ": " + message;
-        }
-
         private bool ConfirmSettingsRestore() {
-            return MessageBox.Show(this, "Восстановить исходные настройки «" + SelectedNativeTarget().DisplayName +
-                "»? Ручные правки управляемых proxy-полей будут заменены. Остальные настройки сохранятся.",
-                "Восстановление настроек", MessageBoxButtons.YesNo, MessageBoxIcon.Warning, MessageBoxDefaultButton.Button2) == DialogResult.Yes;
+            return MessageBox.Show(this, "Отменить патч для «" + SelectedNativeTarget().DisplayName +
+                "» и вернуть исходные файлы, настройки и запуск? Ручные изменения управляемых прокси-полей будут заменены.",
+                "Отменить патч", MessageBoxButtons.YesNo, MessageBoxIcon.Warning, MessageBoxDefaultButton.Button2) == DialogResult.Yes;
         }
 
         internal static bool IsDirectProxyValue(string value)
@@ -344,7 +329,7 @@ namespace DevProxyApp
             if (!HasConfiguredConnection(ConfigManager.Instance.LastProxy, ConfigManager.Instance.UseDagamiDns, ConfigManager.Instance.UseProxy)) { ShowFluentPage(1); return; }
             var target = SelectedNativeTarget(); if (!EnsureSessionStoppedForPatch(target, "Настройка обычного запуска (патч)")) return; if (!SaveNativeSettings()) return;
             string manager = System.Diagnostics.Process.GetCurrentProcess().MainModule.FileName;
-            _nativeBusy = true; _patchInProgress = true; SetNativeButtonsEnabled(false); _patchMenuItem.Text = "Подготовка…";
+            _nativeBusy = true; _patchInProgress = true; SetNativeButtonsEnabled(false); _patchAppAction.Text = "Подготовка…";
             _appFeedback.Text = "Подготовка клиента, конфигурации и ярлыков…";
             string ideProxy = GetIdeProxyUrl();
             var worker = new System.Threading.Thread(() => {
@@ -356,7 +341,7 @@ namespace DevProxyApp
                     Logger.Log("[Patch] " + target.DisplayName + ": " + result); success = true;
                 } catch (Exception ex) { result = ex.Message; Logger.Log("[Patch] " + ex.GetType().Name + ": " + result); }
                 try { BeginInvoke(new Action(() => {
-                    _nativeBusy = false; _patchInProgress = false; _patchMenuItem.Text = "Настроить обычный запуск";
+                    _nativeBusy = false; _patchInProgress = false; _patchAppAction.Text = "Пропатчить";
                     SetNativeButtonsEnabled(true); UpdateNativeDetails(); QueueClientStatus(true);
                     if (success && !_preview && !NativeStartup.Current.IsEnabled()) { try { NativeStartup.Current.SetEnabled(true); ReadStartupState(); } catch { } }
                     _appFeedback.Text = success?"Настройка завершена — подробности в отчёте.":result;
@@ -382,10 +367,8 @@ namespace DevProxyApp
         private void UnpatchSelectedNativeTarget()
         {
             var target = SelectedNativeTarget();
-            // session checked inside EnsureSessionStoppedForPatch
-            if (!EnsureSessionStoppedForPatch(target, "Отмена патча")) return;
-
             if (!ConfirmSettingsRestore()) return;
+            if (!EnsureSessionStoppedForPatch(target, "Отмена патча")) return;
             _nativeBusy = true; _patchInProgress = true; SetNativeButtonsEnabled(false);
             _appFeedback.Text = "Восстановление исходных файлов, настроек и ярлыков…";
             var worker = new System.Threading.Thread(() => {
@@ -417,10 +400,21 @@ namespace DevProxyApp
 
         private void RunPrimaryNativeAction()
         {
-            if (!HasConfiguredConnection(ConfigManager.Instance.LastProxy, ConfigManager.Instance.UseDagamiDns, ConfigManager.Instance.UseProxy)) { ShowFluentPage(1); return; }
+            if (_preview) return;
             var target = SelectedNativeTarget(); NativeSession session;
             if (_nativeSessions.TryGetValue(target.Id, out session) && session.RunningProcess != null) {
                 FocusSession(session.RunningProcess); return;
+            }
+            if (!target.IsInstalled) return;
+            var config = ConfigManager.Instance;
+            if (!string.IsNullOrEmpty(config.LastLoadError) || !HasConfiguredConnection(config.LastProxy, config.UseDagamiDns, config.UseProxy)) {
+                if (!CanConnectSelectedApp(config)) { ShowFluentPage(1); return; }
+                var activation = OpenManagedKey();
+                if (activation == DialogResult.Retry) {
+                    _appFeedback.Text = "Ключ сохранён. Повторите «Запустить через Dagami», когда шлюз станет доступен.";
+                    return;
+                }
+                if (activation != DialogResult.OK || !HasConfiguredConnection(config.LastProxy, config.UseDagamiDns, config.UseProxy)) return;
             }
             // Diagnostics are advisory. Launch uses saved parameters and must not
             // depend on a stale probe result or a writable settings directory.
@@ -434,11 +428,223 @@ namespace DevProxyApp
                     return;
                 }
                 string notice;
-                _appFeedback.Text = _nativeClientNotices.TryGetValue(target.Id,out notice) ? "Приложение запущено через прокси. "+notice : "Приложение запущено. Закрытие окна Dagami Agent Proxy оставляет прокси в трее.";
+                _appFeedback.Text = _nativeClientNotices.TryGetValue(target.Id,out notice) ? "Процесс запущен. "+notice : "Процесс запущен. Доступ к сервису можно проверить на вкладке «Диагностика».";
             } catch (Exception ex) {
                 MessageBox.Show(this, ex.Message, "Ошибка запуска", MessageBoxButtons.OK, MessageBoxIcon.Warning);
                 _appFeedback.Text = ex.Message;
             } finally { _nativeBusy = false; SetNativeButtonsEnabled(true); QueueClientStatus(true); UpdateNativeStatus(); }
+        }
+
+        private static bool CanConnectSelectedApp(ConfigManager config)
+        {
+            return string.IsNullOrEmpty(config.LastLoadError) && config.UseProxy && ManagedAccess.IsProfile(config.LastProxy);
+        }
+
+        private sealed class AppRouteCheck {
+            public AppTarget Target;
+            public LocalProxyBridge Bridge;
+            public ProxyProbeResult Result;
+        }
+
+        private static string AppDiagnosticService(AppTarget target)
+        {
+            if (target == null) return null;
+            if (AntigravityIntegration.Supports(target.ExePath)) return "Antigravity";
+            if (AppProxyPolicy.IsGemini(target)) return "Gemini";
+            if (target.Id == "codex" || target.Id == "codex-gui") return "Codex";
+            if (target.Id == "cursor") return "Cursor";
+            if (target.Id == "claude-gui" || target.Id == "claude_cli") return "Claude";
+            return null;
+        }
+
+        private LocalProxyBridge AppDiagnosticBridge(NativeSession session)
+        {
+            return session != null && session.PrivateBridge != null ? session.PrivateBridge : _rescueBridge;
+        }
+
+        private async void CheckSelectedAppRoute()
+        {
+            if (_preview || _appRouteCheck != null && _appRouteCheck.Result == null) return;
+            var target = SelectedNativeTarget();
+            string service = AppDiagnosticService(target);
+            if (service == null) return;
+            NativeSession session;
+            _nativeSessions.TryGetValue(target.Id, out session);
+            if (session != null && session.RunningProcess == null) session = null;
+            var bridge = AppDiagnosticBridge(session);
+            if (bridge == null || bridge.BoundPort <= 0) return;
+
+            var check = new AppRouteCheck { Target = target, Bridge = bridge };
+            int port = bridge.BoundPort;
+            _appRouteCheck = check;
+            UpdateAppActionState();
+            check.Result = await System.Threading.Tasks.Task.Run(() => ConnectionDiagnostics.CheckService(port, service));
+            if (!IsDisposed && !Disposing) UpdateAppActionState();
+        }
+
+        private void ConfirmSelectedAppModel()
+        {
+            if (_preview) return;
+            var target = SelectedNativeTarget();
+            NativeSession session;
+            if (AppDiagnosticService(target) == null || !_nativeSessions.TryGetValue(target.Id, out session) ||
+                session.RunningProcess == null) return;
+            var bridge = AppDiagnosticBridge(session);
+            if (MessageBox.Show(this, "Отправьте тестовый запрос в «" + target.DisplayName + "». Модель прислала ответ?",
+                "Подтверждение ответа", MessageBoxButtons.YesNo, MessageBoxIcon.Question, MessageBoxDefaultButton.Button2) != DialogResult.Yes) return;
+            NativeSession current;
+            if (!_nativeSessions.TryGetValue(target.Id, out current) || current != session || current.RunningProcess == null ||
+                AppDiagnosticBridge(current) != bridge) return;
+            _modelAnswerSession = session;
+            _modelAnswerBridge = bridge;
+            UpdateAppActionState();
+        }
+
+        private void UpdateAppRunStatus(AppTarget target, NativeSession runningSession)
+        {
+            if (_appRouteStatus == null) return;
+            var bridge = AppDiagnosticBridge(runningSession);
+            string service = AppDiagnosticService(target);
+            bool probing = _appRouteCheck != null && _appRouteCheck.Result == null;
+            var matching = _appRouteCheck != null && _appRouteCheck.Target == target && _appRouteCheck.Bridge == bridge
+                ? _appRouteCheck : null;
+            var result = matching == null ? null : matching.Result;
+            string route = matching != null && probing ? "Маршрут: проверяем…" : result != null
+                ? (result.Available ? "Маршрут: адрес ответил" : "Маршрут: проверка не прошла") : "Маршрут: проверить";
+            bool routeAction = service != null && bridge != null && bridge.BoundPort > 0 && !probing;
+            if (service == null) route = "Маршрут: нет теста для приложения";
+            else if (bridge == null || bridge.BoundPort <= 0) route = "Маршрут: мост остановлен";
+            else if (probing && matching == null) route = "Маршрут: дождитесь проверки";
+            SetAppStatusLink(_appRouteStatus, route, routeAction);
+            string details = result == null ? "Проверяется тестовый адрес сервиса через локальный мост." : result.Message;
+            if (_appStatusTip.GetToolTip(_appRouteStatus) != details) _appStatusTip.SetToolTip(_appRouteStatus, details);
+
+            bool modelAction = service != null && runningSession != null;
+            bool confirmed = modelAction && _modelAnswerSession == runningSession && _modelAnswerBridge == bridge;
+            string model = confirmed ? "Модель: ответ подтверждён вами" : modelAction ? "Модель: подтвердить ответ" : "Модель: ответ не проверен";
+            SetAppStatusLink(_appModelStatus, model, modelAction && !confirmed);
+        }
+
+        private static void SetAppStatusLink(LinkLabel label, string text, bool clickable)
+        {
+            if (label.Text != text) label.Text = text;
+            int length = clickable ? text.Length : 0;
+            if (label.LinkArea.Length != length) label.LinkArea = new LinkArea(0, length);
+            label.TabStop = clickable;
+        }
+
+        private async void CheckSelectedApp()
+        {
+            if (_preview) return;
+            var target = SelectedNativeTarget();
+            var config = ConfigManager.Instance;
+            bool configured = string.IsNullOrEmpty(config.LastLoadError) &&
+                HasConfiguredConnection(config.LastProxy, config.UseDagamiDns, config.UseProxy);
+            _nativeBusy = true;
+            SetNativeButtonsEnabled(false);
+            _appFeedback.Text = "Проверяем запуск приложения…";
+            Action selectedAction = null;
+            try {
+                var check = await System.Threading.Tasks.Task.Run(() => CheckAppFiles(target));
+                if (IsDisposed || Disposing) return;
+                if (_targetList.SelectedItems.Count == 0 || !ReferenceEquals(_targetList.SelectedItems[0].Tag, target)) {
+                    _appFeedback.Text = "Выберите приложение и повторите проверку.";
+                    return;
+                }
+                string connection = !configured ? "Подключение нужно настроить." : _bridgePort > 0
+                    ? "Локальный мост запущен." : "Локальный мост остановлен.";
+                string report = "Приложение · " + (check.Installed ? "найдено" : "файл не найден") +
+                    "\r\n" + check.Launcher + "\r\n" + connection;
+                if (check.ClientStatus != null) report += "\r\n" + check.ClientStatus;
+                report += "\r\n\r\nВыполнена локальная проверка. Доступ к сервису можно проверить на вкладке «Диагностика».";
+
+                string actionText = "Открыть диагностику";
+                Action action = () => ShowFluentPage(4);
+                if (!check.Installed) {
+                    actionText = "Обновить список";
+                    action = RefreshNativeTargets;
+                } else if (check.CanRepairLauncher) {
+                    actionText = check.IsCommand ? "Исправить команду" : "Исправить ярлык";
+                    action = RepairNativeLauncher;
+                } else if (NeedsClientPreparation(check.ClientStatus)) {
+                    report += "\r\n\r\nВосстановите исходный клиент, затем нажмите «Пропатчить» в карточке приложения.";
+                    actionText = "Восстановить Antigravity";
+                    action = () => RunAntigravityOperation("restore");
+                } else if (ClientCheckFailed(check.ClientStatus) || check.LauncherReadFailed) {
+                    actionText = "Открыть журнал";
+                    action = () => ShowFluentPage(3);
+                } else if (!configured) {
+                    actionText = "Открыть подключение";
+                    action = () => ShowFluentPage(1);
+                }
+                _appFeedback.Text = "Проверка запуска завершена.";
+                using (var dialog = BuildAppCheckDialog(target.DisplayName, report, actionText)) {
+                    ShowThemedDialog(dialog);
+                    if (dialog.DialogResult == DialogResult.OK) selectedAction = action;
+                }
+            } catch (Exception error) {
+                if (!IsDisposed && !Disposing) {
+                    Logger.Log("[App check] " + BugReports.Clean(error.ToString()));
+                    _appFeedback.Text = "Не удалось завершить проверку. Подробности в журнале.";
+                }
+            } finally {
+                if (!IsDisposed && !Disposing) {
+                    _nativeBusy = false;
+                    SetNativeButtonsEnabled(true);
+                }
+            }
+            if (selectedAction != null && !IsDisposed && !Disposing) ExecuteNativeAction(selectedAction);
+        }
+
+        internal sealed class AppFileCheck {
+            public bool Installed, IsCommand, CanRepairLauncher, LauncherReadFailed;
+            public string Launcher, ClientStatus;
+        }
+
+        internal static AppFileCheck CheckAppFiles(AppTarget target)
+        {
+            var result = new AppFileCheck { Installed = target.IsInstalled, IsCommand = NativeCliApps.IsCommandTarget(target) };
+            string label = result.IsCommand ? "Команда CLI" : "Ярлыки";
+            string issue;
+            try {
+                int count = result.IsCommand ? NativeCliApps.Current.VerifiedCount(target.Id, out issue) :
+                    NativeShortcuts.Current.VerifiedCount(target.Id, target, out issue);
+                result.CanRepairLauncher = issue != null;
+                result.Launcher = label + " · " + (issue ?? (count == 0 ? "обычный запуск" : "настроен запуск через Dagami"));
+            } catch (Exception error) {
+                Logger.Log("[App check] " + BugReports.Clean(error.ToString()));
+                result.Launcher = label + " · не удалось прочитать настройки.";
+                result.LauncherReadFailed = true;
+            }
+            if (result.Installed && AntigravityIntegration.Supports(target.ExePath))
+                result.ClientStatus = AntigravityIntegration.ClientPreparationStatus(target.ExePath);
+            return result;
+        }
+
+        private static Form BuildAppCheckDialog(string appName, string report, string actionText)
+        {
+            var dialog = new Form {
+                Text = "Проверка запуска · " + appName, ClientSize = new Size(570, 280),
+                MinimumSize = new Size(460, 240), StartPosition = FormStartPosition.CenterParent,
+                AutoScaleMode = AutoScaleMode.Dpi, MinimizeBox = false, MaximizeBox = false, ShowInTaskbar = false
+            };
+            var rows = new TableLayoutPanel { Dock = DockStyle.Fill, Padding = new Padding(12), ColumnCount = 1, RowCount = 2 };
+            rows.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+            rows.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+            var details = new TextBox { Name = "AppCheckDetails", Text = report, Dock = DockStyle.Fill,
+                ReadOnly = true, Multiline = true, ScrollBars = ScrollBars.Vertical, AccessibleName = "Результаты проверки запуска" };
+            rows.Controls.Add(details, 0, 0);
+            var buttons = new FlowLayoutPanel { Dock = DockStyle.Fill, AutoSize = true, WrapContents = false,
+                FlowDirection = FlowDirection.RightToLeft };
+            var close = new FluentButton { Text = "Закрыть", DialogResult = DialogResult.Cancel, AutoSize = true };
+            var next = new FluentButton { Text = actionText, DialogResult = DialogResult.OK, AutoSize = true };
+            buttons.Controls.Add(close);
+            buttons.Controls.Add(next);
+            rows.Controls.Add(buttons, 0, 1);
+            dialog.Controls.Add(rows);
+            dialog.CancelButton = close;
+            dialog.ActiveControl = close;
+            return dialog;
         }
 
         private void UpdateAppActionState()
@@ -449,50 +655,62 @@ namespace DevProxyApp
             NativeSession session = null;
             bool running = target != null && _nativeSessions.TryGetValue(target.Id, out session) && session.RunningProcess != null;
             _selectedAppHeading.Text = target == null ? "Выберите приложение" : target.DisplayName;
-            bool flagsActive = ConfigManager.Instance.UseProxy || ConfigManager.Instance.UseDagamiDns;
-            _primaryAppAction.Text = !flagsActive ? "Выберите режим" : !configured ? "Настроить подключение" : running ? "Открыть" : "Запустить через Dagami";
-            _primaryAppAction.Enabled = flagsActive && (!configured || (target != null && target.IsInstalled));
-            _moreAppActions.Enabled = target != null;
+            _primaryAppAction.Text = "Запустить через Dagami";
+            _primaryAppAction.AccessibleDescription = running ? "Открывает текущую сессию приложения." :
+                configured ? "Запускает приложение с выбранным подключением." : "Предлагает настроить подключение перед запуском.";
+            _primaryAppAction.Enabled = running || (target != null && target.IsInstalled);
             bool canPatch = target != null && target.IsInstalled;
-            bool hasBinaryPatch = _clientStatusText != null && (_clientStatusText.StartsWith("Патч: применён", StringComparison.OrdinalIgnoreCase) || _clientStatusText.IndexOf("частично", StringComparison.OrdinalIgnoreCase) >= 0 || _clientStatusText.IndexOf("повторная подготовка",StringComparison.OrdinalIgnoreCase)>=0);
+            bool cli = NativeCliApps.IsCommandTarget(target);
+            bool needsClientPreparation = NeedsClientPreparation(_clientStatusText);
+            bool invalidRecovery = ClientCheckFailed(_clientStatusText);
+            bool needsRepair = target != null && (!target.IsInstalled || _shortcutIssue != null || needsClientPreparation || invalidRecovery);
+            bool hasBinaryPatch = needsClientPreparation || (_clientStatusText != null && _clientStatusText.StartsWith("Патч: применён", StringComparison.OrdinalIgnoreCase));
             bool hasPatchRecords = target != null && (_shortcutRecords > 0 || _shortcutIssue != null || hasBinaryPatch || _selectedPersistentPatch);
-            bool isPatched = hasPatchRecords && string.IsNullOrEmpty(_shortcutIssue);
-            bool canUnpatch = hasPatchRecords;
-            _patchMenuItem.Visible = true;
-            _patchMenuItem.Enabled = canPatch;
-            if (_unpatchMenuItem != null) _unpatchMenuItem.Enabled = canUnpatch;
+            _patchAppAction.Enabled = canPatch;
+            _unpatchAppAction.Enabled = hasPatchRecords;
+            _checkAppAction.Visible = needsRepair;
+            _checkAppAction.Enabled = needsRepair;
             _stopAppItem.Enabled = running;
             _removeAppItem.Enabled = target != null && target.IsCustom;
-            _restoreShortcutItem.Enabled = _shortcutRecords > 0 || _shortcutIssue != null;
-            _clientPreparationItem.Enabled = target != null && target.IsInstalled && AntigravityIntegration.Supports(target.ExePath);
-            string state = target == null ? "Выберите приложение" : !target.IsInstalled ? "Не установлено" :
-                running ? "Запущено через Dagami" : "Не запущено через Dagami";
+            string state = target == null ? "Процесс: выберите приложение" : !target.IsInstalled ? "Процесс: файл не найден" :
+                running ? "Процесс: запущен через Dagami" : "Процесс: вне сессии Dagami";
             if (target != null && _targetList != null && _targetList.SelectedItems.Count > 0 && _targetList.SelectedItems[0].SubItems.Count > 1) {
-                string listStatus = !target.IsInstalled ? "Не найдено" : !string.IsNullOrEmpty(_shortcutIssue) ? "Требует восстановления" : (isPatched ? "Настроено" : "Готово к запуску");
+                string listStatus = !target.IsInstalled ? "Не найдено" : needsRepair ? "Проверить запуск" : hasPatchRecords ? "Настроено" : "Готово к запуску";
                 if (_targetList.SelectedItems[0].SubItems[1].Text != listStatus) _targetList.SelectedItems[0].SubItems[1].Text = listStatus;
             }
             _targetDetails.Text = state;
+            UpdateAppRunStatus(target, running ? session : null);
             _shortcutExplanation.Text = target == null ? "Выберите приложение, чтобы настроить его ярлыки." : _shortcutIssue != null ?
-                (_shortcutIssue.TrimEnd('.') + ". Выберите «Действия → Настроить обычный запуск».") :
+                (_shortcutIssue.TrimEnd('.') + ". Нажмите «Проверить и восстановить».") : needsClientPreparation ?
+                "Нажмите «Проверить и восстановить», верните исходный клиент и снова нажмите «Пропатчить»." : invalidRecovery ?
+                "Dagami не смог проверить данные Antigravity. Нажмите «Проверить и восстановить» для подробностей." :
+                !target.IsInstalled ? "Нажмите «Проверить и восстановить», чтобы обновить список установленных приложений." :
                 (_shortcutRecords > 0 ? "Открывайте настроенный ярлык: Dagami запустится в фоне." :
-                "Настройте обычный запуск в меню «Действия», затем используйте ярлык.");
-            bool cli=NativeCliApps.IsCommandTarget(target);
+                "Нажмите «Пропатчить», чтобы настроить обычный запуск через Dagami.");
 
             if (target != null && target.IsInstalled) {
-                _shortcutState.Text = !string.IsNullOrEmpty(_shortcutIssue) ? "Требует восстановления · " + _shortcutIssue : isPatched ? ((_shortcutRecords > 0 && _shortcutIssue == null) ? "Статус: ПРОПАТЧЕНО · " + (cli ? "команда настроена через прокси" : "ярлыки настроены через прокси") : "Статус: Частичный патч · Требуется обновить " + (cli ? "команду" : "ярлыки")) : "Статус: НЕ ПРОПАТЧЕНО · " + (cli ? "прямой запуск команды" : "обычные ярлыки напрямую");
+                string launcher = cli ? "Команда CLI" : "Ярлыки";
+                _shortcutState.Text = launcher + ": " + (_shortcutIssue != null ? "проверьте настройку запуска" :
+                    _shortcutRecords > 0 ? "настроен запуск через Dagami" : "обычный запуск");
             } else { _shortcutState.Text = "Статус: не установлено"; }
 
 
             if(target!=null&&ApplicationSupport.Kind(target)=="git")_shortcutState.Text="Команда dagami-git: " + (_shortcutRecords > 0 && _shortcutIssue == null ? "настроена" : "не настроена");
             if(_blockAntigravityUpdates!=null){_updatingBlockUpdates=true;_blockAntigravityUpdates.Checked=ConfigManager.Instance.BlockAntigravityUpdates;_blockAntigravityUpdates.Visible=target==null||AntigravityIntegration.Supports(target.ExePath);_updatingBlockUpdates=false;}
             if(_clientPreparationStatus!=null)_clientPreparationStatus.Text=_clientStatusText==null?"":(_clientStatusText+(ConfigManager.Instance.BlockAntigravityUpdates?" · Обновления через мост: блокируются":" · Обновления через мост: разрешены"));
-            if(cli&&_shortcutIssue==null)_shortcutExplanation.Text=_shortcutRecords>0?"Команда настроена. Перезапустите терминал; прямой путь к EXE обходит запускатель.":"Настройте обычную команду CLI, затем перезапустите терминал.";
-            _restoreShortcutItem.Text=cli?"Восстановить прямой запуск команды":"Восстановить обычные ярлыки";
-            if (running) _shortcutExplanation.Text = "Сессия активна (просто закрыть окно недостаточно — остаются фоновые процессы). Для отзыва или применения патча выберите «Действия → Остановить».";
+            if(cli&&!needsRepair)_shortcutExplanation.Text=_shortcutRecords>0?"Команда настроена. Перезапустите терминал.":"Нажмите «Пропатчить», затем перезапустите терминал.";
+            if (running && !needsRepair) _shortcutExplanation.Text = "Чтобы завершить сессию, откройте контекстное меню строки приложения и выберите «Остановить».";
         }
 
+        private static bool NeedsClientPreparation(string status) {
+            return status == "Патч: требуется повторная подготовка CLI / IDE" || status == "Патч: частично применён";
+        }
 
-        private void AddNativeButton(Control parent, string text, Action action)
+        private static bool ClientCheckFailed(string status) {
+            return status == "Патч: не удалось проверить данные восстановления" || status == "Патч: не удалось проверить";
+        }
+
+        private FluentButton AddNativeButton(Control parent, string text, Action action)
         {
             var button = new FluentButton { Text = text, AutoSize = true, Height = 34, Primary = false };
             button.Click += (s, e) => {
@@ -500,6 +718,7 @@ namespace DevProxyApp
             };
             _nativeButtons.Add(button);
             parent.Controls.Add(button);
+            return button;
         }
 
         private void SetNativeButtonsEnabled(bool enabled)
@@ -552,7 +771,7 @@ namespace DevProxyApp
             bool obfuscation = _dnsObfuscation != null ? _dnsObfuscation.Checked : ConfigManager.Instance.DnsObfuscation;
             string dpiMode = _dpiModeBox != null ? DpiModeValue(_dpiModeBox.SelectedIndex) : ConfigManager.Instance.DpiDesyncMode;
             bool blockUpdates = _blockAntigravityUpdates != null ? _blockAntigravityUpdates.Checked : ConfigManager.Instance.BlockAntigravityUpdates;
-            bool systemEnvironment = _systemEnvironment.Checked, prepareClient = _prepareAntigravity.Checked;
+            bool prepareClient = _prepareAntigravity.Checked;
             bool proxyChanged = proxy != ConfigManager.Instance.LastProxy || useProxy != ConfigManager.Instance.UseProxy;
             bool routeChanged = dns != ConfigManager.Instance.DnsHost || useDns != ConfigManager.Instance.UseDagamiDns;
             if ((proxyChanged || routeChanged) && !EnsureSessionsStoppedForRouteChange()) {
@@ -562,7 +781,6 @@ namespace DevProxyApp
                 cfg.LastProxy = proxy; cfg.UseProxy = useProxy; cfg.DnsHost = dns; cfg.UseDagamiDns = useDns;
                 cfg.DnsObfuscation = obfuscation; cfg.DpiDesyncMode = dpiMode;
                 cfg.BlockAntigravityUpdates = blockUpdates;
-                cfg.SetSystemEnv = systemEnvironment;
                 cfg.PrepareAntigravityClient = prepareClient;
             });
             if (proxyChanged || routeChanged || _bridgePort <= 0) RestartRescueBridge();
@@ -594,8 +812,8 @@ namespace DevProxyApp
             BeginInvoke(new Action(() => {
                 _nativeColumnsPending = false;
                 if (_targetList.IsDisposed) return;
-                int statusWidth = Math.Max(130, TextRenderer.MeasureText("Требует восстановления", _targetList.Font).Width + 20);
-                _targetList.Columns[0].Width=Math.Max(180,_targetList.ClientSize.Width-statusWidth-10);
+                int statusWidth = Math.Max(144, TextRenderer.MeasureText("Проверить запуск", _targetList.Font).Width + 32);
+                _targetList.Columns[0].Width=Math.Max(180,_targetList.ClientSize.Width-statusWidth);
                 _targetList.Columns[1].Width=statusWidth;_targetList.Columns[2].Width=0;
             }));
         }
@@ -701,7 +919,7 @@ namespace DevProxyApp
                 _targetList.Items.Clear();
                 foreach (AppTarget target in _cachedTargets) {
                     var item = new ListViewItem(target.DisplayName) { Tag = target };
-                    item.SubItems.Add(!target.IsInstalled ? "Не найдено" : _damagedTargets.Contains(target.Id) ? "Требует восстановления" : (patched.Contains(target.Id) ? "Настроено" : "Готово к запуску"));
+                    item.SubItems.Add(!target.IsInstalled ? "Не найдено" : _damagedTargets.Contains(target.Id) ? "Проверить запуск" : (patched.Contains(target.Id) ? "Настроено" : "Готово к запуску"));
                     item.SubItems.Add(target.ExePath ?? "");
                     item.ToolTipText = (target.ExePath ?? target.DisplayName)+"\r\n"+ApplicationSupport.Describe(target);
                     item.Checked = ConfigManager.Instance.CheckedIds.Contains(target.Id);
@@ -726,7 +944,7 @@ namespace DevProxyApp
             _selectedPersistentPatch = false;
             if (_targetList.SelectedItems.Count > 0) {
                 AppTarget target = (AppTarget)_targetList.SelectedItems[0].Tag;
-                try { _shortcutRecords = NativeCliApps.IsCommandTarget(target)?NativeCliApps.Current.VerifiedCount(target.Id,out _shortcutIssue):NativeShortcuts.Current.VerifiedCount(target.Id, out _shortcutIssue); }
+                try { _shortcutRecords = NativeCliApps.IsCommandTarget(target)?NativeCliApps.Current.VerifiedCount(target.Id,out _shortcutIssue):NativeShortcuts.Current.VerifiedCount(target.Id, target, out _shortcutIssue); }
                 catch (Exception) { _shortcutIssue = "Не удалось прочитать настройки ярлыков. Откройте журнал для проверки."; }
                 try { _selectedPersistentPatch=target.IsInstalled&&_shortcutRecords==0&&_shortcutIssue==null&&HasPersistentAppChanges(target); }
                 catch { _shortcutIssue="Не удалось прочитать состояние настройки приложения."; }
@@ -750,11 +968,15 @@ namespace DevProxyApp
                 bool needsPairing = managed && !paired;
                 string route = managed ? "Прокси Dagami" : config.UseProxy && !IsDirectProxyValue(config.LastProxy)
                     ? (config.PublicProxySelected ? "Публичный прокси" : "Свой прокси") : config.UseDagamiDns ? "Smart DNS" : "Системный маршрут / VPN";
-                string routeState = route + (needsPairing ? " · ожидает привязки в Telegram" : _bridgePort > 0 ? " · мост запущен" : "");
+                string routeState = route;
+                if (managed) routeState += needsPairing ? (_activationKeySaved ? " · ключ сохранён, ожидает активации" : " · требуется активация ключа") :
+                    _bridgePort > 0 ? " · устройство привязано, локальный мост запущен" : " · устройство привязано, локальный мост остановлен";
+                else if (!paired && _activationKeySaved) routeState += " · ключ Dagami ожидает активации";
                 if (!string.IsNullOrEmpty(config.LastLoadError)) routeState = "Не удалось загрузить настройки. Сохраните подключение заново.";
-                _connectionSummary.Text = routeState + " · для всех запусков через Dagami";
+                _connectionSummary.Text = routeState;
                 RefreshWindowsProxyStatus(routeState);
-                if (_managedRouteAction != null) _managedRouteAction.Text = paired && !managed ? "Использовать Dagami" : "Подключить по ключу";
+                if (_managedRouteAction != null) _managedRouteAction.Text = paired
+                    ? (managed ? "Заменить ключ" : "Использовать Dagami") : _activationKeySaved ? "Активировать ключ" : "Подключить по ключу";
                 _connectionAction.Text = needsPairing ? "Подключить" : "Настройки";
             }
 
@@ -818,7 +1040,7 @@ namespace DevProxyApp
             AppTarget target = SelectedNativeTarget();
             if (!target.IsCustom) throw new InvalidOperationException("Из списка можно удалить только добавленные вручную приложения.");
             NativeSession active;
-            if(_nativeSessions.TryGetValue(target.Id,out active)&&active.RunningProcess!=null)throw new InvalidOperationException("Сначала остановите приложение через «Действия → Остановить».");
+            if(_nativeSessions.TryGetValue(target.Id,out active)&&active.RunningProcess!=null)throw new InvalidOperationException("Сначала выберите «Остановить» в контекстном меню строки приложения.");
             if(TargetPatchState(target)!="none")throw new InvalidOperationException("Сначала нажмите «Отменить патч». Удаление записи не должно оставлять управляемые ярлыки или команду CLI без возможности отката.");
             int position=ConfigManager.Instance.CustomTargets.IndexOf(target);
             bool wasChecked=ConfigManager.Instance.CheckedIds.Remove(target.Id);
@@ -834,13 +1056,16 @@ namespace DevProxyApp
 
         private void ShowNativeWindow()
         {
-            if (!_preview && !LicenseManager.IsActivated() && ManagedAccess.ReadDeferredKey()==null) {
-                using (var activation = new ActivationForm()) {
-                    var result=activation.ShowDialog();
-                    if (result != DialogResult.OK && result != DialogResult.Retry) {
-                        return;
+            if (!_preview && !LicenseManager.IsActivated()) {
+                _activationKeySaved = ManagedAccess.ReadDeferredKey() != null;
+                if (!_activationKeySaved) {
+                    using (var activation = new ActivationForm()) {
+                        var result = activation.ShowDialog();
+                        if (result != DialogResult.OK && result != DialogResult.Retry) return;
+                        _activationKeySaved = result == DialogResult.Retry;
                     }
                 }
+                UpdateNativeStatus();
             }
             Opacity = 1;
             ShowInTaskbar = true;

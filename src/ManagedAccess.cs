@@ -20,7 +20,7 @@ namespace DevProxyApp {
   public const string BotLink = BotChat + "?start=dagami_";
   public const string BotKeyLink = BotChat + "?start=dagamikey";
   public const string Bootstrap = "https://test-dns.dagami.ru:9443";
-  const string FallbackIp = "31.76.61.24";
+  const string FallbackIp = "48.102.213.179";
   static readonly Uri BootstrapUri = new Uri(Bootstrap);
   static long fallbackUntil;
   static readonly ConcurrentDictionary<Uri,GatewayClock> Clocks=new ConcurrentDictionary<Uri,GatewayClock>();

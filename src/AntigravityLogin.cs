@@ -208,9 +208,14 @@ namespace DevProxyApp
 
 
         public static string FindBrowser()
-
         {
+            foreach (string path in InstalledBrowsers()) return path;
+            throw new InvalidOperationException("Установленный Chrome, Edge, Brave или Яндекс Браузер не найден.");
+        }
 
+        internal static System.Collections.Generic.IEnumerable<string> InstalledBrowsers()
+        {
+            var seen = new System.Collections.Generic.HashSet<string>(StringComparer.OrdinalIgnoreCase);
             foreach (string folder in new string[] { Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles),
 
                     Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86), Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData) })
@@ -221,11 +226,9 @@ namespace DevProxyApp
 
                     string path = Path.Combine(folder, relative);
 
-                    if (File.Exists(path)) return path;
+                    if (File.Exists(path) && seen.Add(Path.GetFileName(path))) yield return path;
 
                 }
-
-            throw new InvalidOperationException("Установленный Chrome, Edge, Brave или Яндекс Браузер не найден.");
 
         }
 

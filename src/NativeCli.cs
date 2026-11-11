@@ -51,7 +51,18 @@ namespace DevProxyApp {
                 return true;
             }
             if(command=="doctor"){
-                if(args.Length!=1)throw new ArgumentException("doctor — состояние без изменения настроек; diagnose error REPORT.log — объяснение ошибки.");
+                if(args.Length>2)throw new ArgumentException("doctor [APP_ID | --apps]");
+                if(args.Length==2) {
+                    var targets=ProxyEngine.ScanAllTargets();
+                    if(args[1]=="--apps") {
+                        Console.WriteLine(new JavaScriptSerializer().Serialize(targets.ConvertAll(target=>new{app=target.Id,installed=target.IsInstalled})));
+                        return true;
+                    }
+                    var diagnosedTarget=targets.Find(target=>string.Equals(target.Id,args[1],StringComparison.OrdinalIgnoreCase));
+                    if(diagnosedTarget==null)throw new ArgumentException("Приложение не найдено. Список идентификаторов: doctor --apps.");
+                    Console.WriteLine(AppDoctorJson(diagnosedTarget,ConfigManager.Instance));
+                    return true;
+                }
                 DnsProviders.Initialize(null,false);
                 var config=ConfigManager.Instance;Uri proxy;var pool=DnsProviders.ForServer(config.DnsHost);
                 bool configured=ManagedAccess.IsProfile(config.LastProxy)?ManagedAccess.HasActiveDevice():UpstreamProxyDiagnostics.TryParse(config.LastProxy,out proxy);
@@ -173,6 +184,32 @@ namespace DevProxyApp {
                 paths=NativeAppPatcher.RestoreWithLauncher(app,()=>NativeCliApps.IsCommandTarget(app)?NativeCliApps.Current.Restore(app.Id):store.Restore(app.Id));
             }
             foreach(string path in paths)Console.WriteLine(path);Console.WriteLine("Файлов запуска: "+paths.Count);return true;
+        }
+
+        internal static string AppDoctorJson(AppTarget target, ConfigManager config) {
+            var check=MainForm.CheckAppFiles(target);
+            bool managed=config.UseProxy && ManagedAccess.IsProfile(config.LastProxy);
+            bool configured=string.IsNullOrEmpty(config.LastLoadError) &&
+                MainForm.HasConfiguredConnection(config.LastProxy,config.UseDagamiDns,config.UseProxy);
+            string next;
+            if(!check.Installed)next="Обновите список приложений или укажите файл вручную.";
+            else if(check.CanRepairLauncher)next="Выберите приложение в Dagami и нажмите «Проверить и восстановить».";
+            else if(check.LauncherReadFailed)next="Откройте журнал Dagami и проверьте настройки запуска.";
+            else if(check.ClientStatus=="Патч: требуется повторная подготовка CLI / IDE" ||
+                    check.ClientStatus=="Патч: не удалось проверить данные восстановления")
+                next="Откройте «Проверить и восстановить» для выбранного приложения.";
+            else if(!configured)next="Откройте «Подключение» в Dagami.";
+            else next="Для проверки сетевого маршрута откройте «Диагностика» в Dagami.";
+
+            return new JavaScriptSerializer().Serialize(new {
+                version=Brand.ReleaseTag, app=target.Id, installed=check.Installed,
+                launcher=check.Launcher, launcherNeedsAttention=check.CanRepairLauncher||check.LauncherReadFailed,
+                antigravityPreparation=check.ClientStatus,
+                connectionConfigured=configured, configurationError=!string.IsNullOrEmpty(config.LastLoadError),
+                proxyEnabled=config.UseProxy, dnsEnabled=config.UseDagamiDns,
+                managedDevicePaired=managed?(bool?)ManagedAccess.HasActiveDevice():null,
+                routeChecked=false, modelResponseVerified=false, next=next
+            });
         }
 
         // Classify a supplied report without echoing account tokens, paths or its body.

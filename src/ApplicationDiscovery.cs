@@ -18,6 +18,49 @@ namespace DevProxyApp {
    return null;
   }
   public const string CodexPackageFamily = "OpenAI.Codex_2p2nqsd0c76g0";
+  const string CodexDesktopAlias = "chatgpt-desktop.exe";
+  [StructLayout(LayoutKind.Sequential, CharSet=CharSet.Unicode)]
+  struct FindData {
+   public uint Attributes;
+   public System.Runtime.InteropServices.ComTypes.FILETIME Creation, Access, Write;
+   public uint SizeHigh, SizeLow, ReparseTag, Reserved;
+   [MarshalAs(UnmanagedType.ByValTStr,SizeConst=260)] public string FileName;
+   [MarshalAs(UnmanagedType.ByValTStr,SizeConst=14)] public string AlternateFileName;
+  }
+  [DllImport("kernel32.dll",CharSet=CharSet.Unicode,ExactSpelling=true)]
+  static extern IntPtr FindFirstFileW(string path,out FindData data);
+  [DllImport("kernel32.dll")]
+  static extern bool FindClose(IntPtr handle);
+
+  public static string CodexPackageRoot(AppTarget target) {
+   if(target==null||target.Id!="codex-gui"||string.IsNullOrEmpty(target.ExePath))return null;
+   for(string dir=Path.GetDirectoryName(target.ExePath);!string.IsNullOrEmpty(dir);dir=Path.GetDirectoryName(dir)) {
+    string name=Path.GetFileName(dir),parent=Path.GetDirectoryName(dir);
+    if(name.StartsWith("OpenAI.Codex_",StringComparison.OrdinalIgnoreCase)&&
+       name.EndsWith("__2p2nqsd0c76g0",StringComparison.OrdinalIgnoreCase)&&
+       string.Equals(Path.GetFileName(parent),"WindowsApps",StringComparison.OrdinalIgnoreCase))return dir;
+   }
+   return null;
+  }
+
+  public static bool UseCodexDesktopAlias(ProcessStartInfo start, AppTarget target) {
+   string root=CodexPackageRoot(target);
+   if(root==null)return false;
+   string alias=Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+     @"Microsoft\WindowsApps",CodexPackageFamily,CodexDesktopAlias);
+   FindData data;
+   IntPtr handle=FindFirstFileW(alias,out data);
+   if(handle==new IntPtr(-1))return false;
+   FindClose(handle);
+   if((data.Attributes & (uint)FileAttributes.ReparsePoint)==0||data.ReparseTag!=0x8000001B)return false;
+   start.FileName=alias;
+   return true;
+  }
+
+  public static string PreviousCodexPackageRoot(AppTarget target, string previousExecutable) {
+   if(CodexPackageRoot(target)==null)return null;
+   return CodexPackageRoot(new AppTarget{Id=target.Id,ExePath=previousExecutable});
+  }
   [DllImport("kernel32.dll",CharSet=CharSet.Unicode,ExactSpelling=true)]
   static extern int GetPackagesByPackageFamily(string family,ref uint count,[Out] IntPtr[] names,ref uint length,IntPtr buffer);
   [DllImport("kernel32.dll",CharSet=CharSet.Unicode,ExactSpelling=true)]

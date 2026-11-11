@@ -29,6 +29,9 @@ namespace DevProxyApp {
  public static class DnsProviders {
   static readonly object Sync=new object();
   static readonly string[] ProviderIds={"dagami","magicdns"};
+  const string DagamiDohIp="31.76.52.235";
+  const string DagamiPublicDohIp="48.102.213.179";
+  const string RetiredDagamiIp="31.76.61.24";
   static readonly Dictionary<string,string> Hosts=new Dictionary<string,string>{
    {"dagami","doh.dagami.ru"},
    {"magicdns","dns.magicdns.ru"},
@@ -53,9 +56,24 @@ namespace DevProxyApp {
 
   static List<DnsEndpoint> Seeds(){
    var result=new List<DnsEndpoint>();
-   foreach(string address in new[]{"31.76.61.24"})result.Add(new DnsEndpoint("dagami",address,Hosts["dagami"]));
+   result.Add(ProviderEndpoint("dagami",DagamiPublicDohIp));
+   result.Add(ProviderEndpoint("dagami",DagamiDohIp));
    foreach(string address in new[]{"2.56.175.196","109.120.132.43","94.249.177.102"})result.Add(new DnsEndpoint("magicdns",address,Hosts["magicdns"]));
    return result;
+  }
+
+  static DnsEndpoint ProviderEndpoint(string provider,string address){
+   string host=provider=="dagami"&&address==DagamiPublicDohIp?"dns.dagami.ru":Hosts[provider];
+   return new DnsEndpoint(provider,address,host);
+  }
+
+  static void IncludeDagamiSeeds(List<string> addresses){
+   addresses.Remove(RetiredDagamiIp);
+   addresses.Remove(DagamiPublicDohIp);
+   addresses.Insert(0,DagamiPublicDohIp);
+   if(!addresses.Contains(DagamiDohIp))addresses.Add(DagamiDohIp);
+   for(int index=addresses.Count-1;addresses.Count>8&&index>=0;index--)
+    if(addresses[index]!=DagamiDohIp&&addresses[index]!=DagamiPublicDohIp)addresses.RemoveAt(index);
   }
 
   public static DnsEndpoint[] BuiltInExtraSeeds(){
@@ -95,13 +113,14 @@ namespace DevProxyApp {
   public static DnsEndpoint[] ForServer(string server){
    string value=(server??"").Trim().TrimEnd('.');
    string provider=MatchBuiltInProvider(value);
-   if(Array.Exists(new[]{"89.22.224.205","89.125.103.139","45.147.31.32","46.29.165.108"},x=>x==value))provider="dagami";
+   if(Array.Exists(new[]{"89.22.224.205","89.125.103.139","45.147.31.32","46.29.165.108",RetiredDagamiIp},x=>x==value))provider="dagami";
    foreach(var endpoint in Seeds())if(value==endpoint.Address)provider=endpoint.Provider;
-   foreach(var endpoint in Snapshot())if(value==endpoint.Address)provider=endpoint.Provider;
+   var snapshot=Snapshot();
+   foreach(var endpoint in snapshot)if(value==endpoint.Address)provider=endpoint.Provider;
    if(provider=="dagami"||provider=="magicdns"){
     var result=new List<DnsEndpoint>();
-    foreach(var endpoint in Snapshot())if(endpoint.Provider==provider&&endpoint.Address==value)result.Add(endpoint);
-    foreach(string id in ProviderIds)foreach(var endpoint in Snapshot())if((provider=="dagami"||id==provider)&&endpoint.Provider==id&&!result.Exists(x=>x.Address==endpoint.Address))result.Add(endpoint);
+    foreach(var endpoint in snapshot)if(endpoint.Provider==provider&&endpoint.Address==value)result.Add(endpoint);
+    foreach(string id in ProviderIds)foreach(var endpoint in snapshot)if((provider=="dagami"||id==provider)&&endpoint.Provider==id&&!result.Exists(x=>x.Address==endpoint.Address))result.Add(endpoint);
     return result.ToArray();
    }
    foreach(var endpoint in BuiltInExtraSeeds())if(value==endpoint.Address)provider=endpoint.Provider;
@@ -414,17 +433,14 @@ namespace DevProxyApp {
     var errors=new List<string>();
     foreach(string provider in ProviderIds)try{
      var addresses=new List<string>(ParseProfile(provider,(download??DownloadProfile)(provider)));
-     if(provider=="dagami"){
-      var reserved=new HashSet<string>();foreach(var seed in Seeds())if(seed.Provider==provider){reserved.Add(seed.Address);if(!addresses.Contains(seed.Address))addresses.Add(seed.Address);}
-      for(int index=addresses.Count-1;addresses.Count>8&&index>=0;index--)if(!reserved.Contains(addresses[index]))addresses.RemoveAt(index);
-     }
+     if(provider=="dagami")IncludeDagamiSeeds(addresses);
      var healthy=new List<DnsEndpoint>();
      if(verify!=null){
-      foreach(string address in addresses){var candidate=new DnsEndpoint(provider,address,Hosts[provider]);if(verify(candidate))healthy.Add(candidate);else Logger.Log("[DNS catalogue] provider="+provider+" rejected="+address+" (DoH verification)");}
+      foreach(string address in addresses){var candidate=ProviderEndpoint(provider,address);if(verify(candidate))healthy.Add(candidate);else Logger.Log("[DNS catalogue] provider="+provider+" rejected="+address+" (DoH verification)");}
      }else{
       bool[] ok=new bool[addresses.Count];
-      System.Threading.Tasks.Parallel.For(0,addresses.Count,i=>{var candidate=new DnsEndpoint(provider,addresses[i],Hosts[provider]);try{int ttl;byte[] query=DnsHttpsTransport.Question("example.com");ScopedDnsResolver.ParseAnswer(DnsHttpsTransport.Exchange(candidate,query,2500),new byte[]{0,0},"example.com",out ttl);ok[i]=true;}catch{ok[i]=false;}});
-      for(int i=0;i<addresses.Count;i++){var candidate=new DnsEndpoint(provider,addresses[i],Hosts[provider]);if(ok[i])healthy.Add(candidate);else Logger.Log("[DNS catalogue] provider="+provider+" rejected="+addresses[i]+" (DoH verification)");}
+      System.Threading.Tasks.Parallel.For(0,addresses.Count,i=>{var candidate=ProviderEndpoint(provider,addresses[i]);try{int ttl;byte[] query=DnsHttpsTransport.Question("example.com");ScopedDnsResolver.ParseAnswer(DnsHttpsTransport.Exchange(candidate,query,2500),new byte[]{0,0},"example.com",out ttl);ok[i]=true;}catch{ok[i]=false;}});
+      for(int i=0;i<addresses.Count;i++){var candidate=ProviderEndpoint(provider,addresses[i]);if(ok[i])healthy.Add(candidate);else Logger.Log("[DNS catalogue] provider="+provider+" rejected="+addresses[i]+" (DoH verification)");}
      }
      if(healthy.Count==0)throw new IOException("No verified DoH endpoints in the official profile.");
      lock(Sync){var combined=new List<DnsEndpoint>();foreach(string id in ProviderIds)if(id==provider)combined.AddRange(healthy);else combined.AddRange(endpoints.FindAll(x=>x.Provider==id));endpoints=combined;}
@@ -458,9 +474,18 @@ namespace DevProxyApp {
    if(!File.Exists(cachePath)||new FileInfo(cachePath).Length>32768)return;
    var json=new JavaScriptSerializer{MaxJsonLength=32768};var saved=json.Deserialize<Dictionary<string,object>>(File.ReadAllText(cachePath));
    if(Convert.ToInt32(saved["Version"])!=1)return;var values=new List<DnsEndpoint>();
-   foreach(string provider in ProviderIds){var list=(System.Collections.IEnumerable)saved[provider];int count=0;foreach(object item in list){string address=Convert.ToString(item);if(!PublicAddress(address)||++count>8)throw new InvalidDataException("Invalid cached DNS endpoint.");if(!values.Exists(x=>x.Address==address))values.Add(new DnsEndpoint(provider,address,Hosts[provider]));}if(count==0)throw new InvalidDataException("Empty cached provider.");}
-   // A stale cache must not hide the last known official bootstrap address.
-   foreach(var seed in Seeds())if(seed.Provider=="dagami"&&!values.Exists(x=>x.Provider=="dagami"&&x.Address==seed.Address))values.Insert(0,seed);
+   foreach(string provider in ProviderIds){
+    var list=(System.Collections.IEnumerable)saved[provider];
+    var addresses=new List<string>();int count=0;
+    foreach(object item in list){
+     string address=Convert.ToString(item);
+     if(!PublicAddress(address)||++count>8)throw new InvalidDataException("Invalid cached DNS endpoint.");
+     if(!addresses.Contains(address))addresses.Add(address);
+    }
+    if(count==0)throw new InvalidDataException("Empty cached provider.");
+    if(provider=="dagami")IncludeDagamiSeeds(addresses);
+    foreach(string address in addresses)values.Add(ProviderEndpoint(provider,address));
+   }
    lock(Sync)endpoints=values;
   }catch{}}
   static void Save(){if(cachePath==null)return;string temporary=null;try{

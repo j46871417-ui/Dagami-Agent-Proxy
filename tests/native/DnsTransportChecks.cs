@@ -26,6 +26,79 @@ class DnsTransportChecks {
    output.Write(record,0,record.Length);return output.ToArray();
   }
  }
+ sealed class HttpFixture:MemoryStream {
+  public volatile bool Closed;
+  public int Requests;
+  public string LastHeader;
+  public HttpFixture(byte[] response):base(response){}
+  public override int WriteTimeout{get;set;}
+  public override void Write(byte[] bytes,int offset,int count) {
+   if(count>=5&&Encoding.ASCII.GetString(bytes,offset,5)=="POST "){
+    Requests++;
+    LastHeader=Encoding.ASCII.GetString(bytes,offset,count);
+   }
+  }
+  protected override void Dispose(bool disposing){Closed=true;base.Dispose(disposing);}
+ }
+ static byte[] HttpAnswer(byte[] query,string connection="keep-alive",string mode="valid",Func<string,string> rewrite=null){
+  byte[] body=Answer(query,mode);
+  string header="HTTP/1.1 200 OK\r\nContent-Type: application/dns-message\r\nContent-Length: "+body.Length+"\r\nConnection: "+connection+"\r\n\r\n";
+  byte[] headers=Encoding.ASCII.GetBytes(rewrite==null?header:rewrite(header));
+  var result=new byte[headers.Length+body.Length];Buffer.BlockCopy(headers,0,result,0,headers.Length);Buffer.BlockCopy(body,0,result,headers.Length,body.Length);return result;
+ }
+ static void CheckDohReuse(){
+  var exchange=typeof(DnsHttpsTransport).GetMethod("ExchangeDoh",BindingFlags.Static|BindingFlags.NonPublic);
+  var clear=typeof(DnsHttpsTransport).GetMethod("ClearDohPool",BindingFlags.Static|BindingFlags.NonPublic);
+  var query=DnsHttpsTransport.Question("example.test");
+  var response=HttpAnswer(query);
+  var two=new byte[response.Length*2];Buffer.BlockCopy(response,0,two,0,response.Length);Buffer.BlockCopy(response,0,two,response.Length,response.Length);
+  var first=new HttpFixture(two);var second=new HttpFixture(HttpAnswer(query,"close"));
+  int connects=0;
+  Func<int,Stream> connect=left=>++connects==1?first:second;
+  Action<string,Func<int,Stream>> sendTo=(host,open)=>exchange.Invoke(null,new object[]{"127.0.0.1",host,443,"/dns-query",query,2000,open});
+  Action send=()=>sendTo("fixture.invalid",connect);
+  try {
+   send();send();
+   Assert(connects==1&&first.Requests==2&&!first.Closed,"DoH did not reuse a framed connection");
+   send();
+   Assert(connects==2&&first.Closed&&second.Closed,"A stale DoH connection was not retried or a closing response was retained");
+   var invalid=new HttpFixture(HttpAnswer(query,"keep-alive","wrong-question"));
+   bool rejected=false;
+   try{sendTo("fixture.invalid",_=>invalid);}
+   catch(TargetInvocationException error){rejected=error.InnerException is InvalidDataException;}
+   Assert(rejected&&invalid.Closed,"An invalid DNS response was allowed into the connection pool");
+   var owned=new HttpFixture(response);var other=new HttpFixture(response);
+   sendTo("fixture.invalid",_=>owned);
+   sendTo("another.invalid",_=>other);
+   Assert(owned.Requests==1&&other.Requests==1,"DoH reused a connection across authorities");
+   clear.Invoke(null,null);
+   Assert(owned.Closed&&other.Closed,"Network change did not close idle DoH sessions");
+   var oldNetwork=new HttpFixture(response);
+   sendTo("fixture.invalid",_=>{clear.Invoke(null,null);return oldNetwork;});
+   Assert(oldNetwork.Closed,"DoH returned an active connection to the pool after a network change");
+   var closing=new HttpFixture(HttpAnswer(query,rewrite:header=>header.Replace("Connection: keep-alive","Connection: keep-alive\r\nConnection: CLOSE")));
+   sendTo("fixture.invalid",_=>closing);
+   Assert(closing.Closed,"DoH retained a connection with a duplicate close directive");
+   var customPort=new HttpFixture(HttpAnswer(query,"close"));
+   exchange.Invoke(null,new object[]{"127.0.0.1","fixture.invalid",8443,"/dns-query",query,2000,new Func<int,Stream>(_=>customPort)});
+   Assert(customPort.LastHeader.Contains("\r\nHost: fixture.invalid:8443\r\n"),"DoH request omitted the non-default port from Host");
+   Func<string,string>[] malformed={
+    header=>header.Replace("Connection:","Connection :"),
+    header=>header.Replace("Content-Length: ","Content-Length: +"),
+    header=>header.Replace("OK\r\n","OK\n"),
+   };
+   foreach(var rewrite in malformed) {
+    var fixture=new HttpFixture(HttpAnswer(query,rewrite:rewrite));
+    rejected=false;
+    try{sendTo("fixture.invalid",_=>fixture);}
+    catch(TargetInvocationException error){rejected=error.InnerException is InvalidDataException;}
+    Assert(rejected&&fixture.Closed,"DoH accepted malformed HTTP framing");
+   }
+   var expired=new HttpFixture(response);
+   sendTo("fixture.invalid",_=>expired);
+   Assert(SpinWait.SpinUntil(()=>expired.Closed,12500),"Idle DoH connection remained open without further requests");
+  } finally {clear.Invoke(null,null);}
+ }
  sealed class Server:IDisposable {
   readonly UdpClient udp; readonly TcpListener tcp; readonly Thread udpThread,tcpThread;
   public readonly IPEndPoint Endpoint; public int UdpQueries,TcpQueries; readonly string mode; volatile bool stopped;
@@ -95,9 +168,10 @@ class DnsTransportChecks {
   }}finally{upstream.Stop();worker.Join(1000);}
  }
  static int Main(){typeof(Logger).GetField("_logFilePath",BindingFlags.Static|BindingFlags.NonPublic).SetValue(null,Path.Combine(Path.GetTempPath(),"DnsTransportChecks-proxy.log"));try {
-  Assert(ScopedDnsResolver.ServerCandidates("DNS.DAGAMI.RU.").Length==4,"Dagami/MagicDNS default pool missing");
-  Assert(ScopedDnsResolver.ServerCandidates("31.76.61.24")[0]=="31.76.61.24","Chosen node lost priority");
-  Assert(ScopedDnsResolver.ServerCandidates("46.29.165.108")[0]=="31.76.61.24","Legacy node did not migrate to current Dagami bootstrap");
+  var defaults=ScopedDnsResolver.ServerCandidates("DNS.DAGAMI.RU.");
+  Assert(defaults.Length==5&&defaults[0]=="48.102.213.179"&&defaults[1]=="31.76.52.235","Dagami/MagicDNS default pool missing or out of order");
+  Assert(ScopedDnsResolver.ServerCandidates("31.76.52.235")[0]=="31.76.52.235","Chosen node lost priority");
+  Assert(ScopedDnsResolver.ServerCandidates("46.29.165.108")[0]=="48.102.213.179","Legacy node did not migrate to current Dagami bootstrap");
   Assert(ScopedDnsResolver.ServerCandidates("192.0.2.53").Length==1,"Custom DNS silently sent to Dagami");
   var priorityResolver=new ScopedDnsResolver("dns.dagami.ru");
   var pool=new[]{new DnsEndpoint("dagami","192.0.2.1","dns.example"),new DnsEndpoint("magicdns","192.0.2.2","dns.example")};
@@ -118,6 +192,7 @@ class DnsTransportChecks {
   CloudCodeUsesProxyWithSmartDnsOff();
   Assert(LocalProxyBridge.IsCloudCodeApiHost("DAILY-CLOUDCODE-PA.GOOGLEAPIS.COM.")&&!LocalProxyBridge.IsCloudCodeApiHost("daily-cloudcode-pa.googleapis.com.evil.invalid"),"Cloud Code host matching is not exact");
   using(var server=new Server("valid")){var resolver=Resolver(server);resolver.Resolve("www.googleapis.com");resolver.Resolve("www.googleapis.com");Assert(server.UdpQueries==2,"TTL zero answer was cached");bool rejected=false;try{resolver.Resolve("www.googleapis.com.attacker.invalid");}catch(InvalidOperationException){rejected=true;}Assert(rejected&&server.UdpQueries==2,"Unscoped host queried");}
-  Console.WriteLine("PASS "+checks+" DNS pool, UDP/TCP framing, truncation, failover/cooldown, TTL and reply validation checks (loopback only)");return 0;
+  CheckDohReuse();
+  Console.WriteLine("PASS "+checks+" DNS pool, DoH reuse, UDP/TCP framing, truncation, failover/cooldown, TTL and reply validation checks (local fixtures only)");return 0;
  }catch(Exception error){Console.Error.WriteLine(error);return 1;}}
 }

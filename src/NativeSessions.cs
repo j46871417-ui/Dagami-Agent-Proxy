@@ -233,13 +233,25 @@ namespace DevProxyApp
                 if(_updatePreparing)return "Готовится обновление Dagami. Повторите запуск после перезапуска.";
                 if (_patchInProgress) return "Идёт подготовка приложения. Дождитесь завершения и снова откройте ярлык.";
                 var target = _cachedTargets.Find(x => x.Id == request.TargetId);
-                if (target == null) { _cachedTargets = ProxyEngine.ScanAllTargets(); target = _cachedTargets.Find(x => x.Id == request.TargetId); }
+                if (target == null || (request.TargetId == "codex-gui" && !target.IsInstalled)) {
+                    _cachedTargets = ProxyEngine.ScanAllTargets();
+                    target = _cachedTargets.Find(x => x.Id == request.TargetId);
+                }
                 string arguments = "", directory = null;
                 if (!string.IsNullOrEmpty(request.ShortcutKey)) {
                     var record = NativeShortcuts.Current.Resolve(request.ShortcutKey, request.TargetId);
-                    if (target == null || !string.Equals(Path.GetFullPath(target.ExePath), record.Executable, StringComparison.OrdinalIgnoreCase))
-                        throw new InvalidOperationException("Путь приложения изменился. Заново настройте его обычные ярлыки в DevProxy.");
+                    if (target == null || !target.IsInstalled)
+                        throw new InvalidOperationException("Приложение из ярлыка не найдено. В Dagami выберите «Добавить → Обновить список установленных».");
                     arguments = record.Arguments; directory = record.WorkingDirectory;
+                    if (!string.Equals(Path.GetFullPath(target.ExePath), record.Executable, StringComparison.OrdinalIgnoreCase)) {
+                        string previousRoot = ApplicationDiscovery.PreviousCodexPackageRoot(target, record.Executable);
+                        if (previousRoot == null)
+                            throw new InvalidOperationException("Путь приложения изменился. Выберите его в Dagami и нажмите «Проверить и восстановить».");
+                        string expandedDirectory = Environment.ExpandEnvironmentVariables(directory ?? "");
+                        if (expandedDirectory.TrimEnd('\\').Equals(previousRoot, StringComparison.OrdinalIgnoreCase) ||
+                            expandedDirectory.StartsWith(previousRoot + "\\", StringComparison.OrdinalIgnoreCase)) directory = null;
+                        Logger.Log("[Shortcut] Codex MSIX updated; using the currently discovered package.");
+                    }
                 }
                 string error;
                 if (!LaunchTarget(target, arguments, directory, out error)) return error;
@@ -247,24 +259,20 @@ namespace DevProxyApp
                 UpdateNativeStatus(); return null;
             } catch (Exception ex) { Logger.Log("[Shortcut] " + ex.GetType().Name); return ex.Message; }
         }
-        void ConfigureNativeShortcuts(bool restore) {
+        void RepairNativeLauncher() {
             var target = SelectedNativeTarget();
-            if (!restore && !SaveNativeSettings()) return;
             if(NativeCliApps.IsCommandTarget(target)) {
-                if(restore)NativeCliApps.Current.Restore(target.Id);
-                else NativeCliApps.Current.Enable(target,Process.GetCurrentProcess().MainModule.FileName);
+                NativeCliApps.Current.Enable(target,Process.GetCurrentProcess().MainModule.FileName);
                 UpdateNativeDetails();
-                _appFeedback.Text=restore?"Прямой запуск CLI восстановлен. Перезапустите терминал.":"Обычная команда CLI настроена через прокси. Полностью перезапустите терминал.";
+                _appFeedback.Text="Команда CLI восстановлена. Перезапустите терминал.";
                 return;
             }
             var store = NativeShortcuts.Current;
-            List<string> paths = restore ? NativeAppPatcher.RestoreWithLauncher(target,()=>store.Restore(target.Id)) : store.EnablePrepared(target, Process.GetCurrentProcess().MainModule.FileName, NativeShortcuts.UserFolders(), () => {}, () => {}, true);
-            if (paths.Count == 0) throw new InvalidOperationException(restore ? "Настроенных обычных ярлыков нет." : "Ярлык не найден или не создан. Проверьте права на рабочий стол и повторите настройку.");
-            foreach (string path in paths) Logger.Log("[Shortcut] " + (restore ? "Восстановлен: " : "Прокси включён: ") + path);
+            List<string> paths = store.EnablePrepared(target, Process.GetCurrentProcess().MainModule.FileName, NativeShortcuts.UserFolders(), () => {}, () => {}, true);
+            if (paths.Count == 0) throw new InvalidOperationException("Ярлык не найден или не создан. Проверьте права на рабочий стол и повторите настройку.");
+            foreach (string path in paths) Logger.Log("[Shortcut] Восстановлен запуск через Dagami: " + path);
             UpdateNativeDetails();
-            System.Windows.Forms.MessageBox.Show(this, restore ? "Обычные ярлыки восстановлены. Запуск снова выполняется напрямую." :
-                "Готово. Открывайте приложение его обычным ярлыком на рабочем столе или в меню «Пуск». Dagami Agent Proxy запустится в фоне автоматически.\r\n\r\nПервый запуск после настройки: закройте копию приложения, открытую без Dagami Agent Proxy.",
-                "Dagami Agent Proxy — ярлыки", System.Windows.Forms.MessageBoxButtons.OK, System.Windows.Forms.MessageBoxIcon.Information);
+            _appFeedback.Text = "Ярлык восстановлен. Откройте приложение через него.";
         }
         void StopSelectedNativeSession() {
             var target = SelectedNativeTarget();StopNativeSession(target.Id);UpdateNativeStatus();

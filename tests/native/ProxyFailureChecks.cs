@@ -6,11 +6,76 @@ using System.Net.Sockets;
 using System.Text;
 using System.Threading;
 using System.Reflection;
+using System.Collections;
+using System.Linq.Expressions;
+using System.Threading.Tasks;
 using DevProxyApp;
 
 class ProxyFailureChecks {
  static int checks;
  static void Assert(bool ok,string message){checks++;if(!ok)throw new Exception(message);}
+ static void CheckAutomaticAiRoutes() {
+  var assembly=typeof(LocalProxyBridge).Assembly;
+  var route=assembly.GetType("DevProxyApp.AiRoute");
+  var chooser=assembly.GetType("DevProxyApp.AutomaticAiRoute");
+  var flags=BindingFlags.Static|BindingFlags.NonPublic;
+  var fields=BindingFlags.Instance|BindingFlags.NonPublic;
+  var candidates=chooser.GetMethod("Candidates",flags);
+  var select=chooser.GetMethod("Select",flags);
+  var name=route.GetField("Name",fields);
+  var dns=route.GetField("Dns",fields);
+  var proxy=route.GetField("Proxy",fields);
+  var publicFlag=route.GetField("PublicProxy",fields);
+  var parameter=Expression.Parameter(route);
+  Func<Func<object,string>,Delegate> probe=behavior=>Expression.Lambda(
+   typeof(Func<,>).MakeGenericType(route,typeof(string)),
+   Expression.Invoke(Expression.Constant(behavior),Expression.Convert(parameter,typeof(object))),parameter).Compile();
+  var plan=(IList)candidates.Invoke(null,new object[]{"Antigravity",null,true,"http://127.0.0.1:1234","dns.dagami.ru",true});
+  Assert((string)proxy.GetValue(plan[0])==ManagedAccess.Profile,"Automatic routing did not prefer the linked gateway");
+  int dnsDefaults=0;
+  object combo=null;
+  foreach(object item in plan) {
+   if((string)dns.GetValue(item)=="dns.dagami.ru"&&proxy.GetValue(item)==null)dnsDefaults++;
+   if(proxy.GetValue(item)!=null&&dns.GetValue(item)!=null)combo=item;
+  }
+  Assert(dnsDefaults==1&&combo!=null,"DNS deduplication or combined route is missing");
+  var nonGoogle=(IList)candidates.Invoke(null,new object[]{"Codex",null,false,"http://127.0.0.1:1234","dns.dagami.ru",false});
+  Assert(nonGoogle.Count==1&&dns.GetValue(nonGoogle[0])==null,"Codex was credited with an unrelated DNS route");
+  Assert(route.GetMethod("ProbeDns",fields).Invoke(combo,new object[]{"Gemini"})==null,"Gemini check ignores its proxy-only launcher");
+  var chosen=select.Invoke(null,new object[]{plan,probe(candidate=>Object.ReferenceEquals(candidate,combo)?null:"HTTP 403"),
+   new Func<string>(()=>{throw new Exception("Public source contacted with a verified private route");})});
+  var winner=chosen.GetType().GetField("Route",fields);
+  Assert(Object.ReferenceEquals(winner.GetValue(chosen),combo),"Failed route was chosen before verified alternative");
+  var none=select.Invoke(null,new object[]{plan,probe(candidate=>"HTTP 429"),null});
+  Assert(winner.GetValue(none)==null,"A throttled route was chosen with public fallback disabled");
+  int fetches=0;
+  var fallback=select.Invoke(null,new object[]{plan,probe(candidate=>"HTTP 502"),new Func<string>(()=>{fetches++;return "http://192.0.2.4:8080";})});
+  Assert(fetches==1&&(bool)publicFlag.GetValue(winner.GetValue(fallback)),"Public fallback failed or ran more than once");
+  var redirect=chooser.GetMethod("IsGoogleLoginRedirect",flags);
+  Assert((bool)redirect.Invoke(null,new object[]{302,"https://accounts.google.com/ServiceLogin"})&&
+   !(bool)redirect.Invoke(null,new object[]{302,"https://accounts.google.com.example.test/"})&&
+   !(bool)redirect.Invoke(null,new object[]{403,"https://accounts.google.com/ServiceLogin"}),"Region/error responses were accepted as Google login");
+  var activate=chooser.GetMethod("StartAndVerify",flags);
+  var steps=new List<string>();
+  Func<int> start=()=>{steps.Add("start");return 53125;};
+  Action save=()=>steps.Add("save");
+  Func<int,Task<string>> verify=port=>{
+   Assert(port==53125,"Activation tested a different bridge from the one it started");
+   steps.Add("verify");
+   return Task.FromResult<string>(null);
+  };
+  ((Task)activate.Invoke(null,new object[]{start,verify,save})).GetAwaiter().GetResult();
+  Assert(string.Join(",",steps)=="start,verify,save","Automatic setup did not save only after starting and verifying the active bridge");
+  steps.Clear();
+  bool rejected=false;
+  try {((Task)activate.Invoke(null,new object[]{start,new Func<int,Task<string>>(_=>Task.FromResult("HTTP 403")),save})).GetAwaiter().GetResult();}
+  catch(IOException){rejected=true;}
+  Assert(rejected&&!steps.Contains("save"),"A provisional bridge with an HTTP error was persisted");
+  rejected=false;
+  try {((Task)activate.Invoke(null,new object[]{new Func<int>(()=>0),verify,save})).GetAwaiter().GetResult();}
+  catch(IOException){rejected=true;}
+  Assert(rejected&&!steps.Contains("verify")&&!steps.Contains("save"),"A failed local bind was treated as an activated route");
+ }
  static string Header(Stream stream){var result=new MemoryStream();int state=0;while(state<4){int b=stream.ReadByte();if(b<0)throw new EndOfStreamException();result.WriteByte((byte)b);state=(state==0||state==2)?(b==13?state+1:0):(b==10?state+1:0);if(result.Length>16384)throw new IOException("Header overflow");}return Encoding.ASCII.GetString(result.ToArray());}
  static void Probe(int status) {
   var server=new TcpListener(IPAddress.Loopback,0);server.Start();Exception error=null;string request=null;int after=-2;
@@ -93,8 +158,24 @@ class ProxyFailureChecks {
   }}finally{server.Stop();worker.Join(1000);}
  }
  static int Main(){try {
+  CheckAutomaticAiRoutes();
   string builtInPac=SelectiveProxyRules.BuiltInPac(53200);
   Assert(builtInPac.Contains("gemini.google.com")&&builtInPac.Contains("ttvnw.net")&&!builtInPac.Contains("test-dns.dagami.ru"),"Packaged PAC rules are missing or route the gateway");
+  Assert(!builtInPac.Contains("PROXY 127.0.0.1:53200; DIRECT"),"Browser fallback leaked into Windows PAC");
+  string extension=Path.Combine(Path.GetTempPath(),"dagami-extension-"+Guid.NewGuid().ToString("N"));
+  try {
+   var export=typeof(SelectiveProxyRules).GetMethod("ExportBrowserExtension",BindingFlags.Static|BindingFlags.NonPublic);
+   export.Invoke(null,new object[]{extension,54321});
+   foreach(string name in new[]{"manifest.json","popup.html","popup.js","config.js","route.js","background.js"})
+    Assert(File.Exists(Path.Combine(extension,name)),"Missing extension file: "+name);
+   string config=File.ReadAllText(Path.Combine(extension,"config.js"));
+   Assert(config.Contains("\"port\":54321")&&config.Contains("PROXY 127.0.0.1:54321; DIRECT")&&config.Contains("gemini.google.com"),
+    "Exported extension lacks the selected port, rules or direct fallback");
+   export.Invoke(null,new object[]{extension,54322});
+   string updated=File.ReadAllText(Path.Combine(extension,"config.js"));
+   Assert(updated.Contains("PROXY 127.0.0.1:54322; DIRECT")&&!updated.Contains("54321; DIRECT"),
+    "Updating the exported extension retained the old bridge port");
+  } finally { if(Directory.Exists(extension))Directory.Delete(extension,true); }
   string pac=SelectiveProxyRules.GeneratePac(new[]{"exact.example",".sub.example"},53200);
   Assert(pac.Contains("host === \"exact.example\"")&&pac.Contains("dnsDomainIs(host, \".sub.example\")")&&pac.Contains("PROXY 127.0.0.1:53200")&&pac.Contains("return \"DIRECT\""),"Selective PAC rules invalid");
   foreach(string bad in new[]{"evil.example\";alert(1)",".com/other","localhost\nreturn DIRECT"}){bool denied=false;try{SelectiveProxyRules.GeneratePac(new[]{bad},53200);}catch(InvalidDataException){denied=true;}Assert(denied,"Unsafe PAC input accepted");}

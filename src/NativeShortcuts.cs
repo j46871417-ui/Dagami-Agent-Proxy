@@ -168,7 +168,7 @@ namespace DevProxyApp
                         records.Remove(record); changed = true; continue;
                     }
                     string current = Hash(File.ReadAllBytes(record.LinkPath));
-                    if (Same(record.Executable, target.ExePath) && current == record.PatchedHash) continue;
+                    if (MatchesExecutable(record, target) && current == record.PatchedHash) continue;
                     // A reinstalled app can recreate its original shortcut at the
                     // same path. Adopt it as a fresh original on an explicit patch.
                     object link = null;
@@ -194,6 +194,10 @@ namespace DevProxyApp
         public List<string> EnablePrepared(AppTarget target, string manager, IEnumerable<string> folders, Action prepare, Action rollback) {
             return EnablePrepared(target, manager, folders, prepare, rollback, false);
         }
+        static bool MatchesExecutable(ShortcutRecord record, AppTarget target) {
+            return Same(record.Executable, target.ExePath) ||
+                ApplicationDiscovery.PreviousCodexPackageRoot(target, record.Executable) != null;
+        }
         public List<string> EnablePrepared(AppTarget target, string manager, IEnumerable<string> folders, Action prepare, Action rollback, bool autoCreateShortcut) {
             return Locked(() => {
                 if (!target.IsInstalled || !File.Exists(manager)) throw new InvalidOperationException("Приложение или DevProxy не найдены.");
@@ -203,7 +207,7 @@ namespace DevProxyApp
                 var original = Load(); var previous = new HashSet<string>();
                 foreach (var record in original) {
                     previous.Add(record.Id);
-                    if (record.ApplicationId == target.Id && (!Same(record.Executable, target.ExePath) || !File.Exists(record.LinkPath) || Hash(File.ReadAllBytes(record.LinkPath)) != record.PatchedHash))
+                    if (record.ApplicationId == target.Id && (!MatchesExecutable(record, target) || !File.Exists(record.LinkPath) || Hash(File.ReadAllBytes(record.LinkPath)) != record.PatchedHash))
                         throw new InvalidOperationException("Обычный ярлык удалён или изменён: " + Path.GetFileName(record.LinkPath) + ". Проверьте ярлыки через «Ещё».");
                 }
                 bool found = false;string template=null;
@@ -319,12 +323,16 @@ namespace DevProxyApp
             return record;
         }
         public int VerifiedCount(string applicationId, out string issue) {
+            return VerifiedCount(applicationId, null, out issue);
+        }
+        internal int VerifiedCount(string applicationId, AppTarget target, out string issue) {
             issue = null; int count = 0;
             foreach (var record in Load()) {
                 if (record.ApplicationId != applicationId) continue;
                 count++;
-                if (!File.Exists(record.LinkPath) || Hash(File.ReadAllBytes(record.LinkPath)) != record.PatchedHash)
-                    issue = "Ярлык удалён или изменён. Проверьте ярлыки в меню «Ещё».";
+                if (!File.Exists(record.LinkPath)) issue = "Ярлык удалён или перемещён.";
+                else if (Hash(File.ReadAllBytes(record.LinkPath)) != record.PatchedHash) issue = "Ярлык изменён вне Dagami.";
+                else if (target != null && !MatchesExecutable(record, target)) issue = "Ярлык ссылается на прежний путь приложения.";
             }
             return count;
         }

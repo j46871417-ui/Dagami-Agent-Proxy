@@ -21,7 +21,7 @@ const BotURL = BotChat + "?start=dagami_"
 const BotKeyURL = BotChat + "?start=dagamikey"
 const Bootstrap = "https://test-dns.dagami.ru:9443"
 const bootstrapAuthority = "test-dns.dagami.ru:9443"
-const bootstrapFallback = "31.76.61.24:9443"
+const bootstrapFallback = "48.102.213.179:9443"
 
 var preferFallbackUntil atomic.Int64
 

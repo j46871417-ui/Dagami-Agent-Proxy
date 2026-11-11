@@ -64,6 +64,7 @@ namespace DevProxyApp
             if (target == null) throw new InvalidOperationException("Antigravity не найден. Добавьте Antigravity.exe, Antigravity IDE.exe или agy.exe в список приложений.");
             if (operation == "restore" && MessageBox.Show(this, "Вернуть оригинальный backend выбранного клиента из резервной копии? Если IDE использует общий agy, изменение затронет и CLI.",
                 "Отмена подготовки", MessageBoxButtons.YesNo, MessageBoxIcon.Warning, MessageBoxDefaultButton.Button2) != DialogResult.Yes) return;
+            if (operation == "restore" && !EnsureSessionStoppedForPatch(target, "Восстановление Antigravity")) return;
             _nativeBusy = true; SetNativeButtonsEnabled(false);
             _antigravityReport.Text = "Выполняется проверка…";
             int bridgePort = _bridgePort;
@@ -74,8 +75,7 @@ namespace DevProxyApp
                 var report = new StringBuilder();bool successful=false;
                 try {
                     report.AppendLine("Выбран клиент: " + target.ExePath);
-                    if (operation == "prepare") {var result=AntigravityIntegration.PrepareClient(target.ExePath);successful=result.Complete;report.AppendLine(result.Message);}
-                    else if (operation == "restore") {report.AppendLine(AntigravityIntegration.RestoreClient(target.ExePath));successful=true;}
+                    if (operation == "restore") {report.AppendLine(AntigravityIntegration.RestoreClient(target.ExePath));successful=true;}
                     else {
                         report.AppendLine(AntigravityDiagnostics.LoginRouteReport(bridgePort,useDns,dnsHost,proxy));
                         try { report.AppendLine(AntigravityIntegration.InspectClient(target.ExePath)); }

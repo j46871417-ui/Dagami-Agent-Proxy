@@ -43,7 +43,7 @@ namespace DevProxyApp
         }
 
         [DllImport("dwmapi.dll")] private static extern int DwmSetWindowAttribute(IntPtr window, int attribute, ref int value, int size);
-        [DllImport("uxtheme.dll", CharSet=CharSet.Unicode)] private static extern int SetWindowTheme(IntPtr window, string application, string classes);
+        [DllImport("uxtheme.dll", CharSet=CharSet.Unicode)] internal static extern int SetWindowTheme(IntPtr window, string application, string classes);
         internal static void Apply(Control root, bool previousDark) {
             foreach (Control child in root.Controls) Apply(child, previousDark);
             root.BackColor = Translate(root.BackColor, previousDark, false);
@@ -80,6 +80,8 @@ namespace DevProxyApp
         private static void ThemeControlHandle(object sender, EventArgs e) {
             var control = (Control)sender;
             SetWindowTheme(control.Handle, IsDark ? (control is ComboBox ? "DarkMode_CFD" : "DarkMode_Explorer") : null, null);
+            var list = control as FluentAppList;
+            if (list != null) list.UpdateHeaderTheme();
         }
         private static void DrawComboItem(object sender, DrawItemEventArgs e) {
             var box = (ComboBox)sender;
@@ -146,8 +148,46 @@ namespace DevProxyApp
 
     internal class FluentAppList : ListView
     {
-        public FluentAppList() { DoubleBuffered = true; }
+        private const int LvmGetHeader = 0x101f;
+        [DllImport("user32.dll")]
+        private static extern IntPtr SendMessage(IntPtr window, int message, IntPtr wParam, IntPtr lParam);
+        private readonly HeaderWindow _header;
+
+        public FluentAppList() { DoubleBuffered = true; _header = new HeaderWindow(this); }
+        protected override void OnHandleCreated(EventArgs e) { base.OnHandleCreated(e); UpdateHeaderTheme(); }
+        protected override void OnHandleDestroyed(EventArgs e) {
+            if (_header.Handle != IntPtr.Zero) _header.ReleaseHandle();
+            base.OnHandleDestroyed(e);
+        }
+        internal void UpdateHeaderTheme() {
+            if (!IsHandleCreated) return;
+            IntPtr header = SendMessage(Handle, LvmGetHeader, IntPtr.Zero, IntPtr.Zero);
+            if (_header.Handle != header) {
+                if (_header.Handle != IntPtr.Zero) _header.ReleaseHandle();
+                if (header != IntPtr.Zero) _header.AssignHandle(header);
+            }
+            if (header != IntPtr.Zero) {
+                FluentTheme.SetWindowTheme(header, FluentTheme.IsDark ? "DarkMode_ItemsView" : null, null);
+                Invalidate(true);
+            }
+        }
         protected override void OnSizeChanged(EventArgs e) { base.OnSizeChanged(e); Invalidate(); }
+
+        private sealed class HeaderWindow : NativeWindow {
+            private readonly FluentAppList _list;
+            public HeaderWindow(FluentAppList list) { _list = list; }
+            protected override void WndProc(ref Message message) {
+                base.WndProc(ref message);
+                if (message.Msg != 0x000f || Handle == IntPtr.Zero) return; // WM_PAINT
+                int end = 0;
+                foreach (ColumnHeader column in _list.Columns) end += column.Width;
+                using (var graphics = Graphics.FromHwnd(Handle))
+                using (var brush = new SolidBrush(_list.BackColor)) {
+                    RectangleF bounds = graphics.VisibleClipBounds;
+                    if (end < bounds.Right) graphics.FillRectangle(brush, end, bounds.Top, bounds.Right - end, bounds.Height);
+                }
+            }
+        }
     }
 
     internal class FluentCard : Panel
@@ -205,13 +245,26 @@ namespace DevProxyApp
 
         protected override void OnPaint(PaintEventArgs e)
         {
-            using (var background = new SolidBrush(Parent == null ? FluentTheme.Background : Parent.BackColor))
-                e.Graphics.FillRectangle(background, e.ClipRectangle);
+            Control surface = Parent;
+            while (surface != null && surface.BackColor == Color.Transparent) surface = surface.Parent;
+            var hero = surface as FluentHero;
+            if (hero != null) {
+                Point origin = hero.PointToClient(PointToScreen(Point.Empty));
+                using (var gradient = hero.Gradient(new Point(-origin.X, -origin.Y)))
+                    e.Graphics.FillRectangle(gradient, e.ClipRectangle);
+            } else {
+                Color color = Parent == null || Parent.BackColor == Color.Transparent ? FluentTheme.Background : Parent.BackColor;
+                using (var background = new SolidBrush(color)) e.Graphics.FillRectangle(background, e.ClipRectangle);
+            }
             e.Graphics.SmoothingMode = SmoothingMode.AntiAlias;
             Color fill = Primary ? FluentTheme.Primary : NavigationSelected ? FluentTheme.Pick(0xe1ebfc,0x2b4063) : BackColor;
             if (_hover && Enabled) fill = Primary ? FluentTheme.Pick(0x185bd5,0x2a67d0) : FluentTheme.Pick(0xebf0f7,0x303949);
             if (_pressed && Enabled) fill = Primary ? FluentTheme.Pick(0x144cb4,0x2151a6) : FluentTheme.Pick(0xdbe5f2,0x3c4d67);
             if (!Enabled) fill = FluentTheme.Pick(0xeef0f3,0x292d37);
+            if (hero != null && Enabled) fill = Color.FromArgb(unchecked((int)0xff000000) |
+                (Primary ? (_pressed ? 0xd3e0fc : _hover ? 0xe1eaff : 0xf0f4ff) :
+                           (_pressed ? 0x172443 : _hover ? 0x2e4479 : 0x263760)));
+            Color text = !Enabled ? FluentTheme.Muted : hero != null ? (Primary ? Color.FromArgb(29, 46, 86) : Color.White) : Primary ? Color.White : ForeColor;
             using (var path = FluentTheme.Rounded(new Rectangle(0, 0, Width - 1, Height - 1), 10))
             using (var brush = new SolidBrush(fill))
             using (var pen = new Pen(Primary || NavigationSelected || NavigationGlyph >= 0 ? fill : FluentTheme.Border)) {
@@ -220,9 +273,9 @@ namespace DevProxyApp
             }
             if (NavigationGlyph >= 0) MacGlyph.Draw(e.Graphics, NavigationGlyph, new Rectangle(10, (Height - 25) / 2, 25, 25));
             TextRenderer.DrawText(e.Graphics, Text, Font, new Rectangle(NavigationGlyph >= 0 ? 45 : 12, 0, Width - (NavigationGlyph >= 0 ? 49 : 24), Height),
-                !Enabled ? FluentTheme.Muted : Primary ? Color.White : ForeColor,
+                text,
                 (NavigationGlyph >= 0 ? TextFormatFlags.Left : TextFormatFlags.HorizontalCenter) | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis);
-            if (Focused && ShowFocusCues) ControlPaint.DrawFocusRectangle(e.Graphics, new Rectangle(4, 4, Width - 8, Height - 8), FluentTheme.Text, fill);
+            if (Focused && ShowFocusCues) ControlPaint.DrawFocusRectangle(e.Graphics, new Rectangle(4, 4, Width - 8, Height - 8), text, fill);
         }
     }
 
@@ -256,13 +309,17 @@ namespace DevProxyApp
     internal class FluentHero : Panel
     {
         public FluentHero() { DoubleBuffered = true; BackColor = Color.FromArgb(36, 102, 231); SetStyle(ControlStyles.ResizeRedraw, true); }
+        internal LinearGradientBrush Gradient(Point origin) {
+            return new LinearGradientBrush(new Rectangle(origin, new Size(Math.Max(1, Width - 1), Math.Max(1, Height - 1))),
+                FluentTheme.Pick(0x1e6ef2,0x234b96), FluentTheme.Pick(0x4350d2,0x363778), 20f);
+        }
         protected override void OnPaintBackground(PaintEventArgs e)
         {
             using (var brush = new SolidBrush(Parent == null ? FluentTheme.Background : Parent.BackColor)) e.Graphics.FillRectangle(brush, ClientRectangle);
             if (Width < 44 || Height < 44) return;
             e.Graphics.SmoothingMode = SmoothingMode.AntiAlias;
             using (var path = FluentTheme.Rounded(new Rectangle(0, 0, Width - 1, Height - 1), 22))
-            using (var brush = new LinearGradientBrush(ClientRectangle, FluentTheme.Pick(0x1e6ef2,0x234b96), FluentTheme.Pick(0x4350d2,0x363778), 20f)) e.Graphics.FillPath(brush, path);
+            using (var brush = Gradient(Point.Empty)) e.Graphics.FillPath(brush, path);
         }
     }
 
@@ -336,7 +393,6 @@ namespace DevProxyApp
             _themeMode = mode;
             bool previous = FluentTheme.SetMode(mode);
             FluentTheme.Apply(this, previous);
-            if (_appActions != null) FluentTheme.ApplyMenu(_appActions);
             _themeLink.Text = "Тема: " + (mode == "dark" ? "тёмная" : mode == "light" ? "светлая" : "системная");
         }
 
@@ -346,7 +402,6 @@ namespace DevProxyApp
                 bool previous = FluentTheme.SetMode("system");
                 if (previous != FluentTheme.IsDark) {
                     FluentTheme.Apply(this, previous);
-                    if (_appActions != null) FluentTheme.ApplyMenu(_appActions);
                 }
             }
         }
@@ -470,23 +525,43 @@ namespace DevProxyApp
 
             var apps = new FluentLayout { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 4, BackColor = BackColor };
             apps.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
-            apps.RowStyles.Add(new RowStyle(SizeType.Absolute, 100));
+            apps.RowStyles.Add(new RowStyle(SizeType.Absolute, 142));
             apps.RowStyles.Add(new RowStyle(SizeType.Absolute, 42));
             apps.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
-            apps.RowStyles.Add(new RowStyle(SizeType.Absolute, 196));
-            var connection = new FluentHero { Dock = DockStyle.Fill, Padding = new Padding(22, 16, 22, 16), Margin = new Padding(0, 0, 0, 14) };
-            var connectionRows = new FluentLayout { Dock = DockStyle.Fill, BackColor = Color.Transparent, ColumnCount = 2, RowCount = 2, Margin = Padding.Empty };
+            apps.RowStyles.Add(new RowStyle(SizeType.Absolute, 226));
+            var connection = new FluentHero { Dock = DockStyle.Fill, Padding = new Padding(16, 11, 16, 10), Margin = new Padding(0, 0, 0, 12) };
+            var connectionRows = new FluentLayout { Dock = DockStyle.Fill, BackColor = Color.Transparent, ColumnCount = 3, RowCount = 4, Margin = Padding.Empty };
+            connectionRows.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 75));
             connectionRows.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
-            connectionRows.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 126));
-            connectionRows.RowStyles.Add(new RowStyle(SizeType.Absolute, 20));
+            connectionRows.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 116));
+            connectionRows.RowStyles.Add(new RowStyle(SizeType.Absolute, 18));
+            connectionRows.RowStyles.Add(new RowStyle(SizeType.Absolute, 23));
+            connectionRows.RowStyles.Add(new RowStyle(SizeType.Absolute, 40));
             connectionRows.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+            var mark = Brand.LoadImage();
+            var connectionMark = new PictureBox { Name = "DagamiHomeMark", SizeMode = PictureBoxSizeMode.Zoom, Width = 62, Height = 62,
+                Anchor = AnchorStyles.Left, Margin = Padding.Empty, BackColor = Color.Transparent, Image = mark, AccessibleName = "Логотип Dagami, буква D" };
+            connectionMark.Disposed += (sender, e) => mark.Dispose();
+            connectionRows.Controls.Add(connectionMark, 0, 0);
+            connectionRows.SetRowSpan(connectionMark, 3);
             var connectionCaption = new Label { Text = "ВАШЕ ПОДКЛЮЧЕНИЕ", Dock = DockStyle.Fill, ForeColor = Color.FromArgb(222, 233, 255), Font = new Font("Segoe UI", 9, FontStyle.Bold), BackColor = Color.Transparent, Margin = Padding.Empty };
-            connectionRows.Controls.Add(connectionCaption, 0, 0);
+            connectionRows.Controls.Add(connectionCaption, 1, 0);
             _connectionSummary = new Label { Dock = DockStyle.Fill, ForeColor = Color.White, Font = new Font("Segoe UI", 10), BackColor = Color.Transparent, Margin = Padding.Empty, Text = "Параметры маршрута", AutoEllipsis = true };
-            connectionRows.Controls.Add(_connectionSummary, 0, 1);
-            _connectionAction = new FluentButton { Text = "Подключение", Dock = DockStyle.Fill, Margin = new Padding(12, 0, 0, 0), ForeColor = FluentTheme.Accent, BackColor = Color.White, AccessibleName = "Открыть настройки подключения" };
+            connectionRows.Controls.Add(_connectionSummary, 1, 1);
+            _connectionAction = new FluentButton { Text = "Настройки", Dock = DockStyle.Fill, Margin = new Padding(8, 3, 0, 3), AccessibleName = "Открыть настройки подключения" };
             _connectionAction.Click += (sender, e) => ShowFluentPage(1);
-            connectionRows.Controls.Add(_connectionAction, 1, 1);
+            connectionRows.Controls.Add(_connectionAction, 2, 0);
+            connectionRows.SetRowSpan(_connectionAction, 2);
+            var automaticControls = BuildAutomaticAiControls();
+            connectionRows.Controls.Add(automaticControls, 1, 2);
+            connectionRows.SetColumnSpan(automaticControls, 2);
+            _autoAiStatus = new LinkLabel { Name = "AutomaticAiStatus", Dock = DockStyle.Fill, AutoEllipsis = true,
+                BackColor = Color.Transparent, ForeColor = Color.FromArgb(233, 240, 255), LinkColor = Color.FromArgb(233, 240, 255),
+                Margin = Padding.Empty, TextAlign = ContentAlignment.MiddleLeft };
+            SetAppStatusLink(_autoAiStatus, "Подберёт и включит подключение для выбранного сервиса", false);
+            _autoAiStatus.LinkClicked += (sender, e) => ShowFluentPage(1);
+            connectionRows.Controls.Add(_autoAiStatus, 1, 3);
+            connectionRows.SetColumnSpan(_autoAiStatus, 2);
             connection.Controls.Add(connectionRows); apps.Controls.Add(connection, 0, 0);
             var tools = new FlowLayoutPanel { Dock = DockStyle.Fill, WrapContents = false };
             var addMenu=new ContextMenuStrip();
@@ -516,67 +591,85 @@ namespace DevProxyApp
                 Dock = DockStyle.Fill, View = View.Details, CheckBoxes = false, BorderStyle = BorderStyle.None,
                 FullRowSelect = true, HideSelection = false, MultiSelect = false, BackColor = FluentTheme.Surface,
                 ForeColor = FluentTheme.Text, ShowItemToolTips = true,
-                AccessibleName = "Выберите приложение. Все действия ниже относятся к выбранной строке."
+                AccessibleName = "Список приложений",
+                AccessibleDescription = "Основные действия находятся под списком. Для остановки или удаления откройте меню строки."
             };
             _targetList.Columns.Add("Приложение", 205);
             _targetList.Columns.Add("Статус", 130);
             _targetList.Columns.Add("Расположение", 600);
-            var rowHeightImages = new ImageList { ImageSize = new Size(1, 42) };
+            var rowHeightImages = new ImageList { ImageSize = new Size(1, 38) };
             _targetList.SmallImageList = rowHeightImages;
             _targetList.Disposed += (sender, e) => rowHeightImages.Dispose();
             StyleMacAppList(_targetList);
             _targetList.SizeChanged += (sender, e) => FitNativeListColumns();
             _targetList.HandleCreated += (sender, e) => FitNativeListColumns();
+            BuildAppContextMenu();
             _targetList.SelectedIndexChanged += (sender, e) => {
                 if (_appFeedback != null) _appFeedback.Text = "Настройте один раз, затем запускайте приложение как обычно.";
+                if (!_nativeBusy && _targetList.SelectedItems.Count > 0) {
+                    string service = AppDiagnosticService((AppTarget)_targetList.SelectedItems[0].Tag);
+                    if (service != null && _autoAiService.Items.Contains(service)) _autoAiService.SelectedItem = service;
+                }
                 UpdateNativeDetails();
             };
             listCard.Controls.Add(_targetList);
             apps.Controls.Add(listCard, 0, 2);
             var actionCard = new FluentCard { Dock = DockStyle.Fill, Padding = new Padding(12, 8, 12, 8), Margin = Padding.Empty };
-            var actionRows = new FluentLayout { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 7, BackColor = FluentTheme.Surface };
+            var actionRows = new FluentLayout { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 8, BackColor = FluentTheme.Surface };
             actionRows.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
-            foreach (int height in new int[] { 26, 38, 24, 22, 22, 22 }) actionRows.RowStyles.Add(new RowStyle(SizeType.Absolute, height));
+            foreach (int height in new int[] { 26, 38, 28, 22, 20, 20, 36 }) actionRows.RowStyles.Add(new RowStyle(SizeType.Absolute, height));
             actionRows.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
-            var selectedHeader = new FluentLayout { Dock = DockStyle.Fill, ColumnCount = 2, RowCount = 1, Margin = Padding.Empty };
-            selectedHeader.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 55));
-            selectedHeader.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 45));
-            selectedHeader.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
             _selectedAppHeading = FluentLabel("Выберите приложение", 13, true);
             _selectedAppHeading.AutoSize = false; _selectedAppHeading.Dock = DockStyle.Fill; _selectedAppHeading.Margin = Padding.Empty;
-            _targetDetails = new Label { Dock = DockStyle.Fill, ForeColor = FluentTheme.Muted, Font = new Font("Segoe UI", 9), TextAlign = ContentAlignment.MiddleRight, Margin = Padding.Empty };
-            selectedHeader.Controls.Add(_selectedAppHeading, 0, 0); selectedHeader.Controls.Add(_targetDetails, 1, 0);
-            actionRows.Controls.Add(selectedHeader, 0, 0);
-            var launch = new FlowLayoutPanel { Dock = DockStyle.Fill, WrapContents = false, Margin = Padding.Empty };
-            AddNativeButton(launch, "Запустить", RunPrimaryNativeAction);
-            _primaryAppAction = (FluentButton)_nativeButtons[_nativeButtons.Count - 1];
-            _primaryAppAction.Primary = true; _primaryAppAction.AutoSize = false; _primaryAppAction.Width = 205;
-            // Patching and restoration live in one menu, beside Launch.
-            BuildAppActionsMenu();
-            AddNativeButton(launch, "Действия", () => _appActions.Show(_moreAppActions, new Point(0, _moreAppActions.Height)));
-            _moreAppActions = (FluentButton)_nativeButtons[_nativeButtons.Count - 1];
-            _moreAppActions.Primary = false; _moreAppActions.AutoSize = false; _moreAppActions.Width = 108;
+            actionRows.Controls.Add(_selectedAppHeading, 0, 0);
+            var launch = new FlowLayoutPanel { Name = "AppActionRow", Dock = DockStyle.Fill, WrapContents = false, Margin = Padding.Empty };
+            _patchAppAction = AddNativeButton(launch, "Пропатчить", PatchSelectedNativeTarget);
+            _primaryAppAction = AddNativeButton(launch, "Запустить через Dagami", RunPrimaryNativeAction);
+            _primaryAppAction.Primary = true;
+            _unpatchAppAction = AddNativeButton(launch, "Отменить патч", UnpatchSelectedNativeTarget);
+            _checkAppAction = AddNativeButton(launch, "Проверить и восстановить", CheckSelectedApp);
+            _checkAppAction.Name = "CheckAppAction";
+            _checkAppAction.Visible = false;
             actionRows.Controls.Add(launch, 0, 1);
+            var status = new FluentLayout { Dock = DockStyle.Fill, ColumnCount = 3, RowCount = 1, Margin = Padding.Empty };
+            status.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 30));
+            status.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 37));
+            status.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 33));
+            _targetDetails = new Label { Name = "AppProcessStatus", Dock = DockStyle.Fill, ForeColor = FluentTheme.Muted,
+                TextAlign = ContentAlignment.MiddleLeft, Margin = Padding.Empty };
+            _appRouteStatus = new LinkLabel { Name = "AppRouteStatus", Dock = DockStyle.Fill, LinkColor = FluentTheme.Accent,
+                TextAlign = ContentAlignment.MiddleLeft, Margin = Padding.Empty };
+            _appModelStatus = new LinkLabel { Name = "AppModelStatus", Dock = DockStyle.Fill, LinkColor = FluentTheme.Accent,
+                TextAlign = ContentAlignment.MiddleLeft, Margin = Padding.Empty };
+            _appRouteStatus.LinkClicked += (sender, e) => ExecuteNativeAction(CheckSelectedAppRoute);
+            _appModelStatus.LinkClicked += (sender, e) => ExecuteNativeAction(ConfirmSelectedAppModel);
+            status.Controls.Add(_targetDetails, 0, 0);
+            status.Controls.Add(_appRouteStatus, 1, 0);
+            status.Controls.Add(_appModelStatus, 2, 0);
+            actionRows.Controls.Add(status, 0, 2);
             var optionsRow = new FlowLayoutPanel { Dock = DockStyle.Fill, WrapContents = false, Margin = Padding.Empty };
 
 
 
             _blockAntigravityUpdates.Margin = new Padding(0, 3, 0, 0);
             optionsRow.Controls.Add(_blockAntigravityUpdates);
-            actionRows.Controls.Add(optionsRow, 0, 2);
+            actionRows.Controls.Add(optionsRow, 0, 3);
             _shortcutState = new Label { Name = "ShortcutStateLabel", Dock = DockStyle.Fill, ForeColor = FluentTheme.Text,
-                AccessibleName = "Состояние обычного запуска и бинарного патча", AutoEllipsis=true, Margin = new Padding(0, 2, 0, 0) };
-            actionRows.Controls.Add(_shortcutState, 0, 3);
+                AccessibleName = "Состояние ярлыков или команды запуска", AutoEllipsis=true, Margin = new Padding(0, 2, 0, 0) };
+            actionRows.Controls.Add(_shortcutState, 0, 4);
             _clientPreparationStatus = new Label { Name="ClientPatchStatusLabel", Dock=DockStyle.Fill, ForeColor=FluentTheme.Text, AutoEllipsis=true, Margin=Padding.Empty, AccessibleName="Состояние бинарного патча Antigravity" };
-            actionRows.Controls.Add(_clientPreparationStatus, 0, 4);
+            actionRows.Controls.Add(_clientPreparationStatus, 0, 5);
             _shortcutExplanation = new Label { Dock = DockStyle.Fill, ForeColor = FluentTheme.Muted, Font = new Font("Segoe UI", 9), Margin = Padding.Empty };
-            actionRows.Controls.Add(_shortcutExplanation, 0, 5);
+            actionRows.Controls.Add(_shortcutExplanation, 0, 6);
             _appFeedback = new Label { Dock = DockStyle.Fill, ForeColor = FluentTheme.Muted, Font = new Font("Segoe UI", 9), Margin = Padding.Empty,
                 AutoEllipsis=true, Text = "Настройте один раз, затем запускайте приложение как обычно." };
             var feedbackTip=new ToolTip{AutoPopDelay=30000,InitialDelay=400,ReshowDelay=100};
             _appFeedback.TextChanged+=(sender,e)=>feedbackTip.SetToolTip(_appFeedback,_appFeedback.Text);
+            _shortcutExplanation.TextChanged+=(sender,e)=>feedbackTip.SetToolTip(_shortcutExplanation,_shortcutExplanation.Text);
+            _clientPreparationStatus.TextChanged+=(sender,e)=>feedbackTip.SetToolTip(_clientPreparationStatus,_clientPreparationStatus.Text);
+            _appStatusTip = feedbackTip;
             Disposed+=(sender,e)=>feedbackTip.Dispose();
-            actionRows.Controls.Add(_appFeedback, 0, 6);
+            actionRows.Controls.Add(_appFeedback, 0, 7);
             actionCard.Controls.Add(actionRows); apps.Controls.Add(actionCard, 0, 3);
 
             Panel antigravityPage = BuildAntigravityPage();
@@ -633,7 +726,6 @@ namespace DevProxyApp
             UpdateNativeStatus();
             bool dark = FluentTheme.IsDark;
             FluentTheme.Apply(this, dark);
-            if (_appActions != null) FluentTheme.ApplyMenu(_appActions);
             _themeLink.Text = "Тема: " + (_themeMode == "dark" ? "тёмная" : _themeMode == "light" ? "светлая" : "системная");
             HandleCreated += (s,e) => FluentTheme.ApplyWindowCaption(this);
         }

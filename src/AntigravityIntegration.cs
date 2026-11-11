@@ -147,12 +147,13 @@ namespace DevProxyApp
                     else if(detail.StartsWith("Прежняя подготовка CLI"))upgrade++;
                     else unprepared++;
                 }catch(UnsupportedAntigravityBinaryException){unsupported++;}
-                if(prepared>0&&(unprepared>0||unsupported>0||upgrade>0))return "Патч: частично применён";
                 if(upgrade>0)return "Патч: требуется повторная подготовка CLI / IDE";
+                if(prepared>0&&(unprepared>0||unsupported>0))return "Патч: частично применён";
                 if(unsupported>0)return "Патч: версия или состояние не поддерживается";
                 if(unprepared>0)return "Патч: не применён";
                 return prepared>0?"Патч: применён, копия проверена":"Патч: backend не найден";
             }catch(UnsupportedAntigravityBinaryException){return "Патч: backend не найден";}
+            catch(InvalidDataException){return "Патч: не удалось проверить данные восстановления";}
             catch(Exception){return "Патч: не удалось проверить";}
         }
         public static string RestoreClient(string executable) {
@@ -172,6 +173,13 @@ namespace DevProxyApp
         public static string Hash(byte[] data)
         {
             using (SHA256 sha = SHA256.Create()) return BitConverter.ToString(sha.ComputeHash(data)).Replace("-", "").ToLowerInvariant();
+        }
+
+        private static string HashFile(string path)
+        {
+            using (var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read, 65536, FileOptions.SequentialScan))
+            using (SHA256 sha = SHA256.Create())
+                return BitConverter.ToString(sha.ComputeHash(stream)).Replace("-", "").ToLowerInvariant();
         }
 
         private static List<int> FindAll(byte[] data, byte[] needle)
@@ -314,10 +322,9 @@ namespace DevProxyApp
         {
             string backend = BackendPath(executable);
             byte[] current = File.ReadAllBytes(backend);
-            string hash = Hash(current);
             Dictionary<string, object> manifest = Manifest(backend);
-            if (manifest != null && hash == Convert.ToString(manifest["patched_sha256"])) {
-                if (!File.Exists(backend + BackupSuffix) || Hash(File.ReadAllBytes(backend + BackupSuffix)) != Convert.ToString(manifest["original_sha256"]))
+            if (manifest != null && Hash(current) == Convert.ToString(manifest["patched_sha256"])) {
+                if (!File.Exists(backend + BackupSuffix) || HashFile(backend + BackupSuffix) != Convert.ToString(manifest["original_sha256"]))
                     throw new InvalidDataException("Подготовленный клиент найден, но резервная копия повреждена или отсутствует.");
                 if(NeedsCliUpgrade(current))return "Прежняя подготовка CLI не включает все необходимые изменения для CLI/IDE. Восстановите клиент, затем выполните подготовку снова. Резервная копия проверена.";
                 bool legacyProxy = FindAll(current, Encoding.ASCII.GetBytes("https_proxy")).Count > 0 &&
@@ -728,13 +735,10 @@ namespace DevProxyApp
 
     public static class AntigravityDiagnostics
     {
-        private static string Header(Stream stream)
-        {
-            string detail; return Header(stream,out detail);
-        }
-        private static string Header(Stream stream,out string detail)
+        private static string Header(Stream stream,out string detail,out string location)
         {
             detail="";
+            location=null;
             var data = new List<byte>();
             while (data.Count < 32768) {
                 int next = stream.ReadByte();
@@ -746,6 +750,7 @@ namespace DevProxyApp
                     foreach(string line in lines) {
                         const string upstream="X-Dagami-Upstream-Status: ";
                         const string phase="X-Dagami-Failure-Phase: ";
+                        const string redirect="Location:";
                         int code;
                         if(line.StartsWith(upstream,StringComparison.OrdinalIgnoreCase)&&int.TryParse(line.Substring(upstream.Length),out code)&&code>=100&&code<=599)
                             detail+=" "+UpstreamProxyDiagnostics.StatusMessage(code);
@@ -753,6 +758,8 @@ namespace DevProxyApp
                             string value=line.Substring(phase.Length);
                             if(Array.IndexOf(new[]{"smart-dns-resolve","smart-dns-connect","upstream-connect","upstream-CONNECT","loopback-connect"},value)>=0)detail+=" Этап: "+value+".";
                         }
+                        if(line.StartsWith(redirect,StringComparison.OrdinalIgnoreCase))
+                            location=location==null?line.Substring(redirect.Length).Trim():"";
                     }
                     return lines[0];
                 }
@@ -872,7 +879,19 @@ namespace DevProxyApp
 
         private static string ProbeRequest(string host, string path, string contentType, string body, int bridgePort, bool token)
         {
-            using (var client = new TcpClient()) {
+            string location;
+            return DescribeHttpResult(host,path,ProbeHttp(host,path,contentType,body,bridgePort,null,0,out location),token);
+        }
+
+        internal static int ProbeHttpStatus(string host,string path,string body,int bridgePort,string headers,int timeout,out string location)
+        {
+            return HttpStatus(ProbeHttp(host,path,"application/json",body,bridgePort,headers,timeout,out location));
+        }
+
+        private static string ProbeHttp(string host,string path,string contentType,string body,int bridgePort,string headers,int timeout,out string location)
+        {
+            using (var client = new TcpClient())
+            using (var deadline = timeout>0 ? new System.Threading.Timer(_=>client.Close(),null,timeout,System.Threading.Timeout.Infinite) : null) {
                 IAsyncResult connection = client.BeginConnect(IPAddress.Loopback, bridgePort, null, null);
                 using (connection.AsyncWaitHandle) {
                     if (!connection.AsyncWaitHandle.WaitOne(3000)) throw new TimeoutException("Локальный мост не отвечает.");
@@ -882,14 +901,15 @@ namespace DevProxyApp
                 Stream stream = client.GetStream();
                 byte[] connect = Encoding.ASCII.GetBytes("CONNECT " + host + ":443 HTTP/1.1\r\nHost: " + host + ":443\r\n\r\n");
                 stream.Write(connect, 0, connect.Length);
-                string detail; string status = Header(stream,out detail);
+                string detail; string status = Header(stream,out detail,out location);
                 if (HttpStatus(status)!=200)
                     throw new IOException("CONNECT "+host+": мост вернул HTTP " + HttpStatus(status) + "."+(detail.Length>0?detail:" DNS или upstream proxy не пропускает маршрут."));
                 using (var tls = TlsDiagnostics.Connect(stream, host, "target-service")) {
-                    byte[] request = Encoding.ASCII.GetBytes(body == null ? "GET " + path + " HTTP/1.1\r\nHost: " + host + "\r\nConnection: close\r\n\r\n" : "POST " + path + " HTTP/1.1\r\nHost: " + host + "\r\nContent-Type: " + contentType + "\r\nContent-Length: " + Encoding.ASCII.GetByteCount(body) + "\r\nConnection: close\r\n\r\n" + body);
+                    string requestHeaders=(body==null?"GET ":"POST ")+path+" HTTP/1.1\r\nHost: "+host+"\r\nConnection: close\r\n"+headers;
+                    if(body!=null)requestHeaders+="Content-Type: "+contentType+"\r\nContent-Length: "+Encoding.ASCII.GetByteCount(body)+"\r\n";
+                    byte[] request = Encoding.ASCII.GetBytes(requestHeaders+"\r\n"+body);
                     tls.Write(request, 0, request.Length); tls.Flush();
-                    status = Header(tls);
-                    return DescribeHttpResult(host,path,status,token);
+                    return Header(tls,out detail,out location);
                 }
             }
         }

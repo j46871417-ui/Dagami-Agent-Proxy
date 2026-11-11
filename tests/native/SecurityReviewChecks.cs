@@ -113,7 +113,7 @@ class SecurityReviewChecks {
   typeof(Logger).GetField("_logFilePath",BindingFlags.Static|BindingFlags.NonPublic).SetValue(null,Path.Combine(root,"fixture.log"));
   try{
    Capacity();Http();BidiRpc();Licenses();UpdateTransaction(root);
-   Assert(MainForm.PatchStatusLabel(2,"Changed shortcut",true)=="Требует восстановления","Damaged shortcuts displayed ready");
+   Assert(MainForm.PatchStatusLabel(2,"Changed shortcut",true)=="Проверить запуск","Damaged shortcuts displayed ready");
    Assert(MainForm.PatchStatusLabel(2,null,false)=="Пропатчено","Ready shortcuts lost state");
    Assert(MainForm.PatchStatusLabel(0,null,false)=="Не пропатчено","Unconfigured target displayed ready");
    Assert(!UpdateInstaller.ShouldRestart(new UpdatePlan{Restart=true,GuiPath="untrusted.exe"},false),"Failed helper can restart target");

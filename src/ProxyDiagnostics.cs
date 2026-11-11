@@ -170,7 +170,7 @@ namespace DevProxyApp {
    return candidates;
   }
 
-  public static KeyValuePair<string,string> Find(bool requireGemini) {
+  static List<Uri> LoadCandidates() {
    List<Uri> candidates=null;
    foreach(string source in new[]{Source,Mirror}) {
     try {candidates=Download(source);break;}
@@ -179,9 +179,23 @@ namespace DevProxyApp {
     catch(InvalidDataException) {Logger.Log("[Public proxy] "+new Uri(source).Host+" returned no valid addresses.");}
    }
    if(candidates==null)throw new IOException("Список ProxyScrape недоступен через GitHub и jsDelivr.");
+   return candidates;
+  }
+
+  internal static string FindForService(Func<Uri,bool> verify) {
+   string found=null;
+   System.Threading.Tasks.Parallel.ForEach(LoadCandidates(),new System.Threading.Tasks.ParallelOptions{MaxDegreeOfParallelism=4},(candidate,state)=>{
+    if(state.IsStopped||!verify(candidate))return;
+    System.Threading.Interlocked.CompareExchange(ref found,candidate.GetLeftPart(UriPartial.Authority),null);
+    state.Stop();
+   });
+   return found;
+  }
+
+  public static KeyValuePair<string,string> Find(bool requireGemini) {
    Tuple<string,string> found=null;
    string[] hosts=requireGemini?new[]{GeminiHost}:OtherHosts;
-   System.Threading.Tasks.Parallel.ForEach(candidates,new System.Threading.Tasks.ParallelOptions{MaxDegreeOfParallelism=4},(candidate,state)=>{
+   System.Threading.Tasks.Parallel.ForEach(LoadCandidates(),new System.Threading.Tasks.ParallelOptions{MaxDegreeOfParallelism=4},(candidate,state)=>{
     foreach(string host in hosts) {
      if(state.IsStopped)return;
      if(!Probe(candidate,host))continue;

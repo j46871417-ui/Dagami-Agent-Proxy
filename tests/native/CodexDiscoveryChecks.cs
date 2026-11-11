@@ -1,4 +1,5 @@
 using System;
+using System.Diagnostics;
 using System.IO;
 using System.Security;
 using System.Text;
@@ -21,6 +22,12 @@ class CodexDiscoveryChecks {
    Manifest(root,"OpenAI.Codex","app/ChatGPT.exe");
    Assert(ApplicationDiscovery.PackagedDesktop(root,"OpenAI.Codex")==gui,"MSIX ChatGPT.exe launcher missed or command runner selected");
    var target=new AppTarget{Id="codex-gui",ExePath=gui};
+   string packagePath=Path.Combine(temp,@"WindowsApps\OpenAI.Codex_26.10.1.0_x64__2p2nqsd0c76g0");
+   var packaged=new AppTarget{Id="codex-gui",ExePath=Path.Combine(packagePath,@"app\ChatGPT.exe")};
+   Assert(ApplicationDiscovery.CodexPackageRoot(packaged)==packagePath,"Versioned Codex MSIX path not recognized");
+   Assert(ApplicationDiscovery.CodexPackageRoot(target)==null,"Unpackaged Codex treated as MSIX");
+   packaged.Id="codex-cli";
+   Assert(ApplicationDiscovery.CodexPackageRoot(packaged)==null,"Desktop alias could be applied to CLI");
    Assert(ApplicationSupport.Kind(target)=="codex-desktop"&&!NativeCliApps.IsCli(target)&&!NativeCliApps.UsesCommandShim(target),"Codex Desktop confused with CLI");
    Assert(ApplicationSupport.SettingsPath(target)==null,"MSIX Desktop would overwrite CLI settings");
    Assert(ApplicationDiscovery.Desktop("FixtureCodex",new[]{cli,gui})==gui,"Console candidate accepted as Desktop");
@@ -43,6 +50,16 @@ class CodexDiscoveryChecks {
    if(actual!=null){
     Assert(ApplicationDiscovery.Desktop("Codex",new string[0])==actual,"Registered Codex package not discovered");
     Assert(File.Exists(actual)&&!NativeCliApps.IsCli(new AppTarget{ExePath=actual}),"Registered launcher is not a Desktop executable");
+    var native=new AppTarget{Id="codex-gui",ExePath=actual};
+    var start=new ProcessStartInfo(actual){Arguments="--proxy-server=http://127.0.0.1:53200",UseShellExecute=false};
+    start.EnvironmentVariables["HTTPS_PROXY"]="http://127.0.0.1:53200";
+    if(ApplicationDiscovery.UseCodexDesktopAlias(start,native)){
+     Assert(Path.GetFileName(start.FileName)=="chatgpt-desktop.exe"&&Path.GetFileName(Path.GetDirectoryName(start.FileName))==ApplicationDiscovery.CodexPackageFamily,
+      "Codex alias is not package-specific");
+     Assert(!start.UseShellExecute&&start.Arguments.Contains("--proxy-server")&&start.EnvironmentVariables["HTTPS_PROXY"]=="http://127.0.0.1:53200",
+      "Switching to the Codex alias changed proxy settings");
+     Console.WriteLine("PASS current-user registered Codex alias selected with proxy settings retained (read only)");
+    }else Console.WriteLine("SKIP registered Codex alias unavailable for this user");
     Console.WriteLine("PASS current-user installed Codex Desktop registration and manifest detected (read only)");
    }else Console.WriteLine("SKIP installed Codex package integration: not installed for this user");
    Console.WriteLine("PASS "+checks+" MSIX Codex identity, launcher selection, CLI separation and manifest validation checks");return 0;

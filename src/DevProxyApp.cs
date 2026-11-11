@@ -304,7 +304,7 @@ namespace DevProxyApp
 
                 Console.WriteLine("CLI: patch APP настраивает обычную команду; run APP [-- ARGS] запускает без изменения PATH.");
 
-                Console.WriteLine("doctor | patch APP --dry-run | diagnose error REPORT.log — проверки без изменения настроек");
+                Console.WriteLine("doctor [APP_ID | --apps] | patch APP --dry-run | diagnose error REPORT.log — локальные проверки");
 
                 Console.WriteLine("dns status | dns adapters | dns refresh | dns enable | dns apply REQUEST.json | dns restore (UAC)");
 
@@ -4189,7 +4189,10 @@ namespace DevProxyApp
 
             this.Opacity = 0;
 
-            if (!preview) InitLogging();
+            if (!preview) {
+                InitLogging();
+                _activationKeySaved = !LicenseManager.IsActivated() && ManagedAccess.ReadDeferredKey() != null;
+            }
 
             BuildFluentUi();
 
@@ -4339,7 +4342,7 @@ namespace DevProxyApp
             UpdateNativeStatus();
         }
 
-        private void StartRescueBridge()
+        private void StartRescueBridge(int preferredPort = 53200, AiRoute candidate = null)
 
         {
 
@@ -4347,7 +4350,9 @@ namespace DevProxyApp
 
             {
 
-                string proxyUrl = ConfigManager.Instance.EffectiveProxy;
+                var settings = ConfigManager.Instance;
+                string proxyUrl = candidate == null ? settings.EffectiveProxy : candidate.Proxy ?? "direct";
+                string dnsHost = candidate == null ? (settings.UseDagamiDns ? settings.DnsHost : null) : candidate.Dns;
                 if (ManagedAccess.IsProfile(proxyUrl) && !ManagedAccess.HasActiveDevice()) return;
                 if (IsDirectProxyValue(proxyUrl)) proxyUrl = "direct";
 
@@ -4387,10 +4392,10 @@ namespace DevProxyApp
 
                     }
 
-                    if (ConfigManager.Instance.UseDagamiDns && !ManagedAccess.IsProfile(proxyUrl)) DnsProviders.Initialize();
+                    if (dnsHost != null && !ManagedAccess.IsProfile(proxyUrl)) DnsProviders.Initialize();
                     _rescueBridge = new LocalProxyBridge();
 
-                    if (_rescueBridge.Start(53200, proxyUrl, ConfigManager.Instance.UseDagamiDns ? ConfigManager.Instance.DnsHost : null))
+                    if (_rescueBridge.Start(preferredPort, proxyUrl, dnsHost))
 
                     {
 
@@ -4400,7 +4405,7 @@ namespace DevProxyApp
 
                         var dpiMode = DpiDesyncStream.ParseMode(ConfigManager.Instance.DpiDesyncMode);
 
-                        if (ConfigManager.Instance.UseDagamiDns && !ManagedAccess.IsProfile(proxyUrl) && ConfigManager.Instance.DnsObfuscation && dpiMode == DpiDesyncMode.ExternalEngine) {
+                        if (dnsHost != null && !ManagedAccess.IsProfile(proxyUrl) && ConfigManager.Instance.DnsObfuscation && dpiMode == DpiDesyncMode.ExternalEngine) {
 
                             string dpiError;
 
@@ -4557,6 +4562,12 @@ namespace DevProxyApp
                 psi.UseShellExecute = false;
 
                 psi.WorkingDirectory = string.IsNullOrEmpty(originalDirectory) ? Path.GetDirectoryName(target.ExePath) : Environment.ExpandEnvironmentVariables(originalDirectory);
+                string packageRoot=ApplicationDiscovery.CodexPackageRoot(target);
+                if(packageRoot!=null && (string.IsNullOrWhiteSpace(originalDirectory) ||
+                    string.Equals(psi.WorkingDirectory.TrimEnd('\\'),packageRoot,StringComparison.OrdinalIgnoreCase) ||
+                    psi.WorkingDirectory.StartsWith(packageRoot+"\\",StringComparison.OrdinalIgnoreCase))) {
+                    psi.WorkingDirectory=Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+                }
 
                 psi.Arguments = originalArguments ?? "";
 
@@ -4641,6 +4652,8 @@ namespace DevProxyApp
 
                 }
 
+                bool usesPackageAlias=ApplicationDiscovery.UseCodexDesktopAlias(psi,target);
+                Logger.Log("[Launch] " + target.Id + " · " + (usesPackageAlias ? "MSIX app execution alias" : "direct executable"));
                 Process launched = Process.Start(psi);
 
                 if (launched == null) { error = "Процесс приложения не был создан."; return false; }
@@ -4661,6 +4674,15 @@ namespace DevProxyApp
 
             }
 
+            catch (System.ComponentModel.Win32Exception ex)
+            {
+                Logger.Log("[Launch] " + target.Id + " · Win32=" + ex.NativeErrorCode);
+                if (ex.NativeErrorCode == 5 && ApplicationDiscovery.CodexPackageRoot(target) != null)
+                    error = "Windows отклонила запуск Codex Desktop (код 5). Откройте «Параметры Windows → Приложения → Дополнительные параметры приложений → Псевдонимы выполнения приложений» и проверьте, что включён chatgpt-desktop.exe. Затем обновите список приложений в Dagami и повторите запуск.";
+                else
+                    error = "Не удалось запустить " + target.DisplayName + " (Windows, код " + ex.NativeErrorCode + "): " + ex.Message;
+                return false;
+            }
             catch (Exception ex)
 
             {
@@ -4732,10 +4754,10 @@ namespace DevProxyApp
             catch (Exception error) { Logger.Log("[Windows proxy] " + error.GetType().Name); }
         }
 
-        private void RestartRescueBridge()
+        private void RestartRescueBridge(int preferredPort = 53200, bool keepWindowsProxy = false, AiRoute candidate = null)
 
         {
-            DisableWindowsProxyOnBridgeStop();
+            if (!keepWindowsProxy) DisableWindowsProxyOnBridgeStop();
 
             DpiEngineManager.StopExternal();
 
@@ -4751,7 +4773,7 @@ namespace DevProxyApp
 
             _bridgePort = 0;
 
-            StartRescueBridge();
+            StartRescueBridge(preferredPort, candidate);
 
         }
 

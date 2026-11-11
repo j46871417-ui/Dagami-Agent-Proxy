@@ -277,9 +277,24 @@ func TestAccessCodeDiscoveryAndDeviceBinding(t *testing.T) {
 		t.Fatal("repeated issuance changed the key")
 	}
 	redeem(device, current, http.StatusOK)
+	// Promote a copy under the same public authority. The original registry
+	// stays untouched and the next requests use a new gateway and state path.
+	primaryState := state
+	state = filepath.Join(t.TempDir(), "devices.json")
+	snapshot, err := os.ReadFile(primaryState)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = os.WriteFile(state, snapshot, 0600); err != nil {
+		t.Fatal(err)
+	}
 	reopen()
 	if issue() != current {
-		t.Fatal("restart changed the key")
+		t.Fatal("restoring the snapshot changed the key")
+	}
+	restored, err := activation(context.Background(), public.Client(), endpoint, device, false)
+	if err != nil || !restored.Active {
+		t.Fatalf("restored snapshot lost existing device: %v", err)
 	}
 	redeem(device, current, http.StatusOK)
 	redeem(other, current, http.StatusOK)
@@ -327,6 +342,10 @@ func TestAccessCodeDiscoveryAndDeviceBinding(t *testing.T) {
 	}
 	admin("/private/revoke", `{"subject":"42"}`, 204)
 	reopen()
+	unchanged, err := os.ReadFile(primaryState)
+	if err != nil || !bytes.Equal(snapshot, unchanged) {
+		t.Fatal("promoted copy wrote back to the former primary")
+	}
 	checkStats(keyStats{keyTotals{2, 2}, 0, 0})
 	redeem(device, current, http.StatusGone)
 	redeem(device, rotated, http.StatusGone)

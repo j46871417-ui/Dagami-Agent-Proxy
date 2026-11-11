@@ -66,7 +66,7 @@ class StartupChecks {
    var toggle=(CheckBox)typeof(MainForm).GetField("_startWithWindows",Private).GetValue(form);Assert(toggle!=null&&!toggle.Checked,"Startup control absent or on by default");
    var show=typeof(MainForm).GetMethod("ShowFluentPage",Private);show.Invoke(form,new object[]{1});Application.DoEvents();Layout(form);Snapshot(form,"startup-settings.png");
    var buttons=(List<Button>)typeof(MainForm).GetField("_nativeButtons",Private).GetValue(form);
-   foreach(var button in buttons)if(button.Text.Contains("Записать DNS")||button.Text=="Пропатчить"||button.Text=="Проверить прокси")Assert((bool)button.GetType().GetProperty("Primary").GetValue(button,null),"Functional button is not blue: "+button.Text);
+   foreach(var button in buttons)if(button.Text.Contains("Записать DNS")||button.Text=="Запустить через Dagami"||button.Text=="Проверить прокси")Assert((bool)button.GetType().GetProperty("Primary").GetValue(button,null),"Primary button is not blue: "+button.Text);
    form.Size=form.MinimumSize;Application.DoEvents();Layout(form);Snapshot(form,"startup-settings-minimum.png");
   }
   using(var tray=new MainForm(null,false,true,true)){

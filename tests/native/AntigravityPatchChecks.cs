@@ -92,7 +92,8 @@ class AntigravityPatchChecks {
    Directory.CreateDirectory(Path.GetDirectoryName(a)); Directory.CreateDirectory(Path.GetDirectoryName(b));
    File.WriteAllBytes(a, original); File.WriteAllBytes(b, modern);
    Assert(AntigravityIntegration.BackendPaths(app).Count == 2, "Manager/IDE backends not discovered");
-   Assert(AntigravityIntegration.PrepareClient(app).Prepared, "Multiple backend preparation failed");
+   var multiBackend=AntigravityIntegration.PrepareClient(app);
+   Assert(multiBackend.Prepared, "Multiple backend preparation failed: " + multiBackend.Message);
    Assert(!Same(original, File.ReadAllBytes(a)) && !Same(modern, File.ReadAllBytes(b)), "One backend left unprepared");
    AntigravityIntegration.RestoreClient(app); Assert(Same(original, File.ReadAllBytes(a)) && Same(modern, File.ReadAllBytes(b)), "Multiple restore not exact");
    string unsupported = Path.Combine(Path.GetDirectoryName(b), "language_server_unknown.exe"); File.WriteAllText(unsupported, "unknown architecture fixture");
