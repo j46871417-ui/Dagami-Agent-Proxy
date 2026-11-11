@@ -1,5 +1,7 @@
 # Changelog
 
+- Linux: приложения, запущенные из интерфейса Dagami, больше не приостанавливаются из-за управления заданиями терминала.
+
 ## Documentation after 0.5.0 beta
 
 - Add the shared Dagami community, support and donation header to README,
