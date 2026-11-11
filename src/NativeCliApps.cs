@@ -162,6 +162,7 @@ namespace DevProxyApp {
    Program.ConfigureConsoleEncoding();
    if(Hash(File.ReadAllBytes(current))!=app.Hash)throw new InvalidOperationException("CLI-запускатель не соответствует сохранённой настройке.");
    if(!LicenseManager.IsActivated())throw new InvalidOperationException("Dagami не активирован. Откройте GUI для активации.");
+   if(!CoreBootstrapGate.EnsureReadyBeforeUiOrExit(false))throw new InvalidOperationException("Сетевое ядро Dagami не загружено с GitHub.");
    var config=ConfigManager.Instance;
    Environment.ExitCode=Run(app.Original,args,config.EffectiveProxy,config.UseDagamiDns?config.DnsHost:null);
    return true;

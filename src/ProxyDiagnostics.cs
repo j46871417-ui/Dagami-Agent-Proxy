@@ -151,7 +151,7 @@ namespace DevProxyApp {
    try {
     var listeners=IPGlobalProperties.GetIPGlobalProperties().GetActiveTcpListeners();
     foreach(int port in KnownLocalVpnPorts) {
-     if(port==bridgePort)continue;
+     if(port==bridgePort||port==CoreBootstrapGate.LocalPort)continue;
      foreach(var ep in listeners)if(ep.Port==port){if(!localPorts.Contains(port))localPorts.Add(port);break;}
     }
    } catch {}

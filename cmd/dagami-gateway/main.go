@@ -61,7 +61,7 @@ func run() error {
 	defer public.Close()
 	privateServer := server(gateway.Private)
 	publicServer := server(gateway.Public)
-	publicServer.TLSConfig = &tls.Config{Certificates: []tls.Certificate{certificate}, MinVersion: tls.VersionTLS12, NextProtos: []string{"http/1.1"}}
+	publicServer.TLSConfig = &tls.Config{Certificates: []tls.Certificate{certificate}, MinVersion: tls.VersionTLS12, NextProtos: []string{"h2", "http/1.1"}}
 	failed := make(chan error, 2)
 	go func() { failed <- privateServer.Serve(private) }()
 	go func() { failed <- publicServer.Serve(tls.NewListener(public, publicServer.TLSConfig)) }()
