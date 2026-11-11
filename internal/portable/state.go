@@ -391,6 +391,11 @@ func (c *Controller) Launch(id string) error {
 	cmd := exec.Command(app.Path, args...)
 	cmd.Env = env
 	cmd.Dir = filepath.Dir(app.Path)
+	if logf, lerr := os.OpenFile(filepath.Join(os.TempDir(), "dagami-app.log"), os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0600); lerr == nil {
+		cmd.Stdout = logf
+		cmd.Stderr = logf
+		defer logf.Close()
+	}
 	prepareProcess(cmd)
 	if e = cmd.Start(); e != nil {
 		bridge.Close()
@@ -443,8 +448,9 @@ func (c *Controller) RunAttached(id string, args []string, input io.Reader, outp
 		return err
 	}
 	defer bridge.Close()
-	cmd := exec.Command(app.Path, append(append([]string(nil), app.Args...), args...)...)
-	cmd.Env = childEnvironment(bridge.URL())
+	launchArgs, launchEnv := launchProxySettings(app, bridge.URL(), runtime.GOOS)
+	cmd := exec.Command(app.Path, append(launchArgs, args...)...)
+	cmd.Env = launchEnv
 	cmd.Dir = filepath.Dir(app.Path)
 	cmd.Stdin = input
 	cmd.Stdout = output
