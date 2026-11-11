@@ -9,7 +9,7 @@
 Нативный менеджер запуска IDE и CLI через прокси. Windows использует WinForms,
 macOS — AppKit, Linux — GTK 3.
 
-[Скачать 0.5.0 beta](https://github.com/j46871417-ui/Dagami-Agent-Proxy/releases/tag/v0.5.0-beta)
+[Скачать](https://github.com/j46871417-ui/Dagami-Agent-Proxy/releases/)
 · [Изменения релиза](RELEASE_NOTES.md)
 · [Бот доступа](https://t.me/bright26bot)
 

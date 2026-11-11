@@ -62,7 +62,14 @@ func unprotectSecret(id, value string) (string, error) {
 	return keychainCommand([]string{"secret-tool", "lookup", "service", "ru.dagami.native", "profile", id}, "")
 }
 func replaceFile(from, to string) error { return os.Rename(from, to) }
-func prepareProcess(cmd *exec.Cmd)      { cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true} }
+func prepareProcess(cmd *exec.Cmd) {
+	if runtime.GOOS == "linux" {
+		// GUI launches must not inherit the terminal's job-control session.
+		cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
+		return
+	}
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+}
 func manageProcess(cmd *exec.Cmd) (func() error, error) {
 	var once sync.Once
 	return func() error {
