@@ -168,6 +168,8 @@ class DnsTransportChecks {
   }}finally{upstream.Stop();worker.Join(1000);}
  }
  static int Main(){typeof(Logger).GetField("_logFilePath",BindingFlags.Static|BindingFlags.NonPublic).SetValue(null,Path.Combine(Path.GetTempPath(),"DnsTransportChecks-proxy.log"));try {
+  typeof(ConfigManager).GetField("instance",BindingFlags.Static|BindingFlags.NonPublic).SetValue(null,
+   new ConfigManager{DnsObfuscation=true,DpiDesyncMode="TlsRecordSplit"});
   var defaults=ScopedDnsResolver.ServerCandidates("DNS.DAGAMI.RU.");
   Assert(defaults.Length==5&&defaults[0]=="48.102.213.179"&&defaults[1]=="31.76.52.235","Dagami/MagicDNS default pool missing or out of order");
   Assert(ScopedDnsResolver.ServerCandidates("31.76.52.235")[0]=="31.76.52.235","Chosen node lost priority");

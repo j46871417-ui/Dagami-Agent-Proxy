@@ -25,10 +25,7 @@ class LocalUiChecks {
   try {
    Application.EnableVisualStyles();
    Application.SetUnhandledExceptionMode(UnhandledExceptionMode.ThrowException);
-   var startup=typeof(NativeLaunchBroker).GetMethod("AcceptStartupResult",BindingFlags.Static|BindingFlags.NonPublic);
-   Assert((bool)startup.Invoke(null,new object[]{DialogResult.Retry,false}),"Offline key must allow the main window");
-   Assert(!(bool)startup.Invoke(null,new object[]{DialogResult.Retry,true}),"Offline key must not launch a managed shortcut");
-   Assert((bool)startup.Invoke(null,new object[]{DialogResult.OK,true})&&!(bool)startup.Invoke(null,new object[]{DialogResult.Cancel,false}),"Activation outcome handling changed");
+   Assert(typeof(MainForm).Assembly.GetType("DevProxyApp.LicenseManager")==null,"Application licensing must not return");
    Console.WriteLine("UI fixture: constructing preview");Console.Out.Flush();
    ContextMenuStrip themeMenu;
    using (var form = new MainForm(null, false, true)) {

@@ -62,7 +62,7 @@ namespace DevProxyApp {
   public string Message {get;set;}
  }
  public static class Socks5Transport {
-  static void ReadExact(Stream stream,byte[] data,int count) {
+  internal static void ReadExact(Stream stream,byte[] data,int count) {
    for(int pos=0;pos<count;) {int n=stream.Read(data,pos,count-pos);if(n<=0)throw new EndOfStreamException();pos+=n;}
   }
   public static void Connect(Stream stream,Uri proxy,string host,int port) {
@@ -90,6 +90,41 @@ namespace DevProxyApp {
    byte[] header=new byte[4];ReadExact(stream,header,4);if(header[0]!=5||header[1]!=0||header[2]!=0)throw new IOException("SOCKS CONNECT rejected");
    int length;if(header[3]==1)length=4;else if(header[3]==4)length=16;else if(header[3]==3){int n=stream.ReadByte();if(n<1)throw new IOException("Invalid SOCKS reply");length=n;}else throw new IOException("Invalid SOCKS address type");
    ReadExact(stream,new byte[length+2],length+2);
+  }
+ }
+ internal static class Socks4Transport {
+  internal static bool ValidUser(Uri proxy) {
+   string user=Uri.UnescapeDataString(proxy.UserInfo);
+   return !proxy.UserInfo.Contains(":")&&user.IndexOf('\0')<0&&Encoding.UTF8.GetByteCount(user)<=255;
+  }
+  internal static void Connect(Stream stream,Uri proxy,string host,int port) {
+   byte[] name=null;
+   IPAddress address;
+   if(!IPAddress.TryParse(host,out address)) {
+    if(proxy.Scheme=="socks4a") {
+     name=Encoding.ASCII.GetBytes(new System.Globalization.IdnMapping().GetAscii(host));
+     if(name.Length==0||name.Length>255||Array.IndexOf(name,(byte)0)>=0)throw new IOException("Invalid SOCKS4a hostname");
+     address=IPAddress.Parse("0.0.0.1");
+    } else {
+     IAsyncResult lookup=Dns.BeginGetHostAddresses(host,null,null);
+     using(lookup.AsyncWaitHandle)if(!lookup.AsyncWaitHandle.WaitOne(4000))throw new TimeoutException("SOCKS4 name lookup timed out");
+     address=Array.Find(Dns.EndGetHostAddresses(lookup),ip=>ip.AddressFamily==AddressFamily.InterNetwork);
+    }
+   }
+   if(address!=null&&address.IsIPv4MappedToIPv6)address=address.MapToIPv4();
+   if(address==null||address.AddressFamily!=AddressFamily.InterNetwork)throw new IOException("SOCKS4/4a requires IPv4");
+   byte[] ipBytes=address.GetAddressBytes();
+   if(name==null&&ipBytes[0]==0&&ipBytes[1]==0&&ipBytes[2]==0)throw new IOException("Invalid SOCKS4 destination");
+   byte[] user=Encoding.UTF8.GetBytes(Uri.UnescapeDataString(proxy.UserInfo));
+   using(var request=new MemoryStream()) {
+    request.Write(new byte[]{4,1,(byte)(port>>8),(byte)port},0,4);
+    request.Write(ipBytes,0,ipBytes.Length);request.Write(user,0,user.Length);request.WriteByte(0);
+    if(name!=null){request.Write(name,0,name.Length);request.WriteByte(0);}
+    byte[] bytes=request.ToArray();
+    stream.Write(bytes,0,bytes.Length);
+   }
+   byte[] reply=new byte[8];Socks5Transport.ReadExact(stream,reply,reply.Length);
+   if(reply[0]!=0||reply[1]!=90)throw new IOException("SOCKS4/4a CONNECT rejected");
   }
  }
  internal static class PublicProxyCandidates {
@@ -210,6 +245,13 @@ namespace DevProxyApp {
  }
 
  public static class UpstreamProxyDiagnostics {
+  internal static bool IsSocks4(Uri proxy) {return proxy.Scheme=="socks4"||proxy.Scheme=="socks4a";}
+  internal static bool IsSocks(Uri proxy) {return IsSocks4(proxy)||proxy.Scheme=="socks5"||proxy.Scheme=="socks5h"||proxy.Scheme=="socks5s";}
+  internal static bool UsesTls(Uri proxy) {return proxy.Scheme=="https"||proxy.Scheme=="socks5s";}
+  internal static void ConnectSocks(Stream stream,Uri proxy,string host,int port) {
+   if(IsSocks4(proxy))Socks4Transport.Connect(stream,proxy,host.Trim('[',']'),port);
+   else Socks5Transport.Connect(stream,proxy,host,port);
+  }
   public static bool IsDnsEndpointMistakenForProxy(string value) {
    if (string.IsNullOrWhiteSpace(value)) return false;
    Uri proxy;if(!Uri.TryCreate(value.Trim(),UriKind.Absolute,out proxy))return false;
@@ -219,9 +261,14 @@ namespace DevProxyApp {
 
   public static bool TryParse(string value,out Uri proxy) {
    proxy=null;
-   return !string.IsNullOrWhiteSpace(value)&&Uri.TryCreate(value.Trim(),UriKind.Absolute,out proxy)&&
-    (proxy.Scheme=="http"||proxy.Scheme=="https"||proxy.Scheme=="socks5"||proxy.Scheme=="socks5h")&&!string.IsNullOrEmpty(proxy.Host)&&proxy.Port>0&&
-    proxy.AbsolutePath=="/"&&string.IsNullOrEmpty(proxy.Query)&&string.IsNullOrEmpty(proxy.Fragment);
+   if(string.IsNullOrWhiteSpace(value)||!Uri.TryCreate(value.Trim(),UriKind.Absolute,out proxy)||
+      string.IsNullOrEmpty(proxy.Host)||(proxy.AbsolutePath!="/"&&proxy.AbsolutePath!="")||
+      !value.Trim().Contains("://")||value.Trim().TrimEnd('/').EndsWith(":",StringComparison.Ordinal)||
+      value.IndexOfAny(new[]{'?','#'})>=0||proxy.Port==0)return false;
+   if(!IsSocks(proxy))return proxy.Scheme=="http"||proxy.Scheme=="https";
+   if(IsSocks4(proxy)&&!Socks4Transport.ValidUser(proxy))return false;
+   if(proxy.Port<0)proxy=new UriBuilder(proxy){Port=1080}.Uri;
+   return true;
   }
   public static string StatusMessage(int status) {
    if(status>=200&&status<300)return "Прокси принял CONNECT к www.googleapis.com:443. Вход в аккаунт и ответ модели не проверены.";
@@ -234,14 +281,14 @@ namespace DevProxyApp {
   public static ProxyProbeResult Check(string value,int timeoutMilliseconds=8000) {
    Uri proxy;
    if(!TryParse(value,out proxy))
-    return new ProxyProbeResult{Message="Укажите HTTP/HTTPS/SOCKS5-адрес прокси без пути, query и fragment. Спецсимволы в логине и пароле должны быть URL-кодированы."};
+    return new ProxyProbeResult{Message="Укажите адрес HTTP, HTTPS, SOCKS4/4a, SOCKS5 или SOCKS5 поверх TLS без пути и параметров."};
    try {
     using(var client=new TcpClient()) {
-     var pending=client.BeginConnect(proxy.Host,proxy.Port,null,null);
+     var pending=client.BeginConnect(proxy.IdnHost.Trim('[',']'),proxy.Port,null,null);
      using(pending.AsyncWaitHandle){if(!pending.AsyncWaitHandle.WaitOne(timeoutMilliseconds))throw new TimeoutException();client.EndConnect(pending);}
      Stream stream=client.GetStream();stream.ReadTimeout=timeoutMilliseconds;stream.WriteTimeout=timeoutMilliseconds;
-     if(proxy.Scheme=="https")stream=TlsDiagnostics.Connect(stream,proxy.Host,"https-proxy",timeoutMilliseconds);
-     if(proxy.Scheme=="socks5"||proxy.Scheme=="socks5h") { using(stream){Socks5Transport.Connect(stream,proxy,"www.googleapis.com",443);return new ProxyProbeResult{Available=true,Status=200,Message="SOCKS5 принял соединение к www.googleapis.com:443. TLS, вход и ответ модели не проверены."};} }
+     if(UsesTls(proxy))stream=TlsDiagnostics.Connect(stream,proxy.IdnHost,proxy.Scheme+"-proxy",timeoutMilliseconds);
+     if(IsSocks(proxy)) { using(stream){ConnectSocks(stream,proxy,"www.googleapis.com",443);return new ProxyProbeResult{Available=true,Status=200,Message="Прокси принял соединение к www.googleapis.com:443. TLS до сервиса, вход и ответ модели не проверены."};} }
      using(stream) {
       string request="CONNECT www.googleapis.com:443 HTTP/1.1\r\nHost: www.googleapis.com:443\r\n";
       if(!string.IsNullOrEmpty(proxy.UserInfo))request+="Proxy-Authorization: Basic "+Convert.ToBase64String(Encoding.UTF8.GetBytes(Uri.UnescapeDataString(proxy.UserInfo)))+"\r\n";

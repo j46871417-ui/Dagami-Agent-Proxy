@@ -4,15 +4,12 @@ import (
 	"bytes"
 	"context"
 	"crypto/ecdsa"
-	"crypto/tls"
 	"encoding/json"
 	"fmt"
 	"io"
-	"net"
 	"net/http"
 	"net/url"
 	"strings"
-	"sync/atomic"
 	"time"
 )
 
@@ -21,32 +18,13 @@ const BotURL = BotChat + "?start=dagami_"
 const BotKeyURL = BotChat + "?start=dagamikey"
 const Bootstrap = "https://test-dns.dagami.ru:9443"
 const bootstrapAuthority = "test-dns.dagami.ru:9443"
-const bootstrapFallback = "48.102.213.179:9443"
+const Control = "https://dns.dagami.ru"
 
-var preferFallbackUntil atomic.Int64
-
-// DialGateway keeps the URL hostname for TLS and signatures. Only the public
-// bootstrap address has an IP fallback, independent of system DNS.
-func DialGateway(ctx context.Context, dialer *net.Dialer, network, address string) (net.Conn, error) {
-	if address != bootstrapAuthority {
-		return dialer.DialContext(ctx, network, address)
+func controlEndpoint(endpoint *url.URL) string {
+	if endpoint.Host == bootstrapAuthority {
+		return Control
 	}
-	if time.Now().Unix() < preferFallbackUntil.Load() {
-		if conn, err := dialer.DialContext(ctx, network, bootstrapFallback); err == nil {
-			return conn, nil
-		}
-	}
-	dnsCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
-	conn, err := dialer.DialContext(dnsCtx, network, address)
-	cancel()
-	if err == nil || ctx.Err() != nil {
-		return conn, err
-	}
-	conn, err = dialer.DialContext(ctx, network, bootstrapFallback)
-	if err == nil {
-		preferFallbackUntil.Store(time.Now().Add(time.Minute).Unix())
-	}
-	return conn, err
+	return endpoint.String()
 }
 
 func ValidAccessCode(code string) bool {
@@ -59,15 +37,13 @@ func ValidAccessCode(code string) bool {
 }
 
 var activationClient = &http.Client{
-	Timeout: 10 * time.Second,
-	Transport: &http.Transport{TLSClientConfig: &tls.Config{MinVersion: tls.VersionTLS12}, DisableKeepAlives: true, DialContext: func(ctx context.Context, network, address string) (net.Conn, error) {
-		return DialGateway(ctx, &net.Dialer{Timeout: 8 * time.Second}, network, address)
-	}},
+	Timeout:       10 * time.Second,
+	Transport:     &http.Transport{DisableKeepAlives: true, DialTLSContext: DialGatewayTLS},
 	CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
 }
 
 func Discover(ctx context.Context) (*url.URL, error) {
-	request, err := http.NewRequestWithContext(ctx, http.MethodGet, Bootstrap+"/v1/config", nil)
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, Control+"/v1/config", nil)
 	if err != nil {
 		return nil, err
 	}
@@ -120,11 +96,15 @@ func activation(ctx context.Context, client *http.Client, endpoint *url.URL, key
 }
 
 func sendActivation(ctx context.Context, client *http.Client, endpoint *url.URL, key *ecdsa.PrivateKey, method, path string, body []byte) (PairStatus, error) {
-	proof, err := Sign(key, endpoint.Host, method, path)
+	return sendActivationUsing(ctx, client, endpoint, softwareSigner{key}, method, path, body)
+}
+
+func sendActivationUsing(ctx context.Context, client *http.Client, endpoint *url.URL, signer ProofSigner, method, path string, body []byte) (PairStatus, error) {
+	proof, err := SignUsing(signer, endpoint.Host, method, path)
 	if err != nil {
 		return PairStatus{}, err
 	}
-	request, err := http.NewRequestWithContext(ctx, method, endpoint.String()+path, bytes.NewReader(body))
+	request, err := http.NewRequestWithContext(ctx, method, controlEndpoint(endpoint)+path, bytes.NewReader(body))
 	if err != nil {
 		return PairStatus{}, err
 	}
@@ -155,4 +135,17 @@ func sendActivation(ctx context.Context, client *http.Client, endpoint *url.URL,
 		return PairStatus{}, err
 	}
 	return result, nil
+}
+
+// RedeemUsing supports a non-exportable platform device key. The access code
+// authorizes the proxy, not use of the application.
+func RedeemUsing(ctx context.Context, endpoint *url.URL, signer ProofSigner, code string) (PairStatus, error) {
+	if !ValidAccessCode(code) {
+		return PairStatus{}, fmt.Errorf("invalid proxy access code")
+	}
+	body, err := json.Marshal(map[string]string{"code": code})
+	if err != nil {
+		return PairStatus{}, err
+	}
+	return sendActivationUsing(ctx, activationClient, endpoint, signer, http.MethodPost, "/v1/redeem", body)
 }

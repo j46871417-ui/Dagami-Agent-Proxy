@@ -42,6 +42,12 @@ class GoogleGeminiChecks {
    Assert(!start.EnvironmentVariables["QTWEBENGINE_CHROMIUM_FLAGS"].Contains("--proxy-auto-detect"),"Qt bypass survived");
    string stable=start.Arguments;AppProxyPolicy.ConfigureGemini(start,"http://127.0.0.1:43210");Assert(stable==start.Arguments,"Managed browser arguments not idempotent");
    bool rejected=false;try{AppProxyPolicy.ChromiumArguments("http://user:password@remote.invalid:80");}catch(ArgumentException){rejected=true;}Assert(rejected,"Remote/authenticated bridge accepted");
+   File.WriteAllText(target.ExePath,"launcher fixture");
+   Assert(ApplicationSupport.RelatedExecutables(target).Length==2,"Gemini launcher was not included in exact process tracking");
+   string separated=AppProxyPolicy.ManagedChromiumArguments("--existing -- --proxy-server argument", "http://127.0.0.1:43210");
+   string[] values=NativeCliApps.SplitArguments(separated);
+   int dash=Array.IndexOf(values,"--");
+   Assert(dash>0&&Array.Exists(Array.FindAll(values,x=>x.StartsWith("--proxy-server=")),x=>x.Contains("43210"))&&values[dash+1]=="--proxy-server"&&values[dash+2]=="argument","Proxy flags misplaced or positional arguments changed");
    string signal=Path.Combine(temp,"go"),pidFile=Path.Combine(temp,"pid");
    using(var session=new NativeSession()){
     parent=Process.Start(new ProcessStartInfo(Process.GetCurrentProcess().MainModule.FileName,"launcher \""+signal+"\" \""+pidFile+"\""){UseShellExecute=false,CreateNoWindow=true});

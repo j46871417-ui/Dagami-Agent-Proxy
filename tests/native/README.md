@@ -12,8 +12,9 @@ python tools/run_native_checks.py --assembly dist-portable/native-next/DagamiAge
 The Go builder runs its selected native fixtures. The extended Python runner
 compiles fixture executables against the built application and runs an
 explicit safe suite list. It uses a dedicated TEMP/TMP directory and preserves
-check output there. `LicenseChecks` and live DNS/update-installation tests are not
-included. SystemDnsChecks.ps1 resolves its default engine at `../../src/SystemDns.ps1`;
+check output there. Application licensing was removed. Live DNS and production
+update-installation tests are not included. `ResilienceChecks` uses fake settings,
+loopback tunnels and three disposable files for the real cleanup helper. SystemDnsChecks.ps1 resolves its default engine at `../../src/SystemDns.ps1`;
 read its fixture/mutation setup before running it. Never use the real activation,
 network settings or installed application files as writable test fixtures.
 

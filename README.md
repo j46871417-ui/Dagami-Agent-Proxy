@@ -19,28 +19,38 @@ macOS — AppKit, Linux — GTK 3.
 
 ## Подключение
 
-1. Получите ключ через `/key` в @bright26bot.
-2. Вставьте его в окно активации или откройте «Подключение → Подключить по ключу».
+Приложение открывается без ключа и подключения к серверу.
+Ключ нужен только для прокси Dagami:
+
+1. Получите ключ через `/key` в [@bright26bot](https://t.me/bright26bot).
+2. В Windows откройте «Подключение → Добавить ключ прокси», затем включите прокси Windows.
 3. Выберите приложение и запустите его через Dagami.
 
-Свой HTTP/HTTPS-прокси вводится на странице «Подключение». Windows также принимает
-`host:port` и `direct` для системного VPN. В macOS и Linux поддерживаются отдельные
-профили HTTP, HTTPS и SOCKS5. Реквизиты сохраняются в хранилище ОС.
+Для своего прокси, публичных прокси и системного маршрута ключ Dagami не нужен.
+Наличие ключа не гарантирует доступность удалённого сервера.
+
+Свой прокси вводится на странице «Подключение». Поддерживаются HTTP, HTTPS,
+SOCKS4/4a, SOCKS5 и SOCKS5 поверх TLS (`socks5s://`). «Применить» сохраняет
+выбранный источник. «Включить прокси Windows» запускает сохранённый маршрут.
+Windows также принимает `host:port` и `direct` для системного VPN. В macOS и
+Linux доступны отдельные профили. Реквизиты сохраняются в хранилище ОС.
 
 Для обычного запуска через ярлык или команду CLI нажмите «Пропатчить» в карточке
 приложения в Windows. После изменения PATH перезапустите терминал.
 [Привязка и отзыв устройств](MANAGED_ACCESS.md) · [Поддержка приложений](APPLICATIONS.md)
 
+[Восстановление интернета и удаление](docs/RECOVERY.md) · [Подготовка Android](docs/ANDROID_PORT.md)
+
 ## Установка и требования
 
-- Windows 10/11 с .NET Framework 4.8. Основной пакет содержит один `DagamiAgentProxy.exe`.
+- Windows 10/11 с .NET Framework 4.8. Пакет содержит `DagamiAgentProxy.exe`, независимый `DagamiRecovery.exe` и `DagamiUninstall.exe`.
 - macOS для Intel и Apple Silicon. Интерфейс использует AppKit, секреты — Keychain.
 - Linux для x64 и ARM64. Для окна нужен GTK 3, для секретов — Secret Service и `secret-tool`.
 
 macOS и Linux проверены кросс-компиляцией. Сборки без цифровой подписи и нотаризации.
 Перед заменой Windows EXE завершите Dagami через «Выход» в трее.
 
-[Пакеты, сборка и требования](NATIVE_NEXT.md) · [Маршрутизация](APP_ROUTING.md)
+[Пакеты, сборка и требования](NATIVE_NEXT.md) · [Запуск и восстановление на Linux/macOS](docs/LINUX_MACOS.md) · [Маршрутизация](APP_ROUTING.md)
 
 **[Группа Dagami](https://t.me/dagamvi) | [Канал Dagami](https://t.me/dagamivibe) | [Донаты](https://pay.cloudtips.ru/p/671fda86) | [dns.dagami.ru](https://dns.dagami.ru) | [Обсуждение и техподдержка](https://t.me/dagamvi/2140) | [Сообщить об ошибке](https://dns.dagami.ru/support/agent-proxy/)**
 

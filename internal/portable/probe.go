@@ -10,6 +10,8 @@ import (
 	"net/http"
 	"sync"
 	"time"
+
+	"dagami.local/agentproxy/internal/managed"
 )
 
 func probeHosts(service string) []string {
@@ -47,6 +49,9 @@ func (c *Controller) Probe(parent context.Context, service string) ([]ProbeResul
 	bridge, e := c.activeRoute()
 	if e != nil {
 		return nil, e
+	}
+	if bridge.h2 != nil {
+		defer bridge.h2.CloseIdleConnections()
 	}
 	results := make([]ProbeResult, len(hosts))
 	var wg sync.WaitGroup
@@ -98,4 +103,32 @@ func probeHost(ctx context.Context, bridge *Bridge, host string) (int, error) {
 	}
 	defer response.Body.Close()
 	return response.StatusCode, nil
+}
+
+// ProbeOpenAITransport sends one unauthenticated HEAD request, with the same
+// TLS and CONNECT handling used by the desktop. An HTTP status proves only
+// that the target answered over this route.
+func ProbeOpenAITransport(ctx context.Context, address string, signer managed.ProofSigner, http2 bool) (int, error) {
+	route := &Bridge{}
+	if signer != nil {
+		endpoint, err := managed.Endpoint(address)
+		if err != nil {
+			return 0, err
+		}
+		route.upstream = endpoint
+		route.proof = func(target string) (string, error) {
+			return managed.SignUsing(signer, endpoint.Host, "CONNECT", target)
+		}
+		if http2 {
+			route.h2 = newGatewayHTTP2Transport()
+			defer route.h2.CloseIdleConnections()
+		}
+	} else {
+		upstream, err := ParseProxy(address)
+		if err != nil {
+			return 0, err
+		}
+		route.upstream = upstream
+	}
+	return probeHost(ctx, route, "api.openai.com")
 }

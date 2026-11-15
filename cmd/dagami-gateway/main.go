@@ -33,6 +33,7 @@ func run() error {
 	botSocket := flag.String("bot-socket", "", "private Unix socket in a restricted runtime directory")
 	upstream := flag.String("upstream", "", "private legacy HAProxy IPv4/IPv6 loopback address and port")
 	bridgeKey := flag.String("bridge-key-file", "", "file with an unpadded base64url-encoded 32-byte bridge secret")
+	http2 := flag.Bool("http2", false, "enable HTTP/2 CONNECT over TLS alongside HTTP/1.1")
 	flag.Parse()
 	if *state == "" || *botSocket == "" || *key == "" || *cert == "" || *bridgeKey == "" {
 		return errors.New("set -endpoint, -cert, -key, -state, -bot-socket, -upstream and -bridge-key-file")
@@ -67,7 +68,13 @@ func run() error {
 	publicServer.TLSConfig = &tls.Config{Certificates: []tls.Certificate{certificate}, MinVersion: tls.VersionTLS12, NextProtos: []string{"http/1.1"}}
 	failed := make(chan error, 2)
 	go func() { failed <- privateServer.Serve(private) }()
-	go func() { failed <- publicServer.Serve(tls.NewListener(public, publicServer.TLSConfig)) }()
+	go func() {
+		if *http2 {
+			failed <- publicServer.ServeTLS(public, "", "")
+		} else {
+			failed <- publicServer.Serve(tls.NewListener(public, publicServer.TLSConfig))
+		}
+	}()
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	checkpoint := time.NewTicker(15 * time.Second)

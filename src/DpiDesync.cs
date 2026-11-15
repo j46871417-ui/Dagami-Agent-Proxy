@@ -7,6 +7,7 @@ using System.Net.Sockets;
 using System.Security.Cryptography;
 using System.Text;
 using System.Threading;
+using System.Threading.Tasks;
 
 namespace DevProxyApp
 {
@@ -160,6 +161,12 @@ namespace DevProxyApp
             _inner.Flush();
         }
         public override int Read(byte[] buffer, int offset, int count) { return _inner.Read(buffer, offset, count); }
+        public override Task<int> ReadAsync(byte[] buffer, int offset, int count, CancellationToken cancellationToken)
+        {
+            // Stream's default async path shares a lock between reads and writes.
+            // A pending read must not block a tunnel from forwarding its upload.
+            return _inner.ReadAsync(buffer, offset, count, cancellationToken);
+        }
         public override long Seek(long offset, SeekOrigin origin) { throw new NotSupportedException(); }
         public override void SetLength(long value) { throw new NotSupportedException(); }
 

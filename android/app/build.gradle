@@ -1,0 +1,24 @@
+plugins {
+    id 'com.android.application' version '8.7.3'
+}
+
+android {
+    namespace 'ru.dagami.agentproxy'
+    compileSdk 35
+
+    defaultConfig {
+        applicationId 'ru.dagami.agentproxy'
+        minSdk 26
+        targetSdk 35
+        versionCode 1
+        versionName '0.1.0-preview'
+    }
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+}
+
+dependencies {
+    implementation files('libs/dagami-mobile.aar')
+}

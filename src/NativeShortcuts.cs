@@ -127,7 +127,7 @@ namespace DevProxyApp
                     try {
                         test = Open(shellNew, autoLink);
                         string exe = Get(test, "TargetPath");
-                        if (!string.IsNullOrEmpty(exe) && Same(exe, target.ExePath) && CanEditLink(autoLink)) {
+                        if (!string.IsNullOrEmpty(exe) && MatchesCurrentExecutable(target,exe) && CanEditLink(autoLink)) {
                             if (!roots.Exists(r => Same(r, targetFolder))) roots.Add(targetFolder);
                             return true;
                         }
@@ -175,7 +175,7 @@ namespace DevProxyApp
                     try {
                         link = Open(shell, record.LinkPath);
                         string executable = Get(link, "TargetPath");
-                        if (!string.IsNullOrEmpty(executable) && Same(executable, target.ExePath)) {
+                        if (!string.IsNullOrEmpty(executable) && MatchesCurrentExecutable(target,executable)) {
                             records.Remove(record); changed = true;
                         } else {
                             throw new InvalidOperationException("Ярлык изменён другим приложением: " + Path.GetFileName(record.LinkPath) + ". Переместите его или восстановите из копии; чужой ярлык не перезаписан.");
@@ -194,8 +194,11 @@ namespace DevProxyApp
         public List<string> EnablePrepared(AppTarget target, string manager, IEnumerable<string> folders, Action prepare, Action rollback) {
             return EnablePrepared(target, manager, folders, prepare, rollback, false);
         }
+        internal static bool MatchesCurrentExecutable(AppTarget target,string executable) {
+            return Same(executable,target.ExePath)||AppProxyPolicy.IsGeminiSibling(target,executable);
+        }
         static bool MatchesExecutable(ShortcutRecord record, AppTarget target) {
-            return Same(record.Executable, target.ExePath) ||
+            return MatchesCurrentExecutable(target,record.Executable) ||
                 ApplicationDiscovery.PreviousCodexPackageRoot(target, record.Executable) != null;
         }
         public List<string> EnablePrepared(AppTarget target, string manager, IEnumerable<string> folders, Action prepare, Action rollback, bool autoCreateShortcut) {
@@ -217,7 +220,7 @@ namespace DevProxyApp
                         var record = original.Find(x => Same(x.LinkPath, path));
                         if (record != null) { if (record.ApplicationId == target.Id) found = true; continue; }
                         object link = null;
-                        try { link = Open(shell, path); string exe = Get(link, "TargetPath"); if (!string.IsNullOrEmpty(exe) && Same(exe, target.ExePath)) {if(CanEditLink(path))found=true;else if(template==null)template=path;} }
+                        try { link = Open(shell, path); string exe = Get(link, "TargetPath"); if (!string.IsNullOrEmpty(exe) && MatchesCurrentExecutable(target,exe)) {if(CanEditLink(path))found=true;else if(template==null)template=path;} }
                         catch (System.Runtime.InteropServices.COMException) { Logger.Log("[Shortcut] Не удалось прочитать: " + Path.GetFileName(path)); }
                         catch (IOException) { Logger.Log("[Shortcut] Ярлык недоступен: " + Path.GetFileName(path)); }
                         finally { Release(link); }
@@ -283,7 +286,7 @@ namespace DevProxyApp
                     object link = null;
                     try {
                         link = Open(shell, path); string exe = Get(link, "TargetPath");
-                        if (string.IsNullOrEmpty(exe) || !Same(exe, target.ExePath)) continue;
+                        if (string.IsNullOrEmpty(exe) || !MatchesCurrentExecutable(target,exe)) continue;
                         if(!CanEditLink(path)){SkippedReadOnlyLinks++;Logger.Log("[Shortcut] Нет прав записи; используйте настроенную пользовательскую копию: "+Path.GetFileName(path));continue;}
                         // WScript hotkeys and icons remain in the copied shell link.
                         byte[] original = File.ReadAllBytes(path);

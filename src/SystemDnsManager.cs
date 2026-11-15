@@ -220,6 +220,12 @@ namespace DevProxyApp
                 return "Последняя операция: " + (labels.ContainsKey(value) ? labels[value] : value) + ". DNS: " + Convert.ToString(state["Server"]) + ".\r\nЭто сохранённый результат операции; текущие DNS показаны в списке адаптеров.";
             } catch (Exception ex) { return "Не удалось прочитать резервную копию: " + ex.GetType().Name; }
         }
+        public static bool NeedsRestore() {
+            string path=Path.Combine(StoreRoot,"state.json");if(!File.Exists(path))return false;
+            var state=new JavaScriptSerializer().Deserialize<Dictionary<string,object>>(ReadStoredText(path));
+            object status;if(state==null||!state.TryGetValue("Status",out status))throw new IOException("Журнал DNS повреждён. Он сохранён для восстановления.");
+            return Convert.ToString(status)!="Restored"&&Convert.ToString(status)!="Released";
+        }
         public static string BriefStatus() {
             string path=Path.Combine(StoreRoot,"state.json");
             if(!File.Exists(path))return "не записывался приложением";
@@ -273,7 +279,7 @@ namespace DevProxyApp
             var psi = HelperStart(request, typeof(SystemDnsManager).Assembly.Location, elevated);
             if (!File.Exists(psi.FileName)) throw new FileNotFoundException("Не найден файл программы для запуска помощника DNS.");
             using (var process = Process.Start(psi)) {
-                process.WaitForExit();
+                if(!process.WaitForExit(120000))throw new IOException("Помощник DNS не завершился за две минуты. Журнал сохранён; помощник не остановлен принудительно. Дождитесь его завершения перед повтором.");
                 string resultPath = Path.Combine(StoreRoot, "jobs", request.JobId + ".json");
                 if (!File.Exists(resultPath)) throw new InvalidOperationException("Помощник DNS завершился без отчёта (код " + process.ExitCode + "). Настройка не подтверждена.");
                 var result = new JavaScriptSerializer().Deserialize<Dictionary<string, object>>(ReadStoredText(resultPath));

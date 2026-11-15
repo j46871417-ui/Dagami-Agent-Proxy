@@ -122,6 +122,8 @@ namespace DevProxyApp {
    var result=new List<string>();
    if(target==null||string.IsNullOrEmpty(target.ExePath))return result.ToArray();
    result.Add(Path.GetFullPath(AppProxyPolicy.Executable(target)));
+   foreach(string path in AppProxyPolicy.GeminiExecutables(target))
+    if(File.Exists(path)&&!result.Exists(value=>string.Equals(value,path,StringComparison.OrdinalIgnoreCase)))result.Add(path);
    if(AntigravityIntegration.IsIde(target.ExePath))try{foreach(string path in AntigravityIntegration.BackendPaths(target.ExePath))if(!result.Contains(path))result.Add(path);}catch(UnsupportedAntigravityBinaryException){}
    if(Kind(target)=="opencode-desktop")foreach(string folder in new[]{Path.GetDirectoryName(target.ExePath),Path.Combine(Path.GetDirectoryName(target.ExePath),"resources")})
     foreach(string name in new[]{"opencode-cli.exe","opencode-server.exe"}){string path=Path.Combine(folder,name);if(File.Exists(path))result.Add(path);}
@@ -133,7 +135,7 @@ namespace DevProxyApp {
     case "codex-desktop":return "Патч: ярлыки, Chromium и окружение backend. config.toml и настройки sandbox не меняются.";
     case "claude-desktop":return "Запуск: параметры Chromium и окружение. Для Cowork и удалённых коннекторов проверьте маршрут отдельно.";
     case "opencode-desktop":return "Патч: ярлыки, Electron/WebView2 по структуре установки и окружение backend. Старый фоновый сервер нужно закрыть. JSON-ключ proxy не добавляется.";
-    case "chromium-browser":return "Запуск через локальный мост Dagami с отдельным профилем браузера. Для Gemini и ChatGPT выберите прокси по ключу. В новый профиль нужно войти отдельно.";
+    case "chromium-browser":return "Запуск через локальный мост Dagami с отдельным профилем браузера. Выберите рабочий прокси для Gemini и ChatGPT. В новый профиль нужно войти отдельно.";
     case "jetbrains":return "Патч: proxy.settings.xml, JVM и ярлыки. Gradle/Maven/SSH могут иметь отдельные настройки.";
     case "git":return "Патч: отдельная команда dagami-git и HTTP(S)-окружение. Обычный git и глобальный .gitconfig сохраняются; SSH требует своей настройки.";
     case "terminal":return "Патч: ярлык терминала с окружением прокси для дочерних команд. Системные команды в PATH не заменяются.";

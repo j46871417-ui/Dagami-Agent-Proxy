@@ -11,7 +11,7 @@ import (
 	"github.com/ebitengine/purego/objc"
 )
 
-const macWidth, macHeight = 780, 500
+const macWidth, macHeight = 960, 720
 
 type macPoint struct{ X, Y float64 }
 type macSize struct{ Width, Height float64 }
@@ -42,9 +42,10 @@ type cocoaWindow struct {
 	app, window, root, delegate, picker objc.ID
 	fields                              []objc.ID
 	actions                             []button
-	jobs                                chan func()
-	mu                                  sync.Mutex
+	queue                               dispatchQueue
+	dispatchMu                          sync.Mutex
 	closed                              bool
+	documentHeight                      float64
 }
 
 func runWindow(ready func(window)) error {
@@ -53,14 +54,15 @@ func runWindow(ready func(window)) error {
 	}
 	pool := cocoaNew("NSAutoreleasePool")
 	defer send(pool, "drain")
-	w := &cocoaWindow{app: send(cocoaClass("NSApplication"), "sharedApplication"), jobs: make(chan func(), 1)}
+	w := &cocoaWindow{app: send(cocoaClass("NSApplication"), "sharedApplication")}
 	class, err := objc.RegisterClass("DagamiDesktopDelegate", objc.GetClass("NSObject"), nil, nil, []objc.MethodDef{
 		{Cmd: objc.RegisterName("dagamiClick:"), Fn: func(_ objc.ID, _ objc.SEL, sender objc.ID) { w.clicked(sender) }},
-		{Cmd: objc.RegisterName("dagamiDispatch:"), Fn: func(_ objc.ID, _ objc.SEL, _ objc.ID) { (<-w.jobs)() }},
+		{Cmd: objc.RegisterName("dagamiDispatch:"), Fn: func(_ objc.ID, _ objc.SEL, _ objc.ID) { w.queue.drain() }},
 		{Cmd: objc.RegisterName("windowWillClose:"), Fn: func(_ objc.ID, _ objc.SEL, _ objc.ID) {
-			w.mu.Lock()
+			w.dispatchMu.Lock()
 			w.closed = true
-			w.mu.Unlock()
+			w.queue.close()
+			w.dispatchMu.Unlock()
 			send(w.app, "stop:", objc.ID(0))
 		}},
 	})
@@ -68,7 +70,13 @@ func runWindow(ready func(window)) error {
 		return err
 	}
 	w.delegate = send(send(objc.ID(class), "alloc"), "init")
-	defer send(w.delegate, "release")
+	defer func() {
+		w.dispatchMu.Lock()
+		defer w.dispatchMu.Unlock()
+		w.closed = true
+		w.queue.close()
+		send(w.delegate, "release")
+	}()
 	send(w.app, "setActivationPolicy:", 0)
 	w.window = send(send(cocoaClass("NSWindow"), "alloc"), "initWithContentRect:styleMask:backing:defer:", rect(0, 0, macWidth, macHeight), 7, 2, false)
 	defer send(w.window, "release")
@@ -84,14 +92,16 @@ func runWindow(ready func(window)) error {
 }
 
 func (w *cocoaWindow) post(job func()) {
-	w.mu.Lock()
-	defer w.mu.Unlock()
+	w.dispatchMu.Lock()
+	defer w.dispatchMu.Unlock()
 	if w.closed {
+		return
+	}
+	if !w.queue.push(job) {
 		return
 	}
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
-	w.jobs <- job
 	pool := cocoaNew("NSAutoreleasePool")
 	defer send(pool, "drain")
 	send(w.delegate, "performSelectorOnMainThread:withObject:waitUntilDone:", objc.RegisterName("dagamiDispatch:"), objc.ID(0), false)
@@ -123,14 +133,14 @@ func (w *cocoaWindow) add(widget objc.ID, frame macRect) {
 func (w *cocoaWindow) buttons(buttons []button, y float64) {
 	x := 20.0
 	for _, item := range buttons {
-		width := float64(max(94, utf8.RuneCountInString(item.label)*8+20))
+		width := float64(min(macWidth-40, max(94, utf8.RuneCountInString(item.label)*8+20)))
 		if x+width > macWidth-20 {
 			x, y = 20, y+34
 		}
 		widget := send(cocoaClass("NSButton"), "buttonWithTitle:target:action:", cocoaString(item.label), w.delegate, objc.RegisterName("dagamiClick:"))
 		send(widget, "setTag:", len(w.actions))
 		w.actions = append(w.actions, item)
-		w.add(widget, rect(x, y, width, 30))
+		w.add(widget, w.frame(x, y, width, 30))
 		x += width + 6
 	}
 }
@@ -139,30 +149,51 @@ func (w *cocoaWindow) show(v view) {
 	pool := cocoaNew("NSAutoreleasePool")
 	defer send(pool, "drain")
 	w.picker, w.actions, w.fields = 0, nil, nil
+	actionY := float64(max(419, 173+len(v.fields)*68))
+	rows := 1
+	x := 20
+	for _, item := range v.actions {
+		width := min(macWidth-40, max(94, utf8.RuneCountInString(item.label)*8+20))
+		if x+width > macWidth-20 {
+			rows++
+			x = 20
+		}
+		x += width + 6
+	}
+	w.documentHeight = float64(max(macHeight, int(actionY)+rows*34+30))
 	w.root = cocoaNew("NSView")
-	send(w.window, "setContentView:", w.root)
+	send(w.root, "setFrame:", macRect{Size: macSize{macWidth, w.documentHeight}})
+	scroll := cocoaNew("NSScrollView")
+	send(scroll, "setHasVerticalScroller:", true)
+	send(scroll, "setHasHorizontalScroller:", true)
+	send(scroll, "setDocumentView:", w.root)
+	send(w.window, "setContentView:", scroll)
+	send(scroll, "release")
 	defer send(w.root, "release")
 	w.buttons(v.nav, 15)
 	title := send(cocoaClass("NSTextField"), "labelWithString:", cocoaString(v.title))
 	send(title, "setFont:", send(cocoaClass("NSFont"), "boldSystemFontOfSize:", 20.0))
-	w.add(title, rect(20, 62, 740, 28))
+	w.add(title, w.frame(20, 62, 740, 28))
 	detail := send(cocoaClass("NSTextField"), "wrappingLabelWithString:", cocoaString(v.detail))
-	w.add(detail, rect(20, 100, 740, 44))
+	w.add(detail, w.frame(20, 100, 740, 44))
 	if len(v.items) > 0 {
-		w.picker = send(send(cocoaClass("NSPopUpButton"), "alloc"), "initWithFrame:pullsDown:", rect(20, 152, 740, 32), false)
+		w.picker = send(send(cocoaClass("NSPopUpButton"), "alloc"), "initWithFrame:pullsDown:", w.frame(20, 152, 740, 32), false)
 		for i, item := range v.items {
 			send(w.picker, "addItemWithTitle:", cocoaString(fmt.Sprintf("%d. %s", i+1, item)))
 		}
 		send(w.picker, "selectItemAtIndex:", v.selected)
-		w.add(w.picker, rect(20, 152, 740, 32))
+		w.add(w.picker, w.frame(20, 152, 740, 32))
 		send(w.picker, "release")
 	}
 	for i, field := range v.fields {
 		y := float64(153 + i*68)
 		label := send(cocoaClass("NSTextField"), "labelWithString:", cocoaString(field.label))
 		entry := send(cocoaClass("NSTextField"), "textFieldWithString:", cocoaString(field.value))
-		w.add(label, rect(20, y, 740, 22))
-		w.add(entry, rect(20, y+25, 740, 28))
+		if field.private() {
+			entry = send(cocoaClass("NSSecureTextField"), "textFieldWithString:", cocoaString(field.value))
+		}
+		w.add(label, w.frame(20, y, 740, 22))
+		w.add(entry, w.frame(20, y+25, 740, 28))
 		w.fields = append(w.fields, entry)
 	}
 	if v.report != "" {
@@ -174,12 +205,20 @@ func (w *cocoaWindow) show(v view) {
 		send(text, "setVerticallyResizable:", true)
 		send(text, "setString:", cocoaString(v.report))
 		send(scroll, "setDocumentView:", text)
-		w.add(scroll, rect(20, 148, 740, 256))
+		w.add(scroll, w.frame(20, 148, 740, 256))
 		send(text, "release")
 		send(scroll, "release")
 	}
-	w.buttons(v.actions, 419)
+	w.buttons(v.actions, actionY)
 	if len(w.fields) > 0 {
 		send(w.window, "makeFirstResponder:", w.fields[0])
 	}
+}
+
+func (w *cocoaWindow) frame(x, y, width, height float64) macRect {
+	return macRect{macPoint{x, w.documentHeight - y - height}, macSize{width, height}}
+}
+func (w *cocoaWindow) activate() {
+	send(w.window, "makeKeyAndOrderFront:", objc.ID(0))
+	send(w.app, "activateIgnoringOtherApps:", true)
 }

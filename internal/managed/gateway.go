@@ -69,6 +69,13 @@ func (g *Gateway) Public(w http.ResponseWriter, r *http.Request) {
 	target, header := r.URL.Path, "Authorization"
 	if r.Method == http.MethodConnect {
 		target, header = r.RequestURI, "Proxy-Authorization"
+		if r.ProtoMajor == 2 {
+			if r.URL.Path != "" || r.Header.Get(":protocol") != "" {
+				w.WriteHeader(http.StatusBadRequest)
+				return
+			}
+			target = r.Host
+		}
 		host, port, err := net.SplitHostPort(target)
 		if err != nil || host == "" || target != r.Host || len(target) > 255 || strings.ContainsAny(host, " /\\@?#\r\n") || (port != "80" && port != "443" && port != "5228") {
 			w.WriteHeader(http.StatusBadRequest)
@@ -236,6 +243,10 @@ func (g *Gateway) Private(w http.ResponseWriter, r *http.Request) {
 }
 
 func (g *Gateway) tunnel(w http.ResponseWriter, r *http.Request, device string, b binding, target string) {
+	if r.ProtoMajor == 2 {
+		g.tunnelHTTP2(w, r, device, b, target)
+		return
+	}
 	hijacker, ok := w.(http.Hijacker)
 	if !ok {
 		w.WriteHeader(http.StatusServiceUnavailable)
@@ -272,6 +283,70 @@ func (g *Gateway) tunnel(w http.ResponseWriter, r *http.Request, device string, 
 		close(finished)
 	}()
 	relay(client, upstream, upstream, &g.traffic.download)
+	drain := time.Now().Add(5 * time.Second)
+	client.SetReadDeadline(drain)
+	upstream.SetWriteDeadline(drain)
+	<-finished
+}
+
+type flushWriter struct {
+	writer  http.ResponseWriter
+	control *http.ResponseController
+}
+
+func (w flushWriter) Write(data []byte) (int, error) {
+	if err := w.control.SetWriteDeadline(time.Now().Add(15 * time.Second)); err != nil {
+		return 0, err
+	}
+	n, err := w.writer.Write(data)
+	if err == nil {
+		err = w.control.Flush()
+	}
+	if err == nil {
+		// The write timeout bounds flow-control stalls, not idle streams.
+		err = w.control.SetWriteDeadline(time.Time{})
+	}
+	return n, err
+}
+
+func (g *Gateway) tunnelHTTP2(w http.ResponseWriter, r *http.Request, device string, b binding, target string) {
+	control := http.NewResponseController(w)
+	deadline := time.Now().Add(2 * time.Hour)
+	if control.SetReadDeadline(deadline) != nil || control.SetWriteDeadline(time.Time{}) != nil {
+		w.WriteHeader(http.StatusServiceUnavailable)
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 8*time.Second)
+	upstream, status := g.dial(ctx, b.Login, target)
+	cancel()
+	if upstream == nil {
+		w.WriteHeader(status)
+		return
+	}
+	defer upstream.Close()
+	stop := context.AfterFunc(r.Context(), func() { upstream.Close() })
+	defer stop()
+	if !g.registry.track(device, b, r.Body, upstream) {
+		w.WriteHeader(http.StatusForbidden)
+		return
+	}
+	defer g.registry.untrack(device, r.Body)
+	upstream.SetDeadline(deadline)
+	if control.SetWriteDeadline(time.Now().Add(15*time.Second)) != nil {
+		return
+	}
+	w.WriteHeader(http.StatusOK)
+	if control.Flush() != nil || control.SetWriteDeadline(time.Time{}) != nil {
+		return
+	}
+	finished := make(chan struct{})
+	go func() {
+		defer close(finished)
+		relay(upstream, r.Body, upstream, &g.traffic.upload)
+	}()
+	io.Copy(meteredWriter{flushWriter{w, control}, &g.traffic.download}, upstream)
+	upstream.Close()
+	r.Body.Close()
 	<-finished
 }
 

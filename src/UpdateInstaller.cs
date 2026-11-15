@@ -40,14 +40,21 @@ namespace DevProxyApp {
   public static string InstallCore(UpdatePlan plan,Action<int> checkpoint,Action refreshCli){
    ValidatePaths(plan);NativeUpdates.ValidatePayload(plan.Release,plan.Stage);CheckOld(plan.GuiPath,plan.OldGuiHash);
    string backup=Path.Combine(plan.Stage,"backup-"+Guid.NewGuid().ToString("N"));Directory.CreateDirectory(backup);
-   string[] targets={plan.GuiPath},names={"DagamiAgentProxy.exe"};string[] originals={plan.OldGuiHash};
+   var targetList=new List<string>{plan.GuiPath};var namesList=new List<string>{"DagamiAgentProxy.exe"};var originalList=new List<string>{plan.OldGuiHash};
+   foreach(string name in new[]{"DagamiRecovery.exe","DagamiUninstall.exe"}) {
+    string alias=Path.Combine(Path.GetDirectoryName(plan.GuiPath),name);
+    bool existed=File.Exists(alias);
+    if(existed&&NativeUpdates.FileHash(alias)!=plan.OldGuiHash)throw new IOException("Компонент восстановления изменён. Обновите пакет вручную: "+name);
+    targetList.Add(alias);namesList.Add(name);originalList.Add(existed?plan.OldGuiHash:null);
+   }
+   string[] targets=targetList.ToArray(),names=namesList.ToArray(),originals=originalList.ToArray();
    for(int i=0;i<targets.Length;i++)if(originals[i]!=null)File.Copy(targets[i],Path.Combine(backup,names[i]));
    int changed=0;
    try{
-    for(int i=0;i<targets.Length;i++){if(checkpoint!=null)checkpoint(i);CheckOld(targets[i],originals[i]);Replace(Path.Combine(plan.Stage,names[i]),targets[i]);changed++;}
+    for(int i=0;i<targets.Length;i++){if(checkpoint!=null)checkpoint(i);CheckOld(targets[i],originals[i]);Replace(Path.Combine(plan.Stage,"DagamiAgentProxy.exe"),targets[i]);changed++;}
     if(NativeUpdates.FileHash(plan.GuiPath)!=plan.Release.Gui.Sha256.ToLowerInvariant())throw new IOException("Проверка файла после записи не пройдена.");
     if(refreshCli!=null)refreshCli();return backup;
-   }catch(Exception error){var rollbackErrors=new List<string>();for(int i=changed-1;i>=0;i--)try{string applied=i==0?plan.Release.Gui.Sha256:plan.Release.Cli.Sha256;if(!File.Exists(targets[i])||NativeUpdates.FileHash(targets[i])!=applied.ToLowerInvariant())throw new IOException("Файл изменён после записи; откат не перезаписывает чужие изменения.");if(originals[i]==null)File.Delete(targets[i]);else Replace(Path.Combine(backup,names[i]),targets[i]);}catch(Exception ex){rollbackErrors.Add(Path.GetFileName(targets[i])+": "+ex.GetType().Name);}
+   }catch(Exception error){var rollbackErrors=new List<string>();for(int i=changed-1;i>=0;i--)try{string applied=plan.Release.Gui.Sha256;if(!File.Exists(targets[i])||NativeUpdates.FileHash(targets[i])!=applied.ToLowerInvariant())throw new IOException("Файл изменён после записи; откат не перезаписывает чужие изменения.");if(originals[i]==null)File.Delete(targets[i]);else Replace(Path.Combine(backup,names[i]),targets[i]);}catch(Exception ex){rollbackErrors.Add(Path.GetFileName(targets[i])+": "+ex.GetType().Name);}
     if(rollbackErrors.Count>0)throw new IOException("Обновление не установлено; откат требует проверки. Копии: "+backup+". "+string.Join("; ",rollbackErrors.ToArray()),error);
     throw new IOException("Обновление отменено, прежний файл программы восстановлен. "+error.Message,error);
    }

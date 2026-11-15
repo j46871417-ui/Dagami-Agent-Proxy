@@ -26,28 +26,21 @@ namespace DevProxyApp {
             }
             if(command=="--brand-info") { using(var icon=Brand.LoadIcon()) Console.WriteLine(new JavaScriptSerializer().Serialize(new{name=Brand.Name,iconWidth=icon.Width,iconHeight=icon.Height})); return true; }
             if(command=="activate") {
-                if(args.Length!=2)throw new ArgumentException("activate КЛЮЧ_ИЗ_TELEGRAM");
-                string err;
-                if(LicenseManager.Activate(args[1],out err)){
-                    Console.WriteLine("Ключ успешно активирован. Dagami Agent Proxy готов к работе.");
-                    return true;
-                }
-                Console.WriteLine("Ошибка активации: "+err);
-                Console.WriteLine("Получить ключ: "+LicenseManager.BotUrl);
+                if(args.Length!=2)throw new ArgumentException("activate DAGAMI1-КЛЮЧ_ПРОКСИ");
+                string error;
+                if(!ProxyAccess.Connect(args[1],out error))throw new InvalidOperationException(error);
+                Console.WriteLine("Прокси Dagami подключён. Само приложение не требует активации.");
                 return true;
             }
             if(command=="license") {
-                bool active=LicenseManager.IsActivated();
-                Console.WriteLine(new JavaScriptSerializer().Serialize(new{
-                    activated=active,
-                    key=LicenseManager.GetMaskedKey(),
-                    bot=LicenseManager.BotUrl
+                Console.WriteLine(new JavaScriptSerializer().Serialize(new {
+                    applicationRequiresKey=false,proxyRequiresKey=true,
+                    proxyConfigured=ManagedAccess.HasActiveDevice(),bot=ProxyAccess.BotUrl
                 }));
                 return true;
             }
             if(command=="deactivate") {
-                LicenseManager.Deactivate();
-                Console.WriteLine("Лицензия деактивирована. При следующем запуске потребуется ввод ключа.");
+                Console.WriteLine("Dagami работает без активации. Для отключения прокси выберите прямой маршрут или recovery.");
                 return true;
             }
             if(command=="doctor"){
@@ -73,12 +66,6 @@ namespace DevProxyApp {
                 Console.WriteLine(FailureHint(File.ReadAllText(report.FullName)));return true;
             }
             bool help=command=="--help"||command=="-h"||command=="help";
-            if(!LicenseManager.IsActivated()&&!help&&command!="--brand-info"&&command!="--render-preview"&&command!="logs") {
-                Console.WriteLine("Dagami Agent Proxy: приложение не активировано.");
-                Console.WriteLine("Для активации выполните: DagamiAgentProxy.exe activate DAGAMI-XXXX-XXXX-XXXX");
-                Console.WriteLine("Бесплатный ключ в Telegram-боте: "+LicenseManager.BotUrl);
-                return true;
-            }
             if(command=="logs"){Console.WriteLine(Logger.LogFilePath);return true;}
             if(command=="run"||command=="diagnose")DnsProviders.Initialize();
             if(command=="dns")DnsProviders.Initialize(null,false);

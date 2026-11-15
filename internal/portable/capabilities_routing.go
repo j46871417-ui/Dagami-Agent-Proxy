@@ -20,3 +20,7 @@ func (c *Controller) DNSStatus(context.Context) (any, error) { return nil, errRo
 func (c *Controller) DNSChange(context.Context, string, string, string) (any, error) {
 	return nil, errRoutingOnly
 }
+
+func restoreRecordedDNS(context.Context, string) (bool, error) { return false, nil }
+
+func (c *Controller) restoreDNS(context.Context) (bool, error) { return false, nil }

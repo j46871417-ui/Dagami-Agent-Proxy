@@ -14,6 +14,7 @@ namespace DevProxyApp
     public sealed class NativeLaunchRequest {
         public string TargetId { get; set; }
         public string ShortcutKey { get; set; }
+        public bool Recovery { get; set; }
     }
     public sealed class NativeLaunchBroker : IDisposable {
         public static string UserName { get { return "DevProxy.Launch.v1." + WindowsIdentity.GetCurrent().User.Value; } }
@@ -55,7 +56,7 @@ namespace DevProxyApp
                         _server = server; if (!_running) return;
                         server.WaitForConnection();
                         var request = new JavaScriptSerializer { MaxJsonLength = 4096 }.Deserialize<NativeLaunchRequest>(ReadMessage(server));
-                        if (request == null || (request.TargetId != null && request.TargetId.Length > 160) || (request.ShortcutKey != null && request.ShortcutKey.Length > 32)) throw new InvalidDataException("Invalid launch request.");
+                        if (request == null || (request.Recovery && (!string.IsNullOrEmpty(request.TargetId) || !string.IsNullOrEmpty(request.ShortcutKey))) || (request.TargetId != null && request.TargetId.Length > 160) || (request.ShortcutKey != null && request.ShortcutKey.Length > 32)) throw new InvalidDataException("Invalid launch request.");
                         string error = _launch(request);
                         WriteMessage(server, error ?? "");
                     }
@@ -81,32 +82,17 @@ namespace DevProxyApp
             return "Фоновый DevProxy не ответил. Откройте его через значок в трее и проверьте журнал.";
         }
         public void Dispose() { _running = false; try { if (_server != null) _server.Dispose(); } catch { } }
-        private static bool ConfirmStartup(bool shortcut)
-        {
-            if (LicenseManager.IsActivated()) return true;
-            if (!shortcut && ManagedAccess.ReadDeferredKey() != null) return true;
-            using (var activation = new ActivationForm())
-                return AcceptStartupResult(activation.ShowDialog(), shortcut);
-        }
-
-        internal static bool AcceptStartupResult(DialogResult result, bool shortcut)
-        {
-            return result == DialogResult.OK || (!shortcut && result == DialogResult.Retry);
-        }
-
         public static void Run(NativeLaunchRequest initial, bool startInTray = false) {
             bool owner = false;
             using (var mutex = new Mutex(false, @"Local\" + UserName)) {
                 try { owner = mutex.WaitOne(0); } catch (AbandonedMutexException) { owner = true; }
                 if (!owner) {
                     if(startInTray) return;
-                    if (initial != null && !ConfirmStartup(true)) return;
                     string error = Send(UserName, initial ?? new NativeLaunchRequest(), 12000);
                     if (!string.IsNullOrEmpty(error)) MessageBox.Show(error, Brand.Name, MessageBoxButtons.OK, MessageBoxIcon.Warning);
                     return;
                 }
                 try {
-                    if (startInTray ? !LicenseManager.IsActivated() : !ConfirmStartup(initial != null)) return;
                     using (var form = new MainForm(initial == null ? null : initial.TargetId, initial != null, false, startInTray)) {
                         form.InitialShortcutKey = initial == null ? null : initial.ShortcutKey;
                         IntPtr handle = form.Handle;

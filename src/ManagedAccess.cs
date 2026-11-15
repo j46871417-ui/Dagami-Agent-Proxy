@@ -20,9 +20,8 @@ namespace DevProxyApp {
   public const string BotLink = BotChat + "?start=dagami_";
   public const string BotKeyLink = BotChat + "?start=dagamikey";
   public const string Bootstrap = "https://test-dns.dagami.ru:9443";
-  const string FallbackIp = "48.102.213.179";
   static readonly Uri BootstrapUri = new Uri(Bootstrap);
-  static long fallbackUntil;
+  static readonly Uri BuiltInControlUri = new Uri("https://dns.dagami.ru/");
   static readonly ConcurrentDictionary<Uri,GatewayClock> Clocks=new ConcurrentDictionary<Uri,GatewayClock>();
   static readonly byte[] Entropy=Encoding.UTF8.GetBytes("Dagami.Managed.Device.v1");
   static readonly Regex PairCode=new Regex(@"^[A-Za-z0-9_-]{43}$");
@@ -62,6 +61,7 @@ namespace DevProxyApp {
   }
 
   static GatewayClock Clock(Uri address){return Clocks.GetOrAdd(address,_=>new GatewayClock());}
+  static Uri ControlEndpoint(Uri address){return address.Equals(BootstrapUri)?BuiltInControlUri:address;}
 
   ManagedAccess(Uri endpoint,byte[] key){Endpoint=endpoint;privateKey=key;}
   public static Uri ParseEndpoint(string raw) {
@@ -175,7 +175,7 @@ namespace DevProxyApp {
    string custom=Environment.GetEnvironmentVariable("DAGAMI_MANAGED_URL");
    Uri address;
    if(string.IsNullOrWhiteSpace(custom)) {
-    var discovery=Send(BootstrapUri,"GET","/v1/config",null,null);
+    var discovery=Send(BuiltInControlUri,"GET","/v1/config",null,null);
     if(discovery.Item1==404) address=BootstrapUri;
     else {
      if(discovery.Item1!=200)throw new IOException("Не удалось получить адрес шлюза Dagami.");
@@ -207,49 +207,34 @@ namespace DevProxyApp {
     return tcp;
    } catch {tcp.Close();throw;}
   }
-  static TcpClient ConnectTcp(Uri address) {
-   if(!address.Equals(BootstrapUri))return Dial(address.IdnHost,address.Port,8000);
-   if(DateTime.UtcNow.Ticks<System.Threading.Interlocked.Read(ref fallbackUntil)) {
-    try {return Dial(FallbackIp,address.Port,2000);}
-    catch(SocketException){} catch(TimeoutException){}
-   }
-   try {return Dial(address.IdnHost,address.Port,2000);}
-   catch(SocketException){} catch(TimeoutException){}
-   var tcp=Dial(FallbackIp,address.Port,5000);
-   System.Threading.Interlocked.Exchange(ref fallbackUntil,DateTime.UtcNow.AddMinutes(1).Ticks);
-   return tcp;
-  }
   internal TcpClient ConnectTls(out Stream stream) {
    var clock=Clock(Endpoint);
    lock(clock.Sync) {
     if(clock.StartProbe()) {
-     try {Send(Endpoint,"GET","/v1/config",null,null);}
-     catch(IOException){} catch(SocketException){} catch(WebException){} catch(TimeoutException){}
+     try {Send(ControlEndpoint(Endpoint),"GET","/v1/config",null,null);}
+     catch(IOException){}catch(SocketException){}catch(WebException){}catch(TimeoutException){}
     }
    }
-   var tcp=ConnectTcp(Endpoint);
-   try {
-    stream=TlsDiagnostics.Connect(tcp.GetStream(),Endpoint.IdnHost,"managed-proxy",15000);
-    return tcp;
-   } catch {tcp.Close();throw;}
+   var connection=GatewayTransport.Open(Endpoint,"managed-proxy",12000);
+   stream=connection.Stream;return connection.Client;
   }
   Tuple<int,string> SendSigned(string method,string path,byte[] body) {
    string audience=Endpoint.Authority.ToLowerInvariant();
    var clock=Clock(Endpoint);
    long signedAt,started=Stopwatch.GetTimestamp();
    lock(clock.Sync)signedAt=clock.Now;
-   var response=Send(Endpoint,method,path,ProofAt(audience,method,path,signedAt),body);
+   var response=Send(ControlEndpoint(Endpoint),method,path,ProofAt(audience,method,path,signedAt),body);
    if(response.Item1==401) {
     long corrected;
     lock(clock.Sync)corrected=clock.Now;
     if(Math.Abs(corrected-signedAt-(Stopwatch.GetTimestamp()-started)/Stopwatch.Frequency)>5)
-     response=Send(Endpoint,method,path,ProofAt(audience,method,path,corrected),body);
+     response=Send(ControlEndpoint(Endpoint),method,path,ProofAt(audience,method,path,corrected),body);
    }
    return response;
   }
   static void ObserveClock(Uri address,int status,string date) {
    if(status!=200&&status!=401)return;
-   var clock=Clock(address);
+   var clock=Clock(address.Equals(BuiltInControlUri)?BootstrapUri:address);
    lock(clock.Sync)clock.Observe(date);
   }
   static Tuple<int,string> Send(Uri address,string method,string path,string proof,byte[] body) {
@@ -281,8 +266,9 @@ namespace DevProxyApp {
    }
   }
   static Tuple<int,string> SendBootstrap(Uri address,string method,string path,string proof,byte[] body) {
-   using(var tcp=ConnectTcp(address))
-   using(var stream=TlsDiagnostics.Connect(tcp.GetStream(),address.IdnHost,"managed-activation",8000)) {
+   var connection=GatewayTransport.Open(address,"managed-activation",10000);
+   using(var tcp=connection.Client)
+   using(var stream=connection.Stream) {
     string headers=method+" "+path+" HTTP/1.1\r\nHost: "+address.Authority+"\r\nConnection: close\r\n";
     if(proof!=null)headers+="Authorization: "+proof+"\r\n";
     if(method=="POST")headers+="Content-Length: "+(body==null?0:body.Length)+"\r\nContent-Type: application/json\r\n";

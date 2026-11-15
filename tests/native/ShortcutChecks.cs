@@ -71,6 +71,18 @@ class ShortcutChecks {
    Assert(Bytes(installed,File.ReadAllBytes(linkPath)),"Corrupt backup damaged shortcut");
    File.WriteAllBytes(record.BackupPath,backup);store.Restore("fixture");
    Assert(NativeShortcuts.Quote("C:\\space path\\")=="\"C:\\space path\\\\\"","Trailing backslash quoting broken");
+   string gemini=Path.Combine(root,"Gemini.exe"), geminiLauncher=Path.Combine(root,"GeminiAppLauncher.exe"), another=Path.Combine(root,"other");
+   Directory.CreateDirectory(another);File.Copy(exe,gemini);File.Copy(exe,geminiLauncher);
+   string foreignGemini=Path.Combine(another,"Gemini.exe");File.Copy(exe,foreignGemini);
+   string geminiLink=Path.Combine(folder,"Gemini.lnk"), foreignLink=Path.Combine(folder,"Other Gemini.lnk");
+   foreach(var item in new[]{new[]{geminiLink,geminiLauncher},new[]{foreignLink,foreignGemini}}) {
+    link=Link(shell,item[0]);Set(link,"TargetPath",item[1]);Set(link,"Arguments","--use-profile original");Save(link);Release(link);
+   }
+   byte[] originalGemini=File.ReadAllBytes(geminiLink), untouched=File.ReadAllBytes(foreignLink);
+   var geminiTarget=new AppTarget{Id="gemini-gui",ExePath=gemini,DisplayName="Gemini Desktop"};
+   Assert(store.EnablePrepared(geminiTarget,manager,new[]{folder},()=>{},()=>{}).Count==1,"Gemini launcher shortcut was not patched");
+   Assert(!Bytes(originalGemini,File.ReadAllBytes(geminiLink))&&Bytes(untouched,File.ReadAllBytes(foreignLink)),"Gemini shortcut matching crossed installation directories");
+   Assert(store.Restore(geminiTarget.Id).Count==1&&Bytes(originalGemini,File.ReadAllBytes(geminiLink)),"Gemini launcher failed exact rollback");
    string pipe="DevProxy.fixture."+Guid.NewGuid().ToString("N");int received=0;
    using(var broker=new NativeLaunchBroker(pipe,r=>{Interlocked.Increment(ref received);return r.TargetId=="reject"?"rejected":null;})) {
     broker.Start();

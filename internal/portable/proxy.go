@@ -25,6 +25,7 @@ type Bridge struct {
 	listener net.Listener
 	upstream *url.URL
 	proof    func(string) (string, error)
+	h2       *http.Transport
 	slots    chan struct{}
 	mu       sync.Mutex
 	peers    map[net.Conn]bool
@@ -38,13 +39,23 @@ func ParseProxy(raw string) (*url.URL, error) {
 	}
 	u, e := url.Parse(raw)
 	if e != nil || u.Hostname() == "" {
-		return nil, errors.New("нужен адрес HTTP, HTTPS или SOCKS5 прокси")
+		return nil, errors.New("нужен адрес HTTP, HTTPS, SOCKS4/4a или SOCKS5 прокси")
 	}
-	if u.Scheme != "http" && u.Scheme != "https" && u.Scheme != "socks5" && u.Scheme != "socks5h" {
+	switch u.Scheme {
+	case "http", "https", "socks4", "socks4a", "socks5", "socks5h", "socks5s":
+	default:
 		return nil, errors.New("неподдерживаемый протокол прокси")
 	}
-	if u.RawQuery != "" || u.Fragment != "" || (u.Path != "" && u.Path != "/") {
+	if u.RawQuery != "" || u.ForceQuery || strings.Contains(raw, "#") || (u.Path != "" && u.Path != "/") {
 		return nil, errors.New("в адресе прокси не должно быть пути или параметров")
+	}
+	if strings.HasSuffix(u.Host, ":") {
+		return nil, errors.New("неверный порт прокси")
+	}
+	if u.User != nil && (u.Scheme == "socks4" || u.Scheme == "socks4a") {
+		if _, passwordSet := u.User.Password(); passwordSet || strings.ContainsRune(u.User.Username(), 0) || len(u.User.Username()) > 255 {
+			return nil, errors.New("SOCKS4/4a принимает только идентификатор пользователя")
+		}
 	}
 	if _, e = strconv.Atoi(proxyPort(u)); e != nil {
 		return nil, errors.New("неверный порт прокси")
@@ -110,6 +121,9 @@ func (b *Bridge) Close() {
 	}
 	b.mu.Unlock()
 	b.wg.Wait()
+	if b.h2 != nil {
+		b.h2.CloseIdleConnections()
+	}
 }
 func (b *Bridge) accept() {
 	defer b.wg.Done()
@@ -162,9 +176,6 @@ func (b *Bridge) serve(c net.Conn) {
 		writeError(c, 400)
 		return
 	}
-	if req.Body != nil {
-		defer req.Body.Close()
-	}
 	target := req.Host
 	if req.Method != "CONNECT" {
 		if req.URL.Scheme != "http" || req.URL.Host == "" {
@@ -189,7 +200,11 @@ func (b *Bridge) serve(c net.Conn) {
 	// Never forward auth headers supplied to the local bridge.
 	req.Header.Del("Proxy-Authorization")
 	req.Header.Del("Proxy-Connection")
-	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+	budget := 8 * time.Second
+	if b.proof != nil {
+		budget = 12 * time.Second
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), budget)
 	defer cancel()
 	upstream, e := b.dial(ctx, host, pn)
 	if e != nil {
@@ -221,7 +236,9 @@ func (b *Bridge) serve(c net.Conn) {
 	io.Copy(c, upstream)
 	closeWrite(c)
 	// Bound a peer that never finishes its upload after the response closed.
-	c.SetReadDeadline(time.Now().Add(5 * time.Second))
+	drain := time.Now().Add(5 * time.Second)
+	c.SetReadDeadline(drain)
+	upstream.SetWriteDeadline(drain)
 	<-done
 }
 func closeWrite(c net.Conn) {
@@ -247,11 +264,19 @@ func (b *Bridge) dialOnce(ctx context.Context, host string, port int) (net.Conn,
 		return d.DialContext(ctx, "tcp", net.JoinHostPort(host, strconv.Itoa(port)))
 	}
 	u := b.upstream
+	if b.h2 != nil {
+		target := net.JoinHostPort(host, strconv.Itoa(port))
+		proof, err := b.proof(target)
+		if err != nil {
+			return nil, err
+		}
+		return dialHTTP2(ctx, b.h2, u, target, proof)
+	}
 	endpoint := net.JoinHostPort(u.Hostname(), proxyPort(u))
 	var c net.Conn
 	var e error
 	if b.proof != nil {
-		c, e = managed.DialGateway(ctx, &d, "tcp", endpoint)
+		c, e = managed.DialGatewayTLS(ctx, "tcp", endpoint)
 	} else {
 		c, e = d.DialContext(ctx, "tcp", endpoint)
 	}
@@ -267,16 +292,19 @@ func (b *Bridge) dialOnce(ctx context.Context, host string, port int) (net.Conn,
 	if deadline, ok := ctx.Deadline(); ok {
 		c.SetDeadline(deadline)
 	}
-	if u.Scheme == "https" {
+	if (u.Scheme == "https" || u.Scheme == "socks5s") && b.proof == nil {
 		t := tls.Client(c, &tls.Config{ServerName: u.Hostname(), MinVersion: tls.VersionTLS12})
 		if e = t.HandshakeContext(ctx); e != nil {
 			return nil, e
 		}
 		c = t
 	}
-	if strings.HasPrefix(u.Scheme, "socks") {
+	switch u.Scheme {
+	case "socks4", "socks4a":
+		e = socks4Connect(ctx, c, u, host, port)
+	case "socks5", "socks5h", "socks5s":
 		e = socksConnect(c, u, host, port)
-	} else {
+	default:
 		e = httpConnect(c, u, host, port, b.proof)
 	}
 	if e != nil {
@@ -326,7 +354,7 @@ func httpConnect(c net.Conn, u *url.URL, host string, port int, proof func(strin
 	if e != nil {
 		return e
 	}
-	if r.StatusCode != 200 {
+	if r.StatusCode < 200 || r.StatusCode >= 300 {
 		return connectStatus(r.StatusCode)
 	}
 	return nil
@@ -334,7 +362,7 @@ func httpConnect(c net.Conn, u *url.URL, host string, port int, proof func(strin
 func socksConnect(c net.Conn, u *url.URL, host string, port int) error {
 	methods := []byte{5, 1, 0}
 	if u.User != nil {
-		methods = []byte{5, 2, 0, 2}
+		methods = []byte{5, 1, 2}
 	}
 	if _, e := c.Write(methods); e != nil {
 		return e
@@ -349,8 +377,8 @@ func socksConnect(c net.Conn, u *url.URL, host string, port int) error {
 	if r[1] == 2 && u.User != nil {
 		password, _ := u.User.Password()
 		user := u.User.Username()
-		if len(user) > 255 || len(password) > 255 {
-			return errors.New("SOCKS credentials too long")
+		if len(user) == 0 || len(user) > 255 || len(password) == 0 || len(password) > 255 {
+			return errors.New("invalid SOCKS credentials length")
 		}
 		p := append([]byte{1, byte(len(user))}, []byte(user)...)
 		p = append(p, byte(len(password)))
@@ -364,7 +392,7 @@ func socksConnect(c net.Conn, u *url.URL, host string, port int) error {
 		if r[0] != 1 || r[1] != 0 {
 			return errors.New("SOCKS authentication rejected")
 		}
-	} else if r[1] != 0 {
+	} else if r[1] != 0 || u.User != nil {
 		return errors.New("SOCKS method rejected")
 	}
 	p := []byte{5, 1, 0}
@@ -410,9 +438,59 @@ func socksConnect(c net.Conn, u *url.URL, host string, port int) error {
 			return e
 		}
 		n = int(r[0])
+		if n == 0 {
+			return errors.New("invalid SOCKS response hostname")
+		}
 	default:
 		return errors.New("invalid SOCKS address")
 	}
 	_, e := io.CopyN(io.Discard, c, int64(n+2))
 	return e
+}
+
+func socks4Connect(ctx context.Context, c net.Conn, proxy *url.URL, host string, port int) error {
+	ip, name := net.ParseIP(host), ""
+	if ip == nil {
+		if proxy.Scheme == "socks4a" {
+			if len(host) > 255 || strings.ContainsRune(host, 0) {
+				return errors.New("invalid SOCKS4a hostname")
+			}
+			for _, ch := range host {
+				if ch > 127 {
+					return errors.New("use an ASCII/IDNA hostname")
+				}
+			}
+			ip, name = net.IPv4(0, 0, 0, 1), host
+		} else {
+			addresses, err := net.DefaultResolver.LookupIP(ctx, "ip4", host)
+			if err != nil || len(addresses) == 0 {
+				return errors.New("SOCKS4 destination has no IPv4 address")
+			}
+			ip = addresses[0]
+		}
+	}
+	v4 := ip.To4()
+	if v4 == nil || (name == "" && v4[0] == 0 && v4[1] == 0 && v4[2] == 0) {
+		return errors.New("SOCKS4/4a requires a valid IPv4 destination")
+	}
+	request := append([]byte{4, 1, byte(port >> 8), byte(port)}, v4...)
+	if proxy.User != nil {
+		request = append(request, proxy.User.Username()...)
+	}
+	request = append(request, 0)
+	if name != "" {
+		request = append(request, name...)
+		request = append(request, 0)
+	}
+	if _, err := c.Write(request); err != nil {
+		return err
+	}
+	var reply [8]byte
+	if _, err := io.ReadFull(c, reply[:]); err != nil {
+		return err
+	}
+	if reply[0] != 0 || reply[1] != 90 {
+		return errors.New("SOCKS4/4a CONNECT rejected")
+	}
+	return nil
 }

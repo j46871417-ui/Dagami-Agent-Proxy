@@ -10,7 +10,7 @@ build and source archive. Installed applications are updated only by the user.
 | Conflicting Gemini proxy flags | Managed launch removes previous proxy/PAC/autodetect/no-proxy switches and builds one consistent configuration, preserving unrelated quoted arguments. |
 | Live relays bypass the capacity limit | A native connection holds its slot until both relay directions complete. Python limits the complete handler/relay lifetime, not just upstream setup. |
 | Repeated plain HTTP requests lose upstream authorization | Ordinary HTTP uses one framed transaction per connection with `Connection: close`. Every new connection receives the configured upstream authorization; pipelined requests cannot pass through unprocessed. CONNECT remains opaque and 101 upgrades retain duplex streaming. |
-| Forged legacy licenses | A signed-license verifier and issuer contract are prepared. **Legacy acceptance intentionally remains enabled until the issuing bot is migrated. This finding is not closed yet.** See [SIGNED_LICENSES.md](SIGNED_LICENSES.md). |
+| Legacy application licenses | Removed from the client. Only proxy access is authenticated; legacy application keys cannot grant proxy access. |
 | Other local accounts can use the proxy | The bridge identifies the client-side TCP owner and permits only its own OS account. Identity lookup failures deny access. Same-account processes remain trusted. |
 | Damaged launchers displayed as patched | Invalid or unreadable launcher records display a recovery state and retain the undo action. They do not count as ready. |
 

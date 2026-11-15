@@ -194,7 +194,11 @@ func (w *winWindow) show(v view) {
 	for i, field := range v.fields {
 		y := 155 + i*68
 		w.control("STATIC", field.label, 0, 20, y, 744, 22, 0)
-		w.fields = append(w.fields, w.control("EDIT", field.value, 0x00810080, 20, y+24, 744, 29, 0))
+		style := uintptr(0x00810080)
+		if field.private() {
+			style |= 0x0020
+		}
+		w.fields = append(w.fields, w.control("EDIT", field.value, style, 20, y+24, 744, 29, 0))
 	}
 	if v.report != "" {
 		w.control("EDIT", strings.ReplaceAll(v.report, "\n", "\r\n"), 0x00A10844, 20, 150, 744, 270, 0)

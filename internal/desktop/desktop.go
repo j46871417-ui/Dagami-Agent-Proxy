@@ -34,20 +34,43 @@ type window interface {
 
 type desktop struct {
 	window
-	controller *portable.Controller
-	ctx        context.Context
-	page       string
-	status     string
-	preview    bool
+	controller  *portable.Controller
+	ctx         context.Context
+	page        string
+	status      string
+	preview     bool
+	recoveryDir string
 }
 
-func Run(c *portable.Controller, page string) error {
+func Run(c *portable.Controller, page string) error { return RunLaunch(c, page, "") }
+func RunLaunch(c *portable.Controller, page, launch string) error {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+	defer c.SetRemoteLaunchCallback(nil)
 	return runWindow(func(w window) {
 		d := &desktop{window: w, controller: c, ctx: ctx, page: page, preview: c.Snapshot().Preview}
+		c.SetRemoteLaunchCallback(func(err error) {
+			w.post(func() {
+				if activation, ok := w.(interface{ activate() }); ok {
+					activation.activate()
+				}
+				if err != nil {
+					d.report("Запуск через Dagami", portable.Redact(err.Error()))
+				} else if d.page == "apps" {
+					d.render()
+				}
+			})
+		})
 		d.render()
+		if launch != "" {
+			d.run("Запуск приложения", func() (string, error) { return "", c.Launch(launch) })
+		}
 	})
+}
+func RunRecovery(dir string) error {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	return runWindow(func(w window) { d := &desktop{window: w, ctx: ctx, page: "recovery", recoveryDir: dir}; d.recovery() })
 }
 
 func action(label string, click func()) button {
@@ -55,7 +78,10 @@ func action(label string, click func()) button {
 }
 
 func (d *desktop) showPage(v view) {
-	for _, entry := range []struct{ id, label string }{{"apps", "Приложения"}, {"connection", "Подключение"}, {"dns", "DNS и сброс"}, {"journal", "Журнал"}} {
+	for _, entry := range []struct{ id, label string }{{"apps", "Приложения"}, {"connection", "Подключение"}, {"dns", "DNS и сброс"}, {"journal", "Журнал"}, {"recovery", "Восстановление"}} {
+		if d.controller == nil && entry.id != "recovery" {
+			continue
+		}
 		if entry.id != "dns" || !portable.RoutingOnly {
 			v.nav = append(v.nav, action(entry.label, func() { d.page, d.status = entry.id, ""; d.render() }))
 		}
@@ -70,6 +96,10 @@ func (d *desktop) showPage(v view) {
 }
 
 func (d *desktop) render() {
+	if d.controller == nil || d.page == "recovery" {
+		d.recovery()
+		return
+	}
 	snapshot := d.controller.Snapshot()
 	switch d.page {
 	case "connection":
@@ -127,7 +157,7 @@ func (d *desktop) confirm(title, detail string, fn func()) {
 }
 
 func (d *desktop) apps(snapshot portable.Snapshot) {
-	v := view{title: "Приложения", detail: "Выберите программу и запустите её через активный профиль."}
+	v := view{title: "Приложения", detail: "Выберите программу и запустите её через активный профиль. Перед первым запуском закройте уже открытую IDE. Ключ нужен только для прокси Dagami."}
 	sessions := make(map[string]portable.SessionInfo, len(snapshot.Sessions))
 	for _, session := range snapshot.Sessions {
 		sessions[session.App] = session
@@ -151,11 +181,11 @@ func (d *desktop) apps(snapshot portable.Snapshot) {
 		}}
 	}
 	v.actions = []button{
-		withApp("Запустить", func(app portable.App) {
+		withApp("Запустить через Dagami", func(app portable.App) {
 			if app.Path == "" {
 				d.appEditor(app)
 			} else if app.Console {
-				d.report("Запуск CLI", "Откройте терминал в папке Dagami и выполните:\n\nDagamiAgentProxy run "+app.ID+" -- --help\n\nУберите --help для интерактивного запуска.")
+				d.report("Запуск CLI", "Откройте терминал в папке Dagami и выполните:\n\n./DagamiAgentProxy run "+app.ID+" -- --help\n\nУберите --help для интерактивного запуска.")
 			} else {
 				d.run("Запуск приложения", func() (string, error) { return "", d.controller.Launch(app.ID) })
 			}
@@ -170,6 +200,36 @@ func (d *desktop) apps(snapshot portable.Snapshot) {
 		withApp("Изменить путь", d.appEditor),
 		action("Добавить", func() { d.appEditor(portable.App{}) }),
 		action("Обновить", d.render),
+	}
+	if snapshot.OS == "linux" || snapshot.OS == "darwin" {
+		v.actions = append([]button{
+			withApp("Пропатчить", func(app portable.App) {
+				d.run("Подготовка обычного запуска", func() (string, error) {
+					path, err := d.controller.EnableLauncher(app.ID)
+					if err != nil {
+						return "", err
+					}
+					return "Создан отдельный запуск: " + path + "\nОригинал приложения не менялся. Используйте этот запуск для подключения через Dagami.", nil
+				})
+			}),
+			withApp("Отменить патч", func(app portable.App) {
+				d.confirm("Отменить управляемый запуск?", "Оригинал приложения и ваши аккаунты сохранятся.", func() {
+					d.run("Отмена подготовки", func() (string, error) { return "", d.controller.RestoreLauncher(app.ID) })
+				})
+			}),
+		}, v.actions...)
+		needsRepair := false
+		for _, app := range snapshot.State.Apps {
+			if d.controller.LauncherStatus(app.ID).Issue != "" {
+				needsRepair = true
+				break
+			}
+		}
+		if needsRepair {
+			v.actions = append(v.actions, withApp("Проверить и восстановить", func(app portable.App) {
+				d.run("Проверка запуска", func() (string, error) { return d.controller.EnableLauncher(app.ID) })
+			}))
+		}
 	}
 	if !snapshot.RoutingOnly {
 		v.actions = append(v.actions, withApp("Проверить backend", func(app portable.App) {
@@ -222,7 +282,7 @@ func (d *desktop) profiles(snapshot portable.Snapshot) {
 			d.run("Выбор профиля", func() (string, error) { return "", d.controller.SelectProfile(p.ID) })
 		}),
 		action("Свой прокси", func() {
-			d.showPage(view{title: "Свой прокси", detail: "Введите HTTP, HTTPS или SOCKS5 URL. Реквизиты сохраняются в системном хранилище.", fields: []field{{label: "Название", value: "Свой прокси"}, {label: "Адрес прокси"}},
+			d.showPage(view{title: "Свой прокси", detail: "Введите HTTP, HTTPS, SOCKS4/4a, SOCKS5 или socks5s:// для SOCKS5 поверх TLS. Реквизиты сохраняются в системном хранилище.", fields: []field{{label: "Название", value: "Свой прокси"}, {label: "Адрес прокси"}},
 				actions: []button{{"Сохранить", func(_ int, values []string) {
 					d.run("Сохранение профиля", func() (string, error) {
 						return "", d.controller.SaveProfile(strings.TrimSpace(values[0]), strings.TrimSpace(values[1]))
@@ -241,14 +301,14 @@ func (d *desktop) profiles(snapshot portable.Snapshot) {
 }
 
 func (d *desktop) managedPair() {
-	d.showPage(view{title: "Подключить Dagami", detail: "Получите ключ в Telegram через /key и вставьте его. Адрес шлюза определяется автоматически.",
+	d.showPage(view{title: "Прокси Dagami по ключу", detail: "Само приложение работает без ключа. Для прокси Dagami получите ключ через /key. Адрес шлюза определяется автоматически.",
 		fields: []field{{label: "Ключ из Telegram"}}, actions: []button{
 			action("Получить ключ", func() {
 				if err := openTelegram(managed.BotKeyURL); err != nil {
 					d.report("Ключ Dagami", managed.BotKeyURL)
 				}
 			}),
-			{"Активировать", func(_ int, values []string) {
+			{"Подключить прокси", func(_ int, values []string) {
 				d.run("Подключение Dagami", func() (string, error) {
 					result, err := d.controller.UseAccessCode(d.ctx, strings.TrimSpace(values[0]))
 					if err == nil && result.Active {
@@ -402,4 +462,35 @@ func reportValue(value any, err error) (string, error) {
 	}
 	data, err := json.MarshalIndent(value, "", "  ")
 	return string(data), err
+}
+
+func (d *desktop) recovery() {
+	d.showPage(view{title: "Восстановить обычный интернет", detail: "Ключ и сервер не нужны. Отменим собственные управляемые запуски и DNS. Открытые IDE не завершаются; перезапустите их для удаления унаследованного прокси. Пароли и профили сохраняются.", actions: []button{
+		action("Восстановить интернет", func() {
+			d.confirm("Выполнить восстановление?", "Изменения вне Dagami не перезаписываются. При конфликте журнал сохранится.", func() {
+				d.run("Восстановление", func() (string, error) {
+					if d.controller != nil {
+						return recoveryText(d.controller.Recover(d.ctx)), nil
+					}
+					report, err := portable.StandaloneRecovery(d.ctx, d.recoveryDir)
+					text := recoveryText(report)
+					if err != nil {
+						return text + "\n" + err.Error(), nil
+					}
+					return text, nil
+				})
+			})
+		}), action("Назад", d.render)}})
+}
+func (f field) private() bool {
+	label := strings.ToLower(f.label)
+	return strings.Contains(label, "ключ") || strings.Contains(label, "http")
+}
+
+func recoveryText(report portable.RecoveryReport) string {
+	lines := append([]string(nil), report.Completed...)
+	if len(report.Errors) > 0 {
+		lines = append(lines, "", "Требуется внимание", strings.Join(report.Errors, "\n"))
+	}
+	return strings.Join(lines, "\n") + "\n\nПерезапустите приложения, которые ранее получили настройки прокси."
 }

@@ -5,6 +5,7 @@ package portable
 import (
 	"bytes"
 	"context"
+	"encoding/hex"
 	"encoding/xml"
 	"errors"
 	"io"
@@ -19,7 +20,7 @@ import (
 )
 
 func keychainCommand(args []string, input string) (string, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, args[0], args[1:]...)
 	if input != "" {
@@ -37,7 +38,7 @@ func protectSecret(id, secret string) (string, error) {
 		quote := func(s string) string {
 			return `"` + strings.NewReplacer(`\`, `\\`, `"`, `\"`, "\r", "", "\n", "").Replace(s) + `"`
 		}
-		_, e := keychainCommand([]string{"/usr/bin/security", "-i"}, "add-generic-password -U -s ru.dagami.native -a "+quote(id)+" -w "+quote(secret)+"\n")
+		_, e := keychainCommand([]string{"/usr/bin/security", "-i"}, "add-generic-password -U -s ru.dagami.native -a "+quote(id)+" -X "+hex.EncodeToString([]byte(secret))+"\n")
 		if e != nil {
 			return "", e
 		}
@@ -70,17 +71,38 @@ func prepareProcess(cmd *exec.Cmd) {
 	}
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 }
-func manageProcess(cmd *exec.Cmd) (func() error, error) {
+func manageProcess(cmd *exec.Cmd) (func() error, func() error, error) {
 	var once sync.Once
 	return func() error {
 		var e error
 		once.Do(func() { e = syscall.Kill(-cmd.Process.Pid, syscall.SIGTERM) })
 		return e
-	}, nil
+	}, func() error { once.Do(func() {}); return nil }, nil
 }
+func waitForDescendants(cmd *exec.Cmd, released <-chan struct{}) {
+	ticker := time.NewTicker(250 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		if syscall.Kill(-cmd.Process.Pid, 0) != nil {
+			return
+		}
+		select {
+		case <-released:
+			return
+		case <-ticker.C:
+		}
+	}
+}
+
 func resolveExecutable(path string) (string, error) {
 	if runtime.GOOS == "darwin" && strings.HasSuffix(path, ".app") {
-		data, e := os.ReadFile(filepath.Join(path, "Contents", "Info.plist"))
+		plistPath := filepath.Join(path, "Contents", "Info.plist")
+		data, e := os.ReadFile(plistPath)
+		if e == nil && bytes.HasPrefix(data, []byte("bplist00")) {
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			data, e = exec.CommandContext(ctx, "/usr/bin/plutil", "-convert", "xml1", "-o", "-", plistPath).Output()
+			cancel()
+		}
 		if e != nil {
 			return "", e
 		}
@@ -92,7 +114,7 @@ func resolveExecutable(path string) (string, error) {
 				break
 			}
 			if e != nil {
-				return "", errors.New("нужен XML Info.plist или прямой путь к исполняемому файлу")
+				return "", errors.New("не удалось прочитать Info.plist; укажите исполняемый файл напрямую")
 			}
 			if start, ok := token.(xml.StartElement); ok && (start.Name.Local == "key" || start.Name.Local == "string") {
 				var value string
@@ -102,7 +124,7 @@ func resolveExecutable(path string) (string, error) {
 				if start.Name.Local == "key" {
 					found = value == "CFBundleExecutable"
 				} else if found {
-					if filepath.Base(value) != value {
+					if filepath.Base(value) != value || value == "." || value == ".." || strings.ContainsAny(value, "\x00\r\n") {
 						return "", errors.New("неверный CFBundleExecutable")
 					}
 					path = filepath.Join(path, "Contents", "MacOS", value)

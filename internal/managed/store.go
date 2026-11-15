@@ -6,7 +6,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
-	"net"
+	"io"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -62,13 +62,13 @@ type registry struct {
 	keys    map[string]accessCode
 	codes   map[[32]byte]binding
 	totals  keyTotals
-	tunnels map[string]map[net.Conn]net.Conn
+	tunnels map[string]map[io.Closer]io.Closer
 	closing bool
 	active  sync.WaitGroup
 }
 
 func openRegistry(path string) (*registry, error) {
-	r := &registry{file: path, devices: map[string]binding{}, pending: map[[32]byte]pendingPair{}, keys: map[string]accessCode{}, codes: map[[32]byte]binding{}, tunnels: map[string]map[net.Conn]net.Conn{}}
+	r := &registry{file: path, devices: map[string]binding{}, pending: map[[32]byte]pendingPair{}, keys: map[string]accessCode{}, codes: map[[32]byte]binding{}, tunnels: map[string]map[io.Closer]io.Closer{}}
 	raw, err := os.ReadFile(path)
 	if errors.Is(err, os.ErrNotExist) {
 		return r, nil
@@ -358,21 +358,21 @@ func (r *registry) revoke(subject string) error {
 	return nil
 }
 
-func (r *registry) track(device string, b binding, conn, upstream net.Conn) bool {
+func (r *registry) track(device string, b binding, conn, upstream io.Closer) bool {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.closing || r.devices[device] != b || len(r.tunnels[device]) >= 64 {
 		return false
 	}
 	if r.tunnels[device] == nil {
-		r.tunnels[device] = make(map[net.Conn]net.Conn)
+		r.tunnels[device] = make(map[io.Closer]io.Closer)
 	}
 	r.tunnels[device][conn] = upstream
 	r.active.Add(1)
 	return true
 }
 
-func (r *registry) untrack(device string, conn net.Conn) {
+func (r *registry) untrack(device string, conn io.Closer) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	delete(r.tunnels[device], conn)

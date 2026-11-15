@@ -6,6 +6,8 @@ import (
 	"context"
 	"errors"
 	"net"
+	"os"
+	"path/filepath"
 	"strings"
 )
 
@@ -35,4 +37,22 @@ func (c *Controller) DNSChange(ctx context.Context, operation, server, iface str
 	}
 	c.mu.Unlock()
 	return value, e
+}
+
+func restoreRecordedDNS(ctx context.Context, dir string) (bool, error) {
+	if _, err := os.Stat(filepath.Join(dir, "dns-backup.json")); os.IsNotExist(err) {
+		return false, nil
+	} else if err != nil {
+		return false, err
+	}
+	_, err := dnsChange(ctx, dir, "restore", "", "")
+	return err == nil, err
+}
+
+func (c *Controller) restoreDNS(ctx context.Context) (bool, error) {
+	if !c.dnsMu.TryLock() {
+		return false, errors.New("дождитесь завершения текущей DNS-операции")
+	}
+	defer c.dnsMu.Unlock()
+	return restoreRecordedDNS(ctx, c.dir)
 }

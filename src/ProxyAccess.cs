@@ -1,159 +1,43 @@
 using System;
 using System.IO;
-using System.Text;
-using System.Security.Cryptography;
 using System.Drawing;
 using System.Windows.Forms;
 using System.Diagnostics;
 using System.Threading.Tasks;
 
 namespace DevProxyApp {
-    public static class LicenseManager {
-        public const string Alphabet = "23456789ABCDEFGHJKLMNPQRSTUVWXYZ";
-        public const string Salt = "DagamiAgentProxySecretSalt2026";
+    // Application access is unrestricted. Only the remote Dagami proxy authenticates a device.
+    public static class ProxyAccess {
         public const string BotUrl = ManagedAccess.BotKeyLink;
-        const string DeviceLicense = "DAGAMI-DEVICE-V1";
-
-        static readonly byte[] Entropy = Encoding.UTF8.GetBytes("Dagami.License.v1");
-
-        static string LicenseFilePath {
-            get {
-                string dir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "devproxy");
-                Directory.CreateDirectory(dir);
-                return Path.Combine(dir, "license.dat");
-            }
-        }
-
-        public static string ComputeChecksum(string payload) {
-            using (var sha = SHA256.Create()) {
-                byte[] hash = sha.ComputeHash(Encoding.UTF8.GetBytes(payload + Salt));
-                char[] chars = new char[4];
-                for (int i = 0; i < 4; i++) {
-                    chars[i] = Alphabet[hash[i] % 32];
-                }
-                return new string(chars);
-            }
-        }
-
-        public static string NormalizeKey(string raw) {
-            if (string.IsNullOrEmpty(raw)) return "";
-            if(raw.Trim().StartsWith("DAGAMI2.",StringComparison.Ordinal))return raw.Trim();
-            var sb = new StringBuilder();
-            foreach (char c in raw) {
-                if (char.IsLetterOrDigit(c)) sb.Append(char.ToUpperInvariant(c));
-            }
-            string cleaned = sb.ToString();
-            if (!cleaned.StartsWith("DAGAMI", StringComparison.OrdinalIgnoreCase)) return "";
-            string body = cleaned.Substring(6);
-            if (body.Length != 12) return "";
-            return "DAGAMI-" + body.Substring(0, 4) + "-" + body.Substring(4, 4) + "-" + body.Substring(8, 4);
-        }
-
-        public static bool ValidateKey(string key) {
-            string normalized = NormalizeKey(key);
-            if (string.IsNullOrEmpty(normalized)) return false;
-            if(normalized.StartsWith("DAGAMI2.",StringComparison.Ordinal))return SignedLicenses.Validate(normalized);
-            if(!SignedLicenses.AcceptLegacyKeys)return false;
-            string body = normalized.Replace("-", "").Substring(6);
-            foreach (char c in body) {
-                if (Alphabet.IndexOf(c) < 0) return false;
-            }
-            string payload = body.Substring(0, 8);
-            string chk = body.Substring(8, 4);
-            return string.Equals(ComputeChecksum(payload), chk, StringComparison.OrdinalIgnoreCase);
-        }
-
-        public static bool IsActivated() {
-            string stored = GetStoredKey();
-            return stored == DeviceLicense ? ManagedAccess.HasActiveDevice() : ValidateKey(stored);
-        }
-
-        public static string GetStoredKey() {
-            try {
-                string path = LicenseFilePath;
-                if (!File.Exists(path)) return null;
-                byte[] encrypted = File.ReadAllBytes(path);
-                byte[] plain = ProtectedData.Unprotect(encrypted, Entropy, DataProtectionScope.CurrentUser);
-                return Encoding.UTF8.GetString(plain);
-            } catch {
-                return null;
-            }
-        }
-
-        public static string GetMaskedKey() {
-            string stored = GetStoredKey();
-            if (string.IsNullOrEmpty(stored)) return null;
-            if (stored == DeviceLicense) return "Устройство Dagami";
-            string normalized = NormalizeKey(stored);
-            if (normalized.StartsWith("DAGAMI2.",StringComparison.Ordinal))return "DAGAMI2-****";
-            if (normalized.Length != 21) return "DAGAMI-****-****-****";
-            return "DAGAMI-****-****-" + normalized.Substring(normalized.Length - 4);
-        }
-
-        public static bool Activate(string key, out string error) {
-            string normalized = NormalizeKey(key);
-            bool managed = ManagedAccess.IsAccessCode((key ?? "").Trim());
-            if (!managed && !ValidateKey(normalized)) {
-                error = "Неверный ключ доступа. Проверьте правильность ввода.";
+        public static bool Connect(string key, out string error) {
+            if (!ManagedAccess.IsAccessCode((key ?? "").Trim())) {
+                error = "Нужен ключ прокси DAGAMI1- из /key. Приложение работает без ключа.";
                 return false;
             }
-            try {
-                if (managed) ActivateDevice(ManagedAccess.Redeem(key.Trim()));
-                else SaveLicense(normalized);
-                error = null;
-                return true;
-            } catch (Exception ex) {
-                error = ex.Message;
-                return false;
-            }
+            try { ConnectDevice(ManagedAccess.Redeem(key.Trim())); error = null; return true; }
+            catch (Exception failure) { error = failure.Message; return false; }
         }
-
-        internal static void ActivateDevice(ManagedAccess device) {
-            string previous = GetStoredKey();
-            device.Commit(() => {
-                SaveLicense(DeviceLicense);
-                try { ManagedAccess.SelectProfile(); }
-                catch {
-                    if (previous == null) File.Delete(LicenseFilePath);
-                    else SaveLicense(previous);
-                    throw;
-                }
-            });
-        }
-
-        static void SaveLicense(string key) {
-            byte[] plain = Encoding.UTF8.GetBytes(key);
-            byte[] encrypted = ProtectedData.Protect(plain, Entropy, DataProtectionScope.CurrentUser);
-            string path = LicenseFilePath;
-            string temp = path + "." + Guid.NewGuid().ToString("N") + ".tmp";
-            try {
-                File.WriteAllBytes(temp, encrypted);
-                if (File.Exists(path)) File.Replace(temp, path, null);
-                else File.Move(temp, path);
-            } finally { if (File.Exists(temp)) File.Delete(temp); }
-        }
-
-        public static void Deactivate() {
-            try {
-                string path = LicenseFilePath;
-                if (File.Exists(path)) File.Delete(path);
-            } catch { }
+        internal static void ConnectDevice(ManagedAccess device) {
+            if (device == null) throw new ArgumentNullException("device");
+            device.Commit(ManagedAccess.SelectProfile);
         }
     }
 
-    public sealed class ActivationForm : Form {
+    public sealed class ProxyKeyForm : Form {
         readonly TextBox _keyBox;
         readonly Label _errorLabel;
         readonly Button _activateBtn;
         readonly Button _botBtn;
         readonly Button _exitBtn, _saveOfflineBtn;
         readonly Func<bool> _canChangeRoute;
+        readonly bool _activateRoute;
 
-        public ActivationForm() : this(null) { }
+        public ProxyKeyForm() : this(null) { }
 
-        internal ActivationForm(Func<bool> canChangeRoute) {
+        internal ProxyKeyForm(Func<bool> canChangeRoute, bool activateRoute = true) {
             _canChangeRoute = canChangeRoute;
-            Text = Brand.Name + (canChangeRoute == null ? " — Активация" : " — Подключить Dagami");
+            _activateRoute = activateRoute;
+            Text = Brand.Name + " — Подключить прокси";
             FormBorderStyle = FormBorderStyle.FixedDialog;
             MaximizeBox = false;
             MinimizeBox = false;
@@ -187,7 +71,7 @@ namespace DevProxyApp {
                 AutoSize = true,
                 Font = new Font("Segoe UI", 10, FontStyle.Regular),
                 ForeColor = FluentTheme.Accent,
-                Text = canChangeRoute == null ? "Активация Dagami" : "Общий маршрут"
+                Text = "Подключение к прокси Dagami"
             };
             Controls.Add(subLabel);
 
@@ -196,7 +80,7 @@ namespace DevProxyApp {
                 Size = new Size(456, 42),
                 Font = new Font("Segoe UI", 9.5f),
                 ForeColor = FluentTheme.Muted,
-                Text = "Получите ключ через /key в Telegram и вставьте его.\nАдрес шлюза определяется автоматически."
+                Text = "Ключ из /key нужен только для прокси Dagami.\nПриложение и свой прокси работают без ключа."
             };
             Controls.Add(descLabel);
 
@@ -212,7 +96,7 @@ namespace DevProxyApp {
                 AutoSize = true,
                 Font = new Font("Segoe UI", 8.5f, FontStyle.Bold),
                 ForeColor = FluentTheme.Muted,
-                Text = "КЛЮЧ ДОСТУПА"
+                Text = "КЛЮЧ ПРОКСИ DAGAMI"
             };
             card.Controls.Add(fieldLabel);
 
@@ -266,7 +150,7 @@ namespace DevProxyApp {
             _botBtn.FlatAppearance.BorderColor = Color.FromArgb(191, 219, 254);
             _botBtn.Click += (s, e) => {
                 try {
-                    Process.Start(new ProcessStartInfo(LicenseManager.BotUrl) { UseShellExecute = true });
+                    Process.Start(new ProcessStartInfo(ProxyAccess.BotUrl) { UseShellExecute = true });
                 } catch (Exception ex) {
                     MessageBox.Show(this, "Не удалось открыть браузер: " + ex.Message, Brand.Name, MessageBoxButtons.OK, MessageBoxIcon.Warning);
                 }
@@ -280,7 +164,7 @@ namespace DevProxyApp {
                 BackColor = Color.FromArgb(22, 152, 136),
                 ForeColor = Color.White,
                 Font = new Font("Segoe UI", 10, FontStyle.Bold),
-                Text = "Активировать",
+                Text = "Подключить прокси",
                 Cursor = Cursors.Hand
             };
             _activateBtn.FlatAppearance.BorderSize = 0;
@@ -300,7 +184,7 @@ namespace DevProxyApp {
                 BackColor = Color.Transparent,
                 ForeColor = FluentTheme.Muted,
                 Font = new Font("Segoe UI", 8.5f),
-                Text = canChangeRoute == null ? "Выйти из приложения" : "Отмена",
+                Text = "Отмена",
                 Cursor = Cursors.Hand
             };
             _exitBtn.FlatAppearance.BorderSize = 0;
@@ -345,12 +229,14 @@ namespace DevProxyApp {
                         _errorLabel.Text = "Остановите активные сессии и повторите активацию.";
                         return;
                     }
-                    LicenseManager.ActivateDevice(device);
+                    if(_activateRoute)ProxyAccess.ConnectDevice(device);
+                    else device.Commit(()=>{
+                        var config=ConfigManager.Instance;
+                        config.SaveProxySelection("key",config.SelectedProxyAddress,config.SavedProxyRequireGemini);
+                    });
                     ManagedAccess.ClearDeferredKey();
                 } else {
-                    if (_canChangeRoute != null) throw new ArgumentException("Для прокси получите ключ DAGAMI1- через /key.");
-                    string error;
-                    if (!LicenseManager.Activate(raw, out error)) throw new InvalidOperationException(error);
+                    throw new ArgumentException("Для прокси получите ключ DAGAMI1- через /key. Приложение работает без активации.");
                 }
                 DialogResult = DialogResult.OK;
                 Close();

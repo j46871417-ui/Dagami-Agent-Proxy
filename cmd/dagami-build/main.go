@@ -25,7 +25,7 @@ import (
 
 const nativeExe = "DagamiAgentProxy.exe"
 
-var nativeSources = strings.Fields(`DevProxyApp.cs NativeUi.cs FluentUi.cs SimpleUi.cs AntigravityIntegration.cs CliRegionGate.cs ProxyDiagnostics.cs AutomaticAiRoute.cs DnsProviders.cs DnsTransport.cs DnsAgent.cs DpiDesync.cs DpiPacketSplitter.cs WinDivertPacketTest.cs SelectiveProxyRules.cs AntigravityUi.cs AntigravityLogin.cs NativeShortcuts.cs NativeLaunchBroker.cs NativeSessions.cs SystemDnsManager.cs NativeCli.cs Brand.cs LicenseManager.cs AppProxyPolicy.cs ApplicationSupport.cs JetBrainsProxySettings.cs ApplicationDiscovery.cs NativeCliApps.cs BugReports.cs NativeUpdates.cs UpdateInstaller.cs UpdateUi.cs NativeStartup.cs ManagedAccess.cs HttpWire.cs LoopbackPeer.cs SignedLicenses.cs`)
+var nativeSources = strings.Fields(`DevProxyApp.cs NativeUi.cs FluentUi.cs SimpleUi.cs AntigravityIntegration.cs CliRegionGate.cs ProxyDiagnostics.cs AutomaticAiRoute.cs DnsProviders.cs DnsTransport.cs DnsAgent.cs DpiDesync.cs DpiPacketSplitter.cs WinDivertPacketTest.cs SelectiveProxyRules.cs AntigravityUi.cs AntigravityLogin.cs NativeShortcuts.cs NativeLaunchBroker.cs NativeSessions.cs SystemDnsManager.cs NativeCli.cs Brand.cs ProxyAccess.cs ProxyEnvironment.cs RecoveryTool.cs GatewayTransport.cs RouteHealth.cs AppProxyPolicy.cs ApplicationSupport.cs JetBrainsProxySettings.cs ApplicationDiscovery.cs NativeCliApps.cs BugReports.cs NativeUpdates.cs UpdateInstaller.cs UpdateUi.cs NativeStartup.cs ManagedAccess.cs HttpWire.cs LoopbackPeer.cs`)
 var references = strings.Fields("System.dll System.Core.dll System.Drawing.dll System.Windows.Forms.dll System.Security.dll System.Web.Extensions.dll System.IO.Compression.dll System.Xml.dll System.ServiceProcess.dll")
 var targets = []string{"windows/amd64", "darwin/amd64", "darwin/arm64", "linux/amd64", "linux/arm64"}
 var secretPatterns = map[string]*regexp.Regexp{
@@ -230,20 +230,33 @@ func buildPortable(tmp, out, osName, arch string, routing bool, winForms string,
 	}
 	e := writeZIP(archive, func(z *zip.Writer) error {
 		if osName == "darwin" {
-			base := "Dagami Agent Proxy.app/Contents/"
-			if e := zipFile(z, path, base+"MacOS/"+binary, 0755); e != nil {
+			if e := zipMacApp(z, path, "Dagami Agent Proxy", binary, "ru.dagami.portable"); e != nil {
 				return e
 			}
-			if e := zipText(z, base+"Info.plist", fmt.Sprintf(`<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd"><plist version="1.0"><dict><key>CFBundleIdentifier</key><string>ru.dagami.portable</string><key>CFBundleExecutable</key><string>DagamiAgentProxy</string><key>CFBundleName</key><string>Dagami Agent Proxy</string><key>CFBundlePackageType</key><string>APPL</string><key>CFBundleShortVersionString</key><string>%[1]s</string><key>CFBundleVersion</key><string>%[1]s</string><key>LSMinimumSystemVersion</key><string>13.0</string></dict></plist>`, buildinfo.Version)); e != nil {
+			if e := zipMacApp(z, path, "Dagami Recovery", "DagamiRecovery", "ru.dagami.portable.recovery"); e != nil {
 				return e
 			}
 		} else {
 			if e := zipFile(z, path, binary, 0755); e != nil {
 				return e
 			}
+			if osName == "linux" {
+				if e := zipFile(z, path, "DagamiRecovery", 0755); e != nil {
+					return e
+				}
+			}
 		}
 		if variant == "Desktop" {
 			hashes := map[string]string{}
+			for _, name := range []string{"DagamiRecovery.exe", "DagamiUninstall.exe"} {
+				alias := filepath.Join(filepath.Dir(path), name)
+				if e := zipFile(z, alias, name, 0755); e != nil {
+					return e
+				}
+				if e := addHash(hashes, alias); e != nil {
+					return e
+				}
+			}
 			if e := addHash(hashes, path); e != nil {
 				return e
 			}
@@ -255,7 +268,7 @@ func buildPortable(tmp, out, osName, arch string, routing bool, winForms string,
 				return e
 			}
 		}
-		for _, name := range []string{"docs/QUICK_START.md", "docs/USER_GUIDE.md", "APPLICATIONS.md", "SYSTEM_DNS.md", "STARTUP.md", "BUG_REPORTS.md", "bug_reports/README.md", "NATIVE_NEXT.md", "APP_ROUTING.md", "MANAGED_ACCESS.md", "RELEASE_NOTES.md", "LICENSE", "THIRD_PARTY_NOTICES.md"} {
+		for _, name := range []string{"docs/QUICK_START.md", "docs/USER_GUIDE.md", "docs/RECOVERY.md", "docs/LINUX_MACOS.md", "APPLICATIONS.md", "SYSTEM_DNS.md", "STARTUP.md", "BUG_REPORTS.md", "bug_reports/README.md", "NATIVE_NEXT.md", "APP_ROUTING.md", "MANAGED_ACCESS.md", "RELEASE_NOTES.md", "LICENSE", "THIRD_PARTY_NOTICES.md"} {
 			if e := zipFile(z, name, name, 0644); e != nil {
 				return e
 			}
@@ -275,9 +288,32 @@ func buildPortable(tmp, out, osName, arch string, routing bool, winForms string,
 	fmt.Println(archive)
 	return archive, nil
 }
+func zipMacApp(z *zip.Writer, path, name, binary, identifier string) error {
+	base := name + ".app/Contents/"
+	if e := zipFile(z, path, base+"MacOS/"+binary, 0755); e != nil {
+		return e
+	}
+	// Recovery has its own bundle identifier so Finder can open it while the main window is running.
+	plist := fmt.Sprintf(`<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+<key>CFBundleIdentifier</key><string>%s</string>
+<key>CFBundleExecutable</key><string>%s</string>
+<key>CFBundleName</key><string>%s</string>
+<key>CFBundleDisplayName</key><string>%s</string>
+<key>CFBundlePackageType</key><string>APPL</string>
+<key>CFBundleShortVersionString</key><string>%s</string>
+<key>CFBundleVersion</key><string>%s</string>
+<key>LSMinimumSystemVersion</key><string>13.0</string>
+</dict></plist>
+`, identifier, binary, name, name, buildinfo.Version, buildinfo.Version)
+	return zipText(z, base+"Info.plist", plist)
+}
+
 func compiler() string {
 	return filepath.Join(os.Getenv("WINDIR"), "Microsoft.NET", "Framework64", "v4.0.30319", "csc.exe")
 }
+
 var browserExtensionFiles = []string{"manifest.json", "popup.html", "popup.js", "route.js", "background.js"}
 
 func buildWindows(dir string, sign func(string) error) (string, error) {
@@ -315,6 +351,11 @@ func buildWindows(dir string, sign func(string) error) (string, error) {
 	}
 	if e = copyFile(ready, out, 0755); e != nil {
 		return "", e
+	}
+	for _, name := range []string{"DagamiRecovery.exe", "DagamiUninstall.exe"} {
+		if e = copyFile(out, filepath.Join(dir, name), 0755); e != nil {
+			return "", e
+		}
 	}
 	fmt.Println(out)
 	return out, nil
@@ -421,7 +462,13 @@ func zipText(z *zip.Writer, name, text string) error {
 	return e
 }
 func sourceZip(path string) error {
-	names := []string{"go.mod", "go.sum", "LICENSE", "README.md", "NATIVE_NEXT.md", "APPLICATIONS.md", "APP_ROUTING.md", "MANAGED_ACCESS.md", "RELEASE_NOTES.md", "STARTUP.md", "SYSTEM_DNS.md", "BUG_REPORTS.md", "SOURCE_POLICY.md", "SECURITY_FIXES.md", "SIGNED_LICENSES.md", "THIRD_PARTY_NOTICES.md", "CHANGELOG.md", "src/SystemDns.ps1", "src/app.manifest", "assets/dagami-agent-proxy.ico", "assets/icon-64.png", "assets/dagami-logo.jpg", "assets/dagami-proxy-domains.txt", "tools/run_native_checks.py", "tools/Test-WinDivertTls.ps1", "tests/native/README.md", "tests/native/SystemDnsChecks.ps1"}
+	names := []string{"go.mod", "go.sum", "LICENSE", "README.md", "NATIVE_NEXT.md", "APPLICATIONS.md", "APP_ROUTING.md", "MANAGED_ACCESS.md", "RELEASE_NOTES.md", "STARTUP.md", "SYSTEM_DNS.md", "BUG_REPORTS.md", "SOURCE_POLICY.md", "SECURITY_FIXES.md", "THIRD_PARTY_NOTICES.md", "CHANGELOG.md", "src/SystemDns.ps1", "src/app.manifest", "assets/dagami-agent-proxy.ico", "assets/icon-64.png", "assets/dagami-logo.jpg", "assets/dagami-proxy-domains.txt", "docs/RECOVERY.md", "docs/ANDROID_PORT.md", "docs/LINUX_MACOS.md", "tools/run_native_checks.py", "tools/Test-WinDivertTls.ps1", "tests/browser_extension.mjs", "tests/native/README.md", "tests/native/SystemDnsChecks.ps1"}
+	names = append(names,
+		"android/settings.gradle",
+		"android/app/build.gradle",
+		"android/app/src/main/AndroidManifest.xml",
+		"android/app/src/main/java/ru/dagami/agentproxy/MainActivity.java",
+		"android/app/src/main/java/ru/dagami/agentproxy/KeystoreSigner.java")
 	names = append(names, "docs/QUICK_START.md", "docs/USER_GUIDE.md", "docs/FORKING.md", "AGENTS.md", "bug_reports/README.md")
 	for _, file := range browserExtensionFiles {
 		names = append(names, "browser-extension/"+file)
@@ -434,7 +481,7 @@ func sourceZip(path string) error {
 		return e
 	}
 	names = append(names, fixtures...)
-	for _, dir := range []string{"cmd", "internal"} {
+	for _, dir := range []string{"cmd", "internal", "mobile"} {
 		e := filepath.WalkDir(dir, func(p string, d fs.DirEntry, e error) error {
 			if e != nil {
 				return e

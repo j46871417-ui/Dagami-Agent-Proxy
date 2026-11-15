@@ -8,38 +8,44 @@ import (
 )
 
 type gtkAPI struct {
-	initCheck    func(uintptr, uintptr) int32
-	main         func()
-	quit         func()
-	windowNew    func(int32) uintptr
-	windowTitle  func(uintptr, string)
-	windowSize   func(uintptr, int32, int32)
-	boxNew       func(int32, int32) uintptr
-	boxPack      func(uintptr, uintptr, int32, int32, uint32)
-	containerAdd func(uintptr, uintptr)
-	border       func(uintptr, uint32)
-	labelNew     func(string) uintptr
-	labelAlign   func(uintptr, float32)
-	labelWrap    func(uintptr, int32)
-	buttonNew    func(string) uintptr
-	entryNew     func() uintptr
-	entrySet     func(uintptr, string)
-	entryGet     func(uintptr) string
-	listNew      func() uintptr
-	listRow      func(uintptr, int32) uintptr
-	listSelect   func(uintptr, uintptr)
-	listSelected func(uintptr) uintptr
-	rowIndex     func(uintptr) int32
-	scrollNew    func(uintptr, uintptr) uintptr
-	textNew      func() uintptr
-	textBuffer   func(uintptr) uintptr
-	textSet      func(uintptr, string, int32)
-	textEditable func(uintptr, int32)
-	textWrap     func(uintptr, int32)
-	showAll      func(uintptr)
-	destroy      func(uintptr)
-	connect      func(uintptr, string, uintptr, uintptr, uintptr, int32) uint64
-	idleAdd      func(uintptr, uintptr) uint32
+	initCheck     func(uintptr, uintptr) int32
+	main          func()
+	quit          func()
+	windowNew     func(int32) uintptr
+	windowTitle   func(uintptr, string)
+	windowSize    func(uintptr, int32, int32)
+	boxNew        func(int32, int32) uintptr
+	boxPack       func(uintptr, uintptr, int32, int32, uint32)
+	containerAdd  func(uintptr, uintptr)
+	border        func(uintptr, uint32)
+	labelNew      func(string) uintptr
+	labelAlign    func(uintptr, float32)
+	labelWrap     func(uintptr, int32)
+	buttonNew     func(string) uintptr
+	entryNew      func() uintptr
+	entrySet      func(uintptr, string)
+	entryGet      func(uintptr) string
+	entryVisible  func(uintptr, int32)
+	present       func(uintptr)
+	flowNew       func() uintptr
+	flowSelection func(uintptr, int32)
+	flowMax       func(uintptr, uint32)
+	sizeRequest   func(uintptr, int32, int32)
+	listNew       func() uintptr
+	listRow       func(uintptr, int32) uintptr
+	listSelect    func(uintptr, uintptr)
+	listSelected  func(uintptr) uintptr
+	rowIndex      func(uintptr) int32
+	scrollNew     func(uintptr, uintptr) uintptr
+	textNew       func() uintptr
+	textBuffer    func(uintptr) uintptr
+	textSet       func(uintptr, string, int32)
+	textEditable  func(uintptr, int32)
+	textWrap      func(uintptr, int32)
+	showAll       func(uintptr)
+	destroy       func(uintptr)
+	connect       func(uintptr, string, uintptr, uintptr, uintptr, int32) uint64
+	idleAdd       func(uintptr, uintptr) uint32
 }
 
 func loadGTK(handle uintptr) gtkAPI {
@@ -51,6 +57,7 @@ func loadGTK(handle uintptr) gtkAPI {
 		"gtk_container_add": &g.containerAdd, "gtk_container_set_border_width": &g.border,
 		"gtk_label_new": &g.labelNew, "gtk_label_set_xalign": &g.labelAlign, "gtk_label_set_line_wrap": &g.labelWrap,
 		"gtk_button_new_with_label": &g.buttonNew, "gtk_entry_new": &g.entryNew,
+		"gtk_entry_set_visibility": &g.entryVisible, "gtk_window_present": &g.present, "gtk_flow_box_new": &g.flowNew, "gtk_flow_box_set_selection_mode": &g.flowSelection, "gtk_flow_box_set_max_children_per_line": &g.flowMax, "gtk_widget_set_size_request": &g.sizeRequest,
 		"gtk_entry_set_text": &g.entrySet, "gtk_entry_get_text": &g.entryGet,
 		"gtk_list_box_new": &g.listNew, "gtk_list_box_get_row_at_index": &g.listRow,
 		"gtk_list_box_select_row": &g.listSelect, "gtk_list_box_get_selected_row": &g.listSelected, "gtk_list_box_row_get_index": &g.rowIndex,
@@ -66,11 +73,11 @@ func loadGTK(handle uintptr) gtkAPI {
 
 type gtkWindow struct {
 	gtkAPI
-	widget, root, list uintptr
-	fields             []uintptr
-	actions            []button
-	click, dispatch    uintptr
-	jobs               chan func()
+	widget, root, list, page uintptr
+	fields                   []uintptr
+	actions                  []button
+	click, dispatch          uintptr
+	queue                    dispatchQueue
 }
 
 func runWindow(ready func(window)) error {
@@ -84,7 +91,7 @@ func runWindow(ready func(window)) error {
 	if g.initCheck(0, 0) == 0 {
 		return errors.New("GTK не смог подключиться к графической сессии")
 	}
-	w := &gtkWindow{gtkAPI: g, widget: g.windowNew(0), jobs: make(chan func(), 1)}
+	w := &gtkWindow{gtkAPI: g, widget: g.windowNew(0)}
 	w.click = purego.NewCallback(func(_ uintptr, id uintptr) {
 		index := -1
 		if w.list != 0 {
@@ -98,8 +105,8 @@ func runWindow(ready func(window)) error {
 		}
 		w.actions[id].click(index, values)
 	})
-	w.dispatch = purego.NewCallback(func(uintptr) int32 { (<-w.jobs)(); return 0 })
-	closed := purego.NewCallback(func(uintptr, uintptr) { g.quit() })
+	w.dispatch = purego.NewCallback(func(uintptr) int32 { w.queue.drain(); return 0 })
+	closed := purego.NewCallback(func(uintptr, uintptr) { w.queue.close(); g.quit() })
 	g.connect(w.widget, "destroy", closed, 0, 0, 0)
 	g.windowTitle(w.widget, "Dagami Agent Proxy")
 	g.windowSize(w.widget, 800, 520)
@@ -109,8 +116,9 @@ func runWindow(ready func(window)) error {
 }
 
 func (w *gtkWindow) post(job func()) {
-	w.jobs <- job
-	w.idleAdd(w.dispatch, 0)
+	if w.queue.push(job) {
+		w.idleAdd(w.dispatch, 0)
+	}
 }
 
 func (w *gtkWindow) label(text string) uintptr {
@@ -124,24 +132,28 @@ func (w *gtkWindow) buttons(buttons []button) {
 	if len(buttons) == 0 {
 		return
 	}
-	row := w.boxNew(0, 8)
+	row := w.flowNew()
+	w.flowSelection(row, 0)
+	w.flowMax(row, 4)
 	for _, b := range buttons {
 		widget := w.buttonNew(b.label)
 		w.connect(widget, "clicked", w.click, uintptr(len(w.actions)), 0, 0)
 		w.actions = append(w.actions, b)
-		w.boxPack(row, widget, 0, 0, 0)
+		w.containerAdd(row, widget)
 	}
 	w.boxPack(w.root, row, 0, 0, 0)
 }
 
 func (w *gtkWindow) show(v view) {
-	if w.root != 0 {
-		w.destroy(w.root)
+	if w.page != 0 {
+		w.destroy(w.page)
 	}
 	w.actions, w.fields, w.list = nil, nil, 0
 	w.root = w.boxNew(1, 10)
 	w.border(w.root, 20)
-	w.containerAdd(w.widget, w.root)
+	w.page = w.scrollNew(0, 0)
+	w.containerAdd(w.page, w.root)
+	w.containerAdd(w.widget, w.page)
 	w.buttons(v.nav)
 	w.boxPack(w.root, w.label(v.title), 0, 0, 0)
 	if v.detail != "" {
@@ -162,6 +174,9 @@ func (w *gtkWindow) show(v view) {
 	for _, f := range v.fields {
 		entry := w.entryNew()
 		w.entrySet(entry, f.value)
+		if f.private() {
+			w.entryVisible(entry, 0)
+		}
 		w.fields = append(w.fields, entry)
 		w.boxPack(w.root, w.label(f.label), 0, 0, 0)
 		w.boxPack(w.root, entry, 0, 0, 0)
@@ -179,6 +194,9 @@ func (w *gtkWindow) show(v view) {
 
 func (w *gtkWindow) scroll(widget uintptr) {
 	area := w.scrollNew(0, 0)
+	w.sizeRequest(area, -1, 160)
 	w.containerAdd(area, widget)
 	w.boxPack(w.root, area, 1, 1, 0)
 }
+
+func (w *gtkWindow) activate() { w.present(w.widget) }

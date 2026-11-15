@@ -78,17 +78,17 @@ namespace DevProxyApp {
    var routeHint=new Label{Dock=DockStyle.Fill,ForeColor=FluentTheme.Muted,Text="Для всех приложений, запущенных из Dagami или через настроенные ярлыки. Приложение должно поддерживать прокси."};
    rows.Controls.Add(routeHint,0,2);rows.SetColumnSpan(routeHint,2);
    var actions=new FlowLayoutPanel{Dock=DockStyle.Fill,WrapContents=true};
-   AddNativeButton(actions,"Подключить по ключу",UseManagedRoute);
+   AddNativeButton(actions,"Добавить ключ прокси",()=>OpenManagedKey(false));
    _managedRouteAction=(FluentButton)_nativeButtons[_nativeButtons.Count-1];_managedRouteAction.Name="ManagedPairLink";_managedRouteAction.Primary=true;
    AddNativeButton(actions,"Проверить доступ",()=>OpenManagedPair(true));
    _nativeButtons[_nativeButtons.Count-1].Name="CheckManagedPairLink";
    rows.Controls.Add(actions,0,3);rows.SetColumnSpan(actions,2);
 
-   var proxyCaption=FluentLabel("Свой HTTP/HTTPS/SOCKS5-прокси",10,true);
+   var proxyCaption=FluentLabel("Свой прокси · HTTP, HTTPS, SOCKS",10,true);
    rows.Controls.Add(proxyCaption,0,4);rows.SetColumnSpan(proxyCaption,2);
-   _proxyBox=new TextBox{Name="CustomProxyAddress",Dock=DockStyle.Fill,Text=ConfigManager.Instance.SavedCustomProxy,MaxLength=2048,
-    BorderStyle=BorderStyle.FixedSingle,AccessibleName="Адрес своего HTTP или HTTPS прокси",
-    AccessibleDescription="Поддерживается адрес с портом, например 127.0.0.1:7897. Введите direct для системного VPN."};
+   _proxyBox=new TextBox{Name="CustomProxyAddress",Dock=DockStyle.Fill,Text=ConfigManager.Instance.SelectedProxyAddress,MaxLength=2048,
+    BorderStyle=BorderStyle.FixedSingle,AccessibleName="Адрес своего прокси",
+    AccessibleDescription="HTTP, HTTPS, SOCKS4/4a, SOCKS5 и SOCKS5 поверх TLS (socks5s). Введите direct для системного VPN."};
    rows.Controls.Add(_proxyBox,0,5);
    var reveal=new CheckBox{Name="ShowCustomProxy",Text="Показать адрес",AutoSize=true,Margin=new Padding(8,3,0,0)};
    Action maskAddress=()=>_proxyBox.UseSystemPasswordChar=!reveal.Checked&&_proxyBox.Text.Contains("@");
@@ -97,7 +97,7 @@ namespace DevProxyApp {
    rows.Controls.Add(reveal,1,5);
 
    var manualActions=new FlowLayoutPanel{Dock=DockStyle.Fill,WrapContents=true,Margin=Padding.Empty};
-   AddNativeButton(manualActions,"Применить прокси",ApplySelectedProxy);
+   AddNativeButton(manualActions,"Применить",ApplySelectedProxy);
    var useCustom=_nativeButtons[_nativeButtons.Count-1];useCustom.Name="UseCustomProxyButton";
    _proxyBox.KeyDown+=(s,e)=>{if(e.KeyCode==Keys.Enter){e.SuppressKeyPress=true;useCustom.PerformClick();}};
    AddNativeButton(manualActions,"Включить прокси Windows",ToggleWindowsProxy);
@@ -245,6 +245,14 @@ namespace DevProxyApp {
    }
   }
 
+  void OpenRecovery(bool uninstall) {
+   if(_preview)return;
+   if(_patchInProgress||_routeChangeInProgress||_updatePreparing||_nativeBusy){_connectionFeedback.Text="Дождитесь завершения текущей операции.";return;}
+   string folder=Path.GetDirectoryName(typeof(MainForm).Assembly.Location);
+   string helper=Path.Combine(folder,uninstall?"DagamiUninstall.exe":"DagamiRecovery.exe");
+   if(!File.Exists(helper))helper=typeof(MainForm).Assembly.Location;
+   System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(helper,uninstall?"--uninstall":"--recover") {UseShellExecute=false});
+  }
   void RefreshWindowsProxyStatus(string routeState) {
    if (_windowsProxyAction == null || _connectionRouteStatus == null) return;
    string status;
@@ -263,44 +271,122 @@ namespace DevProxyApp {
    _connectionRouteStatus.Text = routeState + "  ·  " + status;
   }
 
-  void ToggleWindowsProxy() {
-   if (_preview) return;
-   try {
-    if (WindowsSelectiveProxy.Disable()) {
-     _connectionFeedback.Text = "Прокси Windows выключен.";
-     return;
-    }
-    if (_rescueBridge == null || !_rescueBridge.ServesSelectivePac) {
-     _connectionFeedback.Text = "Сначала включите подключение Dagami по ключу.";
-     return;
-    }
-    WindowsSelectiveProxy.Enable(_bridgePort);
-    _connectionFeedback.Text = "Прокси Windows включён для выбранных доменов. Оставьте Dagami запущенным.";
-   } catch (Exception error) {
-    _connectionFeedback.Text = error.Message;
-   } finally { UpdateNativeStatus(); }
-  }
-
   bool _findingPublicProxy;
+  bool _managedBridgeRefreshNeeded;
   CheckBox _requireGemini;
   RadioButton _ownProxyMode,_keyProxyMode,_publicProxyMode;
 
   void SyncProxyModeSelection() {
    if(_keyProxyMode==null)return;
    var config=ConfigManager.Instance;
-   if(ManagedAccess.IsProfile(config.LastProxy))_keyProxyMode.Checked=true;
-   else if(config.PublicProxySelected)_publicProxyMode.Checked=true;
-   else _ownProxyMode.Checked=true;
+   switch(config.SelectedProxyMode) {
+    case "key":_keyProxyMode.Checked=true;break;
+    case "public":_publicProxyMode.Checked=true;break;
+    default:_ownProxyMode.Checked=true;break;
+   }
+   _proxyBox.Text=config.SelectedProxyAddress;
+   _requireGemini.Checked=config.SavedProxyRequireGemini;
    _requireGemini.Enabled=_publicProxyMode.Checked&&!_findingPublicProxy;
   }
 
+  string ProxyModeFromControls() {
+   return _keyProxyMode.Checked?"key":_publicProxyMode.Checked?"public":"custom";
+  }
+
   void ApplySelectedProxy() {
-   if(_preview)return;
-   if(_publicProxyMode.Checked)FindPublicProxy();
-   else if(_keyProxyMode.Checked) {
-    if(!ConfigManager.Instance.UseProxy||!ManagedAccess.IsProfile(ConfigManager.Instance.LastProxy)||!ManagedAccess.HasActiveDevice())UseManagedRoute();
-    else _connectionFeedback.Text="Dagami по ключу уже выбран.";
-   } else SaveCustomRoute();
+   if(_preview||_findingPublicProxy)return;
+   try {
+    string mode=ProxyModeFromControls();
+    string address=mode=="custom"?NormalizeCustomProxy(_proxyBox.Text,_bridgePort):ConfigManager.Instance.SelectedProxyAddress;
+    ConfigManager.Instance.SaveProxySelection(mode,address,_requireGemini.Checked);
+    if(mode=="custom")_proxyBox.Text=address;
+    _connectionFeedback.Text="Настройки сохранены. Нажмите «Включить прокси Windows», чтобы запустить выбранный прокси.";
+   } catch(ArgumentException error) {
+    _connectionFeedback.Text=error.Message;_proxyBox.Focus();
+   } catch(IOException error) {
+    _connectionFeedback.Text=error.Message;
+   }
+  }
+
+  async void ToggleWindowsProxy() {
+   if(_preview||_findingPublicProxy||_routeChangeInProgress||_nativeBusy)return;
+   try {
+    if(WindowsSelectiveProxy.Disable()) {
+     _connectionFeedback.Text="Прокси Windows выключен. Запущенные через Dagami приложения сохраняют свой маршрут.";
+     return;
+    }
+    var config=ConfigManager.Instance;
+    string mode=config.SelectedProxyMode;
+    if(mode!=ProxyModeFromControls()||(mode=="custom"&&_proxyBox.Text.Trim()!=config.SelectedProxyAddress)||
+       (mode=="public"&&_requireGemini.Checked!=config.SavedProxyRequireGemini)) {
+     _connectionFeedback.Text="Нажмите «Применить», чтобы сохранить выбранные настройки.";
+     return;
+    }
+    string proxy=mode=="key"?ManagedAccess.Profile:null;
+    if(mode=="key") {
+     if(!ManagedAccess.HasActiveDevice()) {
+      _connectionFeedback.Text="Добавьте ключ прокси из команды /key в боте.";
+      return;
+     }
+    } else if(mode=="public") {
+     _findingPublicProxy=true;
+     _windowsProxyAction.Enabled=false;
+     _requireGemini.Enabled=false;
+     bool gemini=config.SavedProxyRequireGemini;
+     _connectionFeedback.Text=gemini?"Ищем публичный прокси для Gemini…":"Проверяем публичные прокси…";
+     var result=await System.Threading.Tasks.Task.Run(()=>PublicProxyCandidates.Find(gemini));
+     if(IsDisposed||Disposing||_exitRequested||_nativeBusy||_routeChangeInProgress||!_publicProxyMode.Checked||
+        config.SelectedProxyMode!="public"||gemini!=_requireGemini.Checked)return;
+     proxy=result.Key;
+     if(proxy==null){_connectionFeedback.Text="Подходящий публичный прокси не найден.";return;}
+    } else {
+     proxy=NormalizeCustomProxy(config.SelectedProxyAddress,_bridgePort);
+    }
+    EnableSelectedWindowsRoute(config,proxy,mode);
+   } catch(Exception error) {
+    if(!IsDisposed)_connectionFeedback.Text=BugReports.Clean(error.Message);
+   } finally {
+    _findingPublicProxy=false;
+    if(!IsDisposed) {
+     _windowsProxyAction.Enabled=!_nativeBusy;
+     _requireGemini.Enabled=_publicProxyMode.Checked;
+     UpdateNativeStatus();
+    }
+   }
+  }
+
+  void EnableSelectedWindowsRoute(ConfigManager config,string proxy,string mode) {
+   bool useWindowsProxy=!IsDirectProxyValue(proxy);
+   bool changed=!config.UseProxy||proxy!=config.LastProxy||config.UseDagamiDns||
+       config.PublicProxySelected!=(mode=="public")||(mode=="key"&&_managedBridgeRefreshNeeded);
+   if(!changed&&_rescueBridge!=null&&_rescueBridge.ServesSelectivePac) {
+    if(useWindowsProxy)WindowsSelectiveProxy.Enable(_bridgePort);
+   } else {
+    if(!EnsureSessionsStoppedForRouteChange())return;
+    LocalProxyBridge candidate=new LocalProxyBridge();
+    try {
+     if(!candidate.Start(0,proxy,null))throw new IOException("Не удалось запустить локальный мост для выбранного прокси.");
+     if(useWindowsProxy)WindowsSelectiveProxy.Enable(candidate.BoundPort);
+     try {
+      config.ChangeConnection(settings=>{
+       settings.CustomProxy=mode=="custom"?proxy:config.SelectedProxyAddress;
+       settings.LastProxy=proxy;
+       settings.PublicProxySelected=mode=="public";
+       settings.UseProxy=true;
+       settings.UseDagamiDns=false;
+      });
+     } catch {if(useWindowsProxy)WindowsSelectiveProxy.Disable();throw;}
+     var previous=_rescueBridge;
+     _rescueBridge=candidate;
+     _bridgePort=candidate.BoundPort;
+     candidate=null;
+     if(mode=="key")_managedBridgeRefreshNeeded=false;
+     if(previous!=null)previous.Dispose();
+    } finally {if(candidate!=null)candidate.Dispose();}
+   }
+   _connectionFeedback.Text=useWindowsProxy
+    ?"Выбранный прокси включён для запуска через Dagami и поддерживаемых приложений Windows. Оставьте Dagami запущенным."
+    :"Выбран системный маршрут. Прокси Windows выключен.";
   }
 
   async void FindAutomaticAiRoute() {
@@ -448,60 +534,9 @@ namespace DevProxyApp {
    } catch(Exception error) {Logger.Log("[Windows proxy] Automatic route: "+error.GetType().Name);}
   }
 
-  async void FindPublicProxy() {
-   if(_preview||_findingPublicProxy)return;
-   _findingPublicProxy=true;
-   bool requireGemini=_requireGemini.Checked;
-   _requireGemini.Enabled=false;
-   _connectionFeedback.Text=requireGemini?"Проверяем туннель до Gemini…":"Проверяем туннель до GitHub или ChatGPT…";
-   try {
-    var result=await System.Threading.Tasks.Task.Run(()=>PublicProxyCandidates.Find(requireGemini));
-    if(IsDisposed||_exitRequested||!_publicProxyMode.Checked)return;
-    if(result.Key==null) {
-     _connectionFeedback.Text=requireGemini?"Рабочий туннель до Gemini не найден.":"Рабочий туннель до GitHub или ChatGPT не найден.";
-     return;
-    }
-    if(!EnsureSessionsStoppedForRouteChange())return;
-    ConfigManager.Instance.SelectPublicRoute(result.Key);
-    RestartRescueBridge();
-    UpdateNativeStatus();
-    _connectionFeedback.Text=_bridgePort>0?"Публичный прокси включён. Проверен TLS до "+result.Value+".":"Прокси сохранён, но мост не запустился.";
-   } catch(IOException error) {
-    if(!IsDisposed)_connectionFeedback.Text=error.Message;
-   } catch(Exception error) {
-    Logger.Log("[Public proxy] Проверка кандидатов: "+error.GetType().Name);
-    if(!IsDisposed)_connectionFeedback.Text="Ошибка проверки публичных прокси. Подробности в журнале.";
-   } finally {
-    _findingPublicProxy=false;
-    if(!IsDisposed)_requireGemini.Enabled=_publicProxyMode.Checked;
-   }
-  }
-
-  void SaveCustomRoute() {
-   if(_preview)return;
-   string proxy;
-   try {proxy=NormalizeCustomProxy(_proxyBox.Text,_bridgePort);}
-   catch(ArgumentException error){_connectionFeedback.Text=error.Message;_proxyBox.Focus();return;}
-   var config=ConfigManager.Instance;
-   bool changed=config.EffectiveProxy!=proxy||!config.UseProxy||config.UseDagamiDns;
-   if(changed&&!EnsureSessionsStoppedForRouteChange())return;
-   config.SelectCustomRoute(proxy);
-   _proxyBox.Text=proxy;
-   if(changed||_bridgePort==0)RestartRescueBridge();
-   UpdateNativeStatus();
-   _connectionFeedback.Text=_bridgePort>0?"Свой маршрут включён. Проверка связи доступна на вкладке «Диагностика».":"Маршрут сохранён. Ошибка запуска моста записана в журнал.";
-  }
-  void UseManagedRoute() {
-   if(_preview)return;
-   if(!ManagedAccess.HasActiveDevice()||ManagedAccess.IsProfile(ConfigManager.Instance.EffectiveProxy)) {OpenManagedKey();return;}
-   ManagedAccess.LoadActive();
-   if(!EnsureSessionsStoppedForRouteChange())return;
-   ManagedAccess.SelectProfile();
-   RefreshManagedRoute();
-  }
-  DialogResult OpenManagedKey() {
+  DialogResult OpenManagedKey(bool activateRoute = true) {
    if(_preview)return DialogResult.Cancel;
-   using(var dialog=new ActivationForm(()=>EnsureSessionsStoppedForRouteChange())) {
+   using(var dialog=new ProxyKeyForm(activateRoute?new Func<bool>(()=>EnsureSessionsStoppedForRouteChange()):null,activateRoute)) {
     ShowThemedDialog(dialog);
     if(dialog.DialogResult==DialogResult.Retry) {
      _activationKeySaved=true;
@@ -514,7 +549,13 @@ namespace DevProxyApp {
     if(dialog.DialogResult!=DialogResult.OK)return dialog.DialogResult;
    }
    _activationKeySaved=false;
-   RefreshManagedRoute();
+   if(activateRoute)RefreshManagedRoute();
+   else {
+    _managedBridgeRefreshNeeded=true;
+    SyncProxyModeSelection();
+    UpdateNativeStatus();
+    _connectionFeedback.Text="Ключ прокси добавлен. Нажмите «Включить прокси Windows», чтобы использовать его.";
+   }
    return DialogResult.OK;
   }
   void OpenManagedPair(bool check) {
@@ -526,15 +567,16 @@ namespace DevProxyApp {
      _connectionFeedback.Text="Привязка к Dagami подтверждена.";
      return;
     }
-    if(!EnsureSessionsStoppedForRouteChange()) {
-     _connectionFeedback.Text="Устройство подтверждено. Чтобы применить новый маршрут, остановите активные сессии и повторите проверку.";
-     return;
-    }
-    dialog.Device.Commit(ManagedAccess.SelectProfile);
+    var config=ConfigManager.Instance;
+    dialog.Device.Commit(()=>config.SaveProxySelection("key",config.SelectedProxyAddress,config.SavedProxyRequireGemini));
    }
-   RefreshManagedRoute();
+   _managedBridgeRefreshNeeded=true;
+   SyncProxyModeSelection();
+   UpdateNativeStatus();
+   _connectionFeedback.Text="Устройство привязано. Нажмите «Включить прокси Windows», чтобы использовать его.";
   }
   void RefreshManagedRoute() {
+   _managedBridgeRefreshNeeded=false;
    SyncProxyModeSelection();
    SyncRouteCheckboxes();
    RestartRescueBridge();
@@ -549,6 +591,8 @@ namespace DevProxyApp {
    _useProxyCheckBox.CheckedChanged+=(s,e)=>ApplyRouteFlagsChange(_useProxyCheckBox.Checked,ConfigManager.Instance.UseDagamiDns);
    rows.Controls.Add(_useProxyCheckBox);
    AddNativeButton(rows,"Записать переменные прокси Windows",ApplyWindowsProxyEnvironment);
+   AddNativeButton(rows,"Восстановить обычный интернет",()=>OpenRecovery(false));
+   AddNativeButton(rows,"Удалить Dagami",()=>OpenRecovery(true));
    _startWithWindows=new CheckBox{Text="Запускать Dagami Agent Proxy вместе с Windows",AutoSize=true,Enabled=false};_startupStatus=FluentLabel("",9,false);rows.Controls.Add(_startWithWindows);rows.Controls.Add(_startupStatus);
    _startWithWindows.CheckedChanged+=(s,e)=>ApplyStartupCheckboxChange(_startWithWindows.Checked);
    rows.Controls.Add(_prepareAntigravity);
@@ -600,7 +644,8 @@ namespace DevProxyApp {
      "Переменные прокси Windows",MessageBoxButtons.YesNo,MessageBoxIcon.Warning,MessageBoxDefaultButton.Button2)!=DialogResult.Yes)return;
    if(!SaveNativeSettings())return;
    string address=GetIdeProxyUrl();
-   ProxyEngine.ApplySystemEnvironment(address);
+   try { ProxyEngine.ApplySystemEnvironment(address); }
+   catch(Exception error) {_connectionFeedback.Text=error.Message;return;}
    _connectionFeedback.Text=Environment.GetEnvironmentVariable("HTTP_PROXY",EnvironmentVariableTarget.User)==address
     &&Environment.GetEnvironmentVariable("HTTPS_PROXY",EnvironmentVariableTarget.User)==address
      ?"Переменные прокси Windows обновлены. Перезапустите терминал, чтобы он их прочитал."

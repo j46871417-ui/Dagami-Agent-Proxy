@@ -24,6 +24,12 @@ globalThis.Dagami = (() => {
     if (![own, available].includes(current.levelOfControl)) {
       throw new Error("Прокси контролирует политика браузера или другое расширение.");
     }
+    if(!await bridgeReady(port)) throw new Error("Маршрут не отвечает. Проверьте подключение в Dagami; настройки браузера не менялись.");
+    const latest=await read();
+    if(![own,available].includes(latest.levelOfControl) || JSON.stringify(latest.value)!==JSON.stringify(current.value)) {
+      throw new Error("Настройки прокси изменились во время проверки. Повторите включение.");
+    }
+    await chrome.storage.local.remove("offlineReason");
     await apply(port);
   }
 
@@ -44,12 +50,13 @@ globalThis.Dagami = (() => {
 
   async function bridgeReady(port) {
     try {
-      const response = await fetch(`http://127.0.0.1:${port}/dagami-selective.pac`, {
-        cache: "no-store", redirect: "error", credentials: "omit", signal: AbortSignal.timeout(1800)
+      const response = await fetch(`http://127.0.0.1:${port}/dagami-health`, {
+        cache: "no-store", redirect: "error", credentials: "omit", signal: AbortSignal.timeout(14000)
       });
-      const ready = response.ok && response.headers.get("content-type")?.startsWith("application/x-ns-proxy-autoconfig");
-      await response.body?.cancel();
-      return Boolean(ready);
+      if(!response.ok) {await response.body?.cancel();return false;}
+      const result=await response.json();
+      return result.dagami===true && result.transportReachable===true;
+
     } catch {
       return false;
     }

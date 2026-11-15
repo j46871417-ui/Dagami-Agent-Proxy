@@ -31,7 +31,16 @@ class ConnectionRecoveryChecks {
    foreach(var mode in new[]{new[]{true,true},new[]{false,false}}){refused=false;try{UpdateInstaller.RequireUserUpdate(mode[0],mode[1]);}catch(IOException){refused=true;}Assert(refused,"Elevated/protected update was allowed");}
    UpdateInstaller.RequireUserUpdate(false,true);
    var defaults=new ConfigManager();
-   Assert(defaults.EffectiveProxy==ManagedAccess.Profile&&!defaults.UseDagamiDns,"A new install must use the Dagami gateway without a Smart DNS bypass");
+   Assert(defaults.EffectiveProxy=="direct"&&!defaults.UseDagamiDns,"A new install must open without a key or network changes");
+   var selection=Config(Path.Combine(root,"selection"));
+   selection.UseProxy=true;selection.LastProxy="http://127.0.0.1:8131";selection.UseDagamiDns=true;
+   foreach(string mode in new[]{"custom","key","public"}) {
+    typeof(ConfigManager).GetMethod("SaveProxySelection",Private).Invoke(selection,new object[]{mode,"socks5://user:fixture-password@127.0.0.1:9131",true});
+    Assert(selection.EffectiveProxy=="http://127.0.0.1:8131"&&selection.UseDagamiDns&&!selection.PublicProxySelected,"Saving selection changed live route");
+    var copy=Config(Path.Combine(root,"selection"));copy.Load();
+    Assert(copy.SelectedProxyMode==mode&&copy.SelectedProxyAddress==selection.SelectedProxyAddress&&copy.SavedProxyRequireGemini,"Selected mode and options were not persisted");
+    Assert(!File.ReadAllText(Path.Combine(root,"selection","config.json")).Contains("fixture-password"),"Selected proxy credentials were stored in plaintext");
+   }
    int probeCalls=0;
    var route=ConnectionDiagnostics.Check(12345,port=>{probeCalls++;Assert(port==12345,"Probe did not use selected bridge");return "HTTP 401 expected without token";});
    Assert(route.Available&&route.Status==401&&probeCalls==1,"Effective Smart DNS/VPN route rejected because no upstream was tested");

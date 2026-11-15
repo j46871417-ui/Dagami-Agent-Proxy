@@ -22,7 +22,9 @@ async function refresh() {
     return;
   }
   if (!active) {
-    status.textContent = "Выключено. Действуют обычные настройки браузера.";
+    const stored=await chrome.storage.local.get("offlineReason");
+    if(requested!==revision)return;
+    status.textContent = stored.offlineReason || "Выключено. Действуют обычные настройки браузера.";
     return;
   }
   const port = Dagami.portFrom(current.value);
@@ -30,8 +32,8 @@ async function refresh() {
   if (!wasActive) status.textContent = "Проверяем локальный мост…";
   const ready = await Dagami.bridgeReady(port);
   if (requested !== revision) return;
-  const message = ready ? "Включено. Локальный мост отвечает." :
-    "Dagami недоступен. Запустите приложение и выберите подключение по ключу.";
+  const message = ready ? "Включено. Проверочный маршрут отвечает; доступ конкретной модели зависит от сервиса." :
+    "Маршрут Dagami не отвечает. Выключите расширение или восстановите подключение в приложении.";
   if (status.textContent !== message) status.textContent = message;
 }
 

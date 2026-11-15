@@ -7,6 +7,7 @@ using System.Text;
 using System.Threading;
 using System.Reflection;
 using System.Collections;
+using System.Linq;
 using System.Linq.Expressions;
 using System.Threading.Tasks;
 using DevProxyApp;
@@ -101,7 +102,7 @@ class ProxyFailureChecks {
     var stream=client.GetStream();stream.ReadTimeout=5000;
     byte[] request=Encoding.ASCII.GetBytes("GET "+SelectiveProxyRules.Path+" HTTP/1.1\r\nHost: 127.0.0.1:"+bridge.BoundPort+"\r\n\r\n");
     stream.Write(request,0,request.Length);
-    Assert(Header(stream).Contains(" 404 "),"PAC must not advertise an unkeyed bridge");
+    Assert(Header(stream).Contains(" 200 "),"PAC unavailable for a user-selected direct/custom route");
    }
    using(var c=new TcpClient("127.0.0.1",bridge.BoundPort)){c.GetStream().ReadTimeout=5000;byte[] b=Encoding.ASCII.GetBytes("GET http://metadata.google.internal/computeMetadata/v1/ HTTP/1.1\r\nHost: metadata.google.internal\r\n\r\n");c.GetStream().Write(b,0,b.Length);Assert(Header(c.GetStream()).Contains(" 404 "),"Metadata endpoint not intercepted");}
    using(var c=new TcpClient("127.0.0.1",bridge.BoundPort)){c.GetStream().ReadTimeout=5000;var stream=c.GetStream();byte[] b=Encoding.ASCII.GetBytes("CONNECT metadata.google.internal:80 HTTP/1.1\r\nHost: metadata.google.internal:80\r\n\r\n");stream.Write(b,0,b.Length);Assert(Header(stream).Contains(" 200 "),"Metadata CONNECT tunnel not established");b=Encoding.ASCII.GetBytes("GET /computeMetadata/v1/ HTTP/1.1\r\nHost: metadata.google.internal\r\nMetadata-Flavor: Google\r\n\r\n");stream.Write(b,0,b.Length);Assert(Header(stream).Contains(" 404 "),"Metadata CONNECT request did not receive 404");}
@@ -137,6 +138,16 @@ class ProxyFailureChecks {
  }
  static void SocksProtocolFixtures(){
   var proxy=new Uri("socks5://127.0.0.1:1080");
+  Uri parsed;
+  Assert(UpstreamProxyDiagnostics.TryParse("socks4a://id@proxy.example",out parsed)&&parsed.Port==1080,"SOCKS4a default port not accepted");
+  var socks4a=new SocksFixtureStream(new byte[]{0,90,0,0,0,0,0,0});
+  var methods=BindingFlags.Static|BindingFlags.NonPublic;
+  typeof(UpstreamProxyDiagnostics).GetMethod("ConnectSocks",methods).Invoke(null,new object[]{socks4a,parsed,"example.test",443});
+  Assert(socks4a.output.ToArray().SequenceEqual(new byte[]{4,1,1,187,0,0,0,1}.Concat(Encoding.ASCII.GetBytes("id\0example.test\0"))),"SOCKS4a hostname or user ID not relayed correctly");
+  Assert(!UpstreamProxyDiagnostics.TryParse("socks4://u:pass@proxy.example:1080",out parsed),"SOCKS4 accepted unsupported password");
+  Assert(!UpstreamProxyDiagnostics.TryParse("socks5s://proxy.example:/",out parsed),"SOCKS5 accepted empty port");
+  Assert(UpstreamProxyDiagnostics.TryParse("socks5s://proxy.example",out parsed)&&parsed.Port==1080&&
+   (bool)typeof(UpstreamProxyDiagnostics).GetMethod("UsesTls",methods).Invoke(null,new object[]{parsed}),"SOCKS5 over TLS requires TLS and a valid default port");
   foreach(byte[] response in new[]{new byte[]{4,0},new byte[]{5,255},new byte[]{5,0,5,1,0,1},new byte[]{5,0,5,0,1,1},new byte[]{5,0,5,0,0,99},new byte[]{5,0,5,0,0,1,127}}){
    bool rejected=false;try{Socks5Transport.Connect(new SocksFixtureStream(response),proxy,"example.test",443);}catch(IOException){rejected=true;}Assert(rejected,"Malformed or failed SOCKS response accepted");
   }

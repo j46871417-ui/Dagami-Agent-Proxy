@@ -61,36 +61,48 @@ func replaceFile(from, to string) error {
 	return nil
 }
 func prepareProcess(cmd *exec.Cmd) { cmd.SysProcAttr = &syscall.SysProcAttr{CreationFlags: 0x08000000} }
-func manageProcess(cmd *exec.Cmd) (func() error, error) {
+func manageProcess(cmd *exec.Cmd) (func() error, func() error, error) {
 	job, _, e := kernel32.NewProc("CreateJobObjectW").Call(0, 0)
 	if job == 0 {
-		return nil, e
+		return nil, nil, e
 	}
 	// JOBOBJECT_EXTENDED_LIMIT_INFORMATION on 64-bit Windows.
 	var limits [144]byte
-	*(*uint32)(unsafe.Pointer(&limits[16])) = 0x2000
+	*(*uint32)(unsafe.Pointer(&limits[16])) = 0 // Detach on launcher exit; only explicit Stop terminates this job.
 	r, _, e := kernel32.NewProc("SetInformationJobObject").Call(job, 9, uintptr(unsafe.Pointer(&limits[0])), uintptr(len(limits)))
 	if r == 0 {
 		syscall.CloseHandle(syscall.Handle(job))
-		return nil, e
+		return nil, nil, e
 	}
 	process, e := syscall.OpenProcess(0x0100|0x0001, false, uint32(cmd.Process.Pid))
 	if e != nil {
 		syscall.CloseHandle(syscall.Handle(job))
-		return nil, e
+		return nil, nil, e
 	}
 	defer syscall.CloseHandle(process)
 	r, _, e = kernel32.NewProc("AssignProcessToJobObject").Call(job, uintptr(process))
 	if r == 0 {
 		syscall.CloseHandle(syscall.Handle(job))
-		return nil, errors.New("не удалось изолировать дерево процессов; запуск отменён")
+		return nil, nil, errors.New("не удалось изолировать дерево процессов; запуск отменён")
 	}
 	var once sync.Once
-	return func() error {
+	detach := func() error {
 		var err error
 		once.Do(func() { err = syscall.CloseHandle(syscall.Handle(job)) })
 		return err
-	}, nil
+	}
+	stop := func() error {
+		var err error
+		once.Do(func() {
+			r, _, e := kernel32.NewProc("TerminateJobObject").Call(job, 1)
+			if r == 0 {
+				err = e
+			}
+			syscall.CloseHandle(syscall.Handle(job))
+		})
+		return err
+	}
+	return stop, detach, nil
 }
 func resolveExecutable(path string) (string, error) {
 	fi, e := os.Stat(path)
@@ -102,3 +114,5 @@ func resolveExecutable(path string) (string, error) {
 	}
 	return path, nil
 }
+
+func waitForDescendants(*exec.Cmd, <-chan struct{}) {}

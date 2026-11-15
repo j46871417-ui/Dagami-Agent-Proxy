@@ -19,6 +19,11 @@ namespace DevProxyApp {
             };
             string[] args = NativeCliApps.SplitArguments(existing ?? "");
             for (int i = 0; i < args.Length; i++) {
+                if (args[i] == "--") {
+                    keep.Add(ChromiumArguments(proxy));
+                    for (; i < args.Length; i++) keep.Add(NativeShortcuts.Quote(args[i]));
+                    return string.Join(" ",keep.ToArray());
+                }
                 int equals = args[i].IndexOf('=');
                 string name = equals < 0 ? args[i] : args[i].Substring(0, equals);
                 if (!routing.Contains(name)) { keep.Add(NativeShortcuts.Quote(args[i])); continue; }
@@ -31,8 +36,21 @@ namespace DevProxyApp {
             return string.Join(" ", keep.ToArray());
         }
         public static bool IsGemini(AppTarget target) {
+            if(target==null)return false;
             string name=Path.GetFileName(target.ExePath ?? "");
             return (name.Equals("Gemini.exe",StringComparison.OrdinalIgnoreCase) || name.Equals("GeminiAppLauncher.exe",StringComparison.OrdinalIgnoreCase)) && !NativeCliApps.IsCli(target);
+        }
+        internal static bool IsGeminiSibling(AppTarget target,string executable) {
+            if(target==null||!IsGemini(target)||string.IsNullOrWhiteSpace(executable))return false;
+            string expectedDirectory=Path.GetDirectoryName(Path.GetFullPath(target.ExePath));
+            string candidate=Path.GetFullPath(executable);
+            return IsGemini(new AppTarget{ExePath=candidate}) &&
+                string.Equals(Path.GetDirectoryName(candidate),expectedDirectory,StringComparison.OrdinalIgnoreCase);
+        }
+        internal static string[] GeminiExecutables(AppTarget target) {
+            if(target==null||!IsGemini(target))return new string[0];
+            string folder=Path.GetDirectoryName(Path.GetFullPath(target.ExePath));
+            return new[]{Path.Combine(folder,"Gemini.exe"),Path.Combine(folder,"GeminiAppLauncher.exe")};
         }
         public static string Executable(AppTarget target) {
             if(IsGemini(target) && Path.GetFileName(target.ExePath).Equals("GeminiAppLauncher.exe",StringComparison.OrdinalIgnoreCase)) {

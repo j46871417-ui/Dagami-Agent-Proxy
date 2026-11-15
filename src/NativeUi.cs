@@ -124,7 +124,7 @@ namespace DevProxyApp
                 string issue;
                 int count = NativeCliApps.IsCommandTarget(target)
                     ? NativeCliApps.Current.VerifiedCount(target.Id, out issue)
-                    : NativeShortcuts.Current.VerifiedCount(target.Id, out issue);
+                    : NativeShortcuts.Current.VerifiedCount(target.Id, target.IsInstalled?target:null, out issue);
                 if (!string.IsNullOrEmpty(issue)) return "damaged";
                 if (count > 0) return "ready";
             } catch { return "damaged"; }
@@ -737,9 +737,9 @@ namespace DevProxyApp
             if (IsDirectProxyValue(proxy) || (string.IsNullOrEmpty(proxy) && useDns)) return "direct";
             Uri parsed;
             if (!TryParseSupportedProxy(proxy, out parsed))
-                throw new InvalidOperationException("Укажите HTTP, HTTPS или SOCKS5 proxy URL (например http://host:8080) или оставьте пустым для работы через Smart DNS.");
+                throw new InvalidOperationException("Укажите HTTP-, HTTPS- или SOCKS-прокси (например http://host:8080) или оставьте поле пустым для работы через Smart DNS.");
             if (UpstreamProxyDiagnostics.IsDnsEndpointMistakenForProxy(proxy))
-                throw new InvalidOperationException("В поле прокси указан DNS-сервер. Укажите HTTP/HTTPS/SOCKS5-прокси, а адрес DNS задайте отдельно.");
+                throw new InvalidOperationException("В поле прокси указан DNS-сервер. Укажите прокси, а адрес DNS задайте отдельно.");
             return proxy;
         }
 
@@ -750,7 +750,7 @@ namespace DevProxyApp
             if (!value.Contains("://") && value.Contains(":")) value = "http://" + value;
             Uri proxy;
             if (value.Length > 2048 || !TryParseSupportedProxy(value, out proxy) || UpstreamProxyDiagnostics.IsDnsEndpointMistakenForProxy(value))
-                throw new ArgumentException("Укажите адрес HTTP/HTTPS/SOCKS5-прокси, например 127.0.0.1:7897, или введите direct для системного VPN.");
+                throw new ArgumentException("Укажите HTTP, HTTPS, SOCKS4/4a, SOCKS5 или socks5s:// для SOCKS5 поверх TLS. Для системного VPN введите direct.");
             if (LocalProxyBridge.IsBridgeEndpoint(proxy, bridgePort))
                 throw new ArgumentException("Этот порт занят мостом Dagami. Введите порт вашего прокси.");
             return value;
@@ -976,7 +976,7 @@ namespace DevProxyApp
                 _connectionSummary.Text = routeState;
                 RefreshWindowsProxyStatus(routeState);
                 if (_managedRouteAction != null) _managedRouteAction.Text = paired
-                    ? (managed ? "Заменить ключ" : "Использовать Dagami") : _activationKeySaved ? "Активировать ключ" : "Подключить по ключу";
+                    ? "Заменить ключ прокси" : _activationKeySaved ? "Проверить сохранённый ключ" : "Добавить ключ прокси";
                 _connectionAction.Text = needsPairing ? "Подключить" : "Настройки";
             }
 
@@ -1056,17 +1056,7 @@ namespace DevProxyApp
 
         private void ShowNativeWindow()
         {
-            if (!_preview && !LicenseManager.IsActivated()) {
-                _activationKeySaved = ManagedAccess.ReadDeferredKey() != null;
-                if (!_activationKeySaved) {
-                    using (var activation = new ActivationForm()) {
-                        var result = activation.ShowDialog();
-                        if (result != DialogResult.OK && result != DialogResult.Retry) return;
-                        _activationKeySaved = result == DialogResult.Retry;
-                    }
-                }
-                UpdateNativeStatus();
-            }
+            if (!_preview) _activationKeySaved = ManagedAccess.ReadDeferredKey() != null;
             Opacity = 1;
             ShowInTaskbar = true;
             if (WindowState == FormWindowState.Minimized) WindowState = _nativeRestoreState;

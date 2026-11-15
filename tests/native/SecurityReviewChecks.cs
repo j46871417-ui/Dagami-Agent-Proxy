@@ -77,36 +77,31 @@ class SecurityReviewChecks {
    Assert(worker.Join(7000)&&failure==null,"Bidirectional RPC fixture failed: "+failure);
   }}finally{backend.Stop();worker.Join(2000);}
  }
- static string Sign(RSACryptoServiceProvider rsa,long expiry,string product="dagami-agent-proxy"){
-  long now=(long)(DateTime.UtcNow-new DateTime(1970,1,1,0,0,0,DateTimeKind.Utc)).TotalSeconds;
-  var json=new JavaScriptSerializer().Serialize(new{v=2,product=product,id=Guid.NewGuid().ToString("N"),iat=now-60,exp=expiry});
-  string message="DAGAMI2.fixture."+B64(Encoding.UTF8.GetBytes(json));return message+"."+B64(rsa.SignData(Encoding.ASCII.GetBytes(message),CryptoConfig.MapNameToOID("SHA256")));
- }
  static void Licenses(){
-  using(var rsa=new RSACryptoServiceProvider(3072,new CspParameters(24))){rsa.PersistKeyInCsp=false;string pub=rsa.ToXmlString(false),key=Sign(rsa,0);
-   Assert(SignedLicenses.Verify(key,"fixture",pub,DateTime.UtcNow),"Signed license rejected");
-   Assert(!SignedLicenses.Verify(key+"A","fixture",pub,DateTime.UtcNow),"Tampered signature accepted");
-   Assert(!SignedLicenses.Verify(key,"other",pub,DateTime.UtcNow),"Other issuer accepted");
-   long expired=(long)(DateTime.UtcNow-new DateTime(1970,1,1,0,0,0,DateTimeKind.Utc)).TotalSeconds-1;
-   Assert(!SignedLicenses.Verify(Sign(rsa,expired),"fixture",pub,DateTime.UtcNow),"Expired license accepted");
-   Assert(!SignedLicenses.Verify(Sign(rsa,0,"other-product"),"fixture",pub,DateTime.UtcNow),"Other product accepted");
-   using(var other=new RSACryptoServiceProvider(3072,new CspParameters(24))){other.PersistKeyInCsp=false;Assert(!SignedLicenses.Verify(key,"fixture",other.ToXmlString(false),DateTime.UtcNow),"Untrusted signing key accepted");}
-   Assert(!LicenseManager.ValidateKey(key),"Test issuer accidentally enabled in production policy");
-   Assert(LicenseManager.NormalizeKey(key)==key,"Signed license casing changed");
-  }
+  Assert(typeof(MainForm).Assembly.GetType("DevProxyApp.LicenseManager")==null,"Application licensing returned");
+  string error;
+  Assert(!ProxyAccess.Connect("DAGAMI-TEST-9999-XVSF",out error),"Legacy application key granted proxy access");
+  Assert(!ManagedAccess.IsAccessCode("DAGAMI2.fixture.invalid"),"Application license accepted as proxy key");
  }
  static void UpdateTransaction(string root){
   string stage=Path.Combine(root,"update-stage");Directory.CreateDirectory(stage);string candidate=Path.Combine(stage,"DagamiAgentProxy.exe");File.Copy(typeof(MainForm).Assembly.Location,candidate);
   string tag="v"+System.Diagnostics.FileVersionInfo.GetVersionInfo(candidate).ProductVersion;
   var release=new UpdateRelease{Tag=tag,Page="https://github.com/"+NativeUpdates.Repository+"/releases/tag/"+tag,Gui=new UpdateAsset{Name="DagamiAgentProxy.exe",Size=new FileInfo(candidate).Length,Sha256=NativeUpdates.FileHash(candidate),Url="https://github.com/"+NativeUpdates.Repository+"/releases/download/"+tag+"/DagamiAgentProxy.exe"}};
   string directory=Path.Combine(root,"installed");Directory.CreateDirectory(directory);string gui=Path.Combine(directory,"DagamiAgentProxy.exe");File.WriteAllText(gui,"old-fixture");
+  string[] helpers={Path.Combine(directory,"DagamiRecovery.exe"),Path.Combine(directory,"DagamiUninstall.exe")};
+  foreach(string helper in helpers)File.Copy(gui,helper);
   var plan=new UpdatePlan{Stage=stage,GuiPath=gui,OldGuiHash=NativeUpdates.FileHash(gui),Release=release,Restart=true};
   string backup=UpdateInstaller.InstallCore(plan,null,null);Assert(File.ReadAllText(Path.Combine(backup,"DagamiAgentProxy.exe"))=="old-fixture","Update backup lost");
+  foreach(string helper in helpers)Assert(NativeUpdates.FileHash(helper)==release.Gui.Sha256,"Recovery helper not updated with GUI");
   Assert(UpdateInstaller.ShouldRestart(plan,true),"Successful verified update cannot restart");
   File.AppendAllText(gui,"tampered");bool refused=false;try{UpdateInstaller.ShouldRestart(plan,true);}catch(IOException){refused=true;}Assert(refused,"Tampered installed EXE can restart");
   File.WriteAllText(gui,"old-fixture");plan.OldGuiHash=NativeUpdates.FileHash(gui);refused=false;
+  foreach(string helper in helpers)File.Copy(gui,helper,true);
   try{UpdateInstaller.InstallCore(plan,null,()=>{throw new IOException("fixture failure");});}catch(IOException){refused=true;}
   Assert(refused&&File.ReadAllText(gui)=="old-fixture","Update failure did not roll back");
+  foreach(string helper in helpers)Assert(File.ReadAllText(helper)=="old-fixture","Recovery helper did not roll back");
+  File.WriteAllText(helpers[0],"foreign");bool foreign=false;try{UpdateInstaller.InstallCore(plan,null,null);}catch(IOException){foreign=true;}
+  Assert(foreign&&File.ReadAllText(helpers[0])=="foreign"&&File.ReadAllText(gui)=="old-fixture","Foreign helper overwritten or GUI changed");
  }
  static int Main(){
   string root=Path.Combine(Path.GetTempPath(),"Dagami-security-"+Guid.NewGuid().ToString("N"));Directory.CreateDirectory(root);
@@ -124,7 +119,7 @@ class SecurityReviewChecks {
     Assert(typeof(LocalProxyBridge).GetField("_scopedDns",BindingFlags.Instance|BindingFlags.NonPublic).GetValue(session.PrivateBridge)==null,"Gemini traffic can take Smart DNS instead of proxy");
    }
    bool closed=false;try{using(var probe=new TcpClient("127.0.0.1",port)){} }catch(SocketException){closed=true;}Assert(closed,"Session disposal left Gemini bridge open");
-   Console.WriteLine("PASS "+checks+" real live-tunnel saturation/recovery, HTTP auth/framing, signed-license authenticity, damaged status and Gemini proxy-only lifecycle checks");return 0;
+   Console.WriteLine("PASS "+checks+" real live-tunnel saturation/recovery, HTTP auth/framing, proxy-only key separation, damaged status and Gemini proxy-only lifecycle checks");return 0;
   }catch(Exception error){Console.Error.WriteLine(error);return 1;}
   finally{if(!Path.GetFullPath(root).StartsWith(Path.GetFullPath(Path.GetTempPath()),StringComparison.OrdinalIgnoreCase)||!Path.GetFileName(root).StartsWith("Dagami-security-",StringComparison.Ordinal))throw new IOException("Unsafe fixture cleanup");Directory.Delete(root,true);}
  }

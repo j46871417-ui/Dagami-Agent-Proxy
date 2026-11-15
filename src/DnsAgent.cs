@@ -195,6 +195,39 @@ namespace DevProxyApp {
    }
   }
   public static void StopOwned(){var control=new WindowsDnsServiceControl();if(!control.Exists())return;string executable=Path.Combine(DirectoryPath,"DagamiAgentProxy.exe"),marker=Path.Combine(DirectoryPath,"owner.json"),image=NativeShortcuts.Quote(executable)+" --dns-service";if(!File.Exists(marker)||control.ImagePath()!=image)throw new IOException("Foreign DNS service was not stopped.");var owner=new JavaScriptSerializer().Deserialize<Dictionary<string,object>>(File.ReadAllText(marker));if(Convert.ToString(owner["ImagePath"])!=image)throw new IOException("DNS service ownership mismatch.");control.Stop();}
+  public static void RemoveOwned() {
+   using(var mutex=new Mutex(false,@"Global\Dagami.EncryptedDns.Helper")) {
+    bool owns=false;try {try{owns=mutex.WaitOne(0);}catch(AbandonedMutexException){owns=true;}
+     if(!owns)throw new IOException("DNS operation in progress; service preserved.");
+     using(var operation=new Mutex(false,@"Global\DevProxy.SystemDns.Operation")) {
+      bool locked=false;try {try{locked=operation.WaitOne(0);}catch(AbandonedMutexException){locked=true;}
+       if(!locked)throw new IOException("DNS operation in progress; service preserved.");
+       RemoveOwnedCore();
+      }finally{if(locked)operation.ReleaseMutex();}
+     }
+    }finally{if(owns)mutex.ReleaseMutex();}
+   }
+  }
+  static void RemoveOwnedCore() {
+   RemoveOwned(DirectoryPath,new WindowsDnsServiceControl(),()=> {
+    // Dot-source to retain the library functions in this scope.
+    string script="$ErrorActionPreference='Stop'; . {\n"+SystemDnsManager.Script()+"\n} -LibraryOnly; if(-not (Test-NoLocalDnsReferences)){exit 2}";
+    string encoded=Convert.ToBase64String(System.Text.Encoding.Unicode.GetBytes(script));
+    var start=new ProcessStartInfo(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.System),@"WindowsPowerShell\v1.0\powershell.exe"),"-NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -EncodedCommand "+encoded){UseShellExecute=false,CreateNoWindow=true,WindowStyle=ProcessWindowStyle.Hidden};
+    start.EnvironmentVariables["PSModulePath"]=Path.Combine(Path.GetDirectoryName(start.FileName),"Modules");
+    using(var process=Process.Start(start)){if(!process.WaitForExit(30000))throw new IOException("DNS reference check timed out; service preserved.");return process.ExitCode==0;}
+   });
+  }
+  internal static void RemoveOwned(string directory,IDnsServiceControl control,Func<bool> noReferences) {
+   if(!control.Exists())return;
+   string root=Path.GetFullPath(directory),marker=Path.Combine(root,"owner.json"),image=NativeShortcuts.Quote(Path.Combine(root,"DagamiAgentProxy.exe"))+" --dns-service";
+   if((File.GetAttributes(root)&FileAttributes.ReparsePoint)!=0||!File.Exists(marker)||control.ImagePath()!=image)throw new IOException("Foreign DNS service was not removed.");
+   var owner=new JavaScriptSerializer().Deserialize<Dictionary<string,object>>(File.ReadAllText(marker));
+   if(!owner.ContainsKey("ImagePath")||Convert.ToString(owner["ImagePath"])!=image)throw new IOException("DNS service ownership mismatch.");
+   if(!noReferences())throw new IOException("Local DNS is still referenced; service preserved. Restore DNS first.");
+   control.Stop();control.Delete();
+   // Protected recovery data and the service image are intentionally retained.
+  }
   internal static void EnsureInstalled(string directory,string source,IDnsServiceControl control,Func<bool> probe){
    directory=Path.GetFullPath(directory);Directory.CreateDirectory(directory);if((File.GetAttributes(directory)&FileAttributes.ReparsePoint)!=0)throw new IOException("DNS service directory is a reparse point.");
    string executable=Path.Combine(directory,"DagamiAgentProxy.exe"),marker=Path.Combine(directory,"owner.json"),image=NativeShortcuts.Quote(executable)+" --dns-service";

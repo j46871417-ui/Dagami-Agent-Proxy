@@ -62,7 +62,11 @@ class SessionStopChecks {
     Assert(Ensure(form,message=>{throw new Exception("Empty sessions should not prompt");}),"Empty route change rejected");
     first=null;other=null;
    }
-   Console.WriteLine("PASS "+checks+" route-switch confirmation/cancel, failed-stop guard, managed Job descendants, unassigned launcher and unrelated-process isolation checks");return 0;
+   using(var detached=Start("--wait")) {
+    var session=new NativeSession();Assert(session.Job.AssignProcess(detached.Handle),"Detach fixture Job failed");session.Processes.Add(Process.GetProcessById(detached.Id));
+    session.Detach();Thread.Sleep(100);Assert(!detached.HasExited,"Normal launcher close killed the editor");detached.Kill();detached.WaitForExit(3000);
+   }
+   Console.WriteLine("PASS "+checks+" route-switch confirmation/cancel, failed-stop guard, non-destructive exit, managed Job descendants, unassigned launcher and unrelated-process isolation checks");return 0;
   }catch(Exception error){Console.Error.WriteLine(error);return 1;}
   finally{
    if(first!=null)first.Dispose();if(other!=null)other.Dispose();

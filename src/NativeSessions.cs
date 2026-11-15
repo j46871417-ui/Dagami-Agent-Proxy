@@ -34,6 +34,13 @@ namespace DevProxyApp
             Processes.Clear();
             if(PrivateBridge!=null){PrivateBridge.Dispose();PrivateBridge=null;}
         }
+        public void Detach() {
+            // A GUI exit must not terminate the user's editor or its descendants.
+            Job.Dispose();
+            foreach (var process in Processes) process.Dispose();
+            Processes.Clear();
+            if (PrivateBridge != null) { PrivateBridge.Dispose(); PrivateBridge = null; }
+        }
         public void StopAndWait(int timeoutMilliseconds = 5000) {
             if (timeoutMilliseconds < 1) throw new ArgumentOutOfRangeException("timeoutMilliseconds");
             var elapsed = Stopwatch.StartNew();
@@ -162,7 +169,7 @@ namespace DevProxyApp
                 if(shortcuts.SkippedReadOnlyLinks>0)parts.Add("недоступных ярлыков пропущено: "+shortcuts.SkippedReadOnlyLinks+"; используйте настроенную пользовательскую копию");
                 if (!string.IsNullOrEmpty(configResult)) parts.Add(configResult);
                 if (antigravity && binaryPrepared) parts.Add(binaryComplete ? "бинарная подготовка проверена" : "бинарная подготовка частичная; проверьте отчёт");
-                if (AppProxyPolicy.IsGemini(target)) parts.Add("параметры Chromium/WebView2 при запуске; доступ к сервису проверяется отдельно");
+                if (AppProxyPolicy.IsGemini(target)) parts.Add("ярлыки Gemini и его лаунчера, прокси для Chromium, WebView2 и Qt");
                 summary = "Готово (" + string.Join(", ", parts.ToArray()) + "). Запускайте приложение привычным ярлыком.";
                 if(antigravity && !binaryPrepared)summary="Прокси и ярлыки настроены: "+paths.Count+". Бинарная подготовка пропущена — несовместимые сигнатуры, backend не изменялся. Проверьте вход и модели в Antigravity.";
                 if (antigravity && !string.IsNullOrEmpty(binaryMessage)) summary += "\r\n" + binaryMessage;
@@ -228,6 +235,10 @@ namespace DevProxyApp
         }
         public string HandleShortcutRequest(NativeLaunchRequest request) {
             try {
+                if(request.Recovery) {
+                    if(_patchInProgress||_routeChangeInProgress||_updatePreparing||_nativeBusy)return "Дождитесь завершения текущей операции Dagami перед восстановлением.";
+                    BeginInvoke(new Action(ExitApplication));return null;
+                }
                 if (_routeChangeInProgress) return "Идёт смена режима подключения. Повторите запуск после её завершения.";
                 if (string.IsNullOrEmpty(request.TargetId)) { ShowNativeWindow(); return null; }
                 if(_updatePreparing)return "Готовится обновление Dagami. Повторите запуск после перезапуска.";
@@ -243,7 +254,7 @@ namespace DevProxyApp
                     if (target == null || !target.IsInstalled)
                         throw new InvalidOperationException("Приложение из ярлыка не найдено. В Dagami выберите «Добавить → Обновить список установленных».");
                     arguments = record.Arguments; directory = record.WorkingDirectory;
-                    if (!string.Equals(Path.GetFullPath(target.ExePath), record.Executable, StringComparison.OrdinalIgnoreCase)) {
+                    if (!NativeShortcuts.MatchesCurrentExecutable(target,record.Executable)) {
                         string previousRoot = ApplicationDiscovery.PreviousCodexPackageRoot(target, record.Executable);
                         if (previousRoot == null)
                             throw new InvalidOperationException("Путь приложения изменился. Выберите его в Dagami и нажмите «Проверить и восстановить».");
@@ -286,7 +297,7 @@ namespace DevProxyApp
             _nativeSessions.Remove(id);
         }
         void DisposeNativeSessions() {
-            foreach (var session in _nativeSessions.Values) session.Dispose();
+            foreach (var session in _nativeSessions.Values) session.Detach();
             _nativeSessions.Clear(); _activeJobMgr = null; _activeSessionProc = null;
         }
         Process AntigravitySession() {

@@ -567,6 +567,8 @@ namespace DevProxyApp
             var addMenu=new ContextMenuStrip();
             addMenu.Items.Add(AppMenuItem("Выбрать файл приложения…",AddNativeTarget));
             addMenu.Items.Add(AppMenuItem("Обновить список установленных",RefreshNativeTargets));
+            var recovery=new FluentButton{Name="RecoveryButton",Text="Восстановить интернет",Width=184,Height=34};
+            recovery.Click+=(sender,e)=>OpenRecovery(false);tools.Controls.Add(recovery);
             var add=new FluentButton{Text="Добавить ▾",Width=130,Height=34};
             add.Click+=(sender,e)=>addMenu.Show(add,new Point(0,add.Height));tools.Controls.Add(add);_nativeButtons.Add(add);
 

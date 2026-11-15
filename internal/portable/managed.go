@@ -143,9 +143,13 @@ func routeForProfile(p Profile) (*Bridge, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Bridge{upstream: endpoint, proof: func(target string) (string, error) {
+	route := &Bridge{upstream: endpoint, proof: func(target string) (string, error) {
 		return managed.Sign(key, endpoint.Host, "CONNECT", target)
-	}}, nil
+	}}
+	if useManagedHTTP2() {
+		route.h2 = newGatewayHTTP2Transport()
+	}
+	return route, nil
 }
 
 func profileValue(p Profile) (string, error) {

@@ -4,24 +4,14 @@ package portable
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"net"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"runtime"
 	"strings"
 	"time"
 )
-
-type dnsBackup struct {
-	Version   int      `json:"version"`
-	OS        string   `json:"os"`
-	Interface string   `json:"interface"`
-	Before    []string `json:"before"`
-	Applied   string   `json:"applied"`
-}
 
 func dnsCommand(parent context.Context, command string, args ...string) (string, error) {
 	ctx, cancel := context.WithTimeout(parent, 60*time.Second)
@@ -59,14 +49,18 @@ func currentDNS(ctx context.Context, iface string) ([]string, error) {
 		if e != nil {
 			return nil, e
 		}
-		_, text, _ = strings.Cut(text, ":")
+		_, tail, ok := strings.Cut(text, ":")
+		if !ok {
+			return nil, errors.New("неизвестный ответ resolvectl")
+		}
+		text = tail
 	}
 	result := []string{}
 	for _, v := range strings.Fields(text) {
 		if net.ParseIP(v) == nil {
 			return nil, errors.New("не удалось однозначно прочитать прежний DNS; запись отменена")
 		}
-		result = append(result, v)
+		result = append(result, net.ParseIP(v).String())
 	}
 	return result, nil
 }
@@ -92,63 +86,5 @@ func applyDNS(ctx context.Context, iface string, servers []string) error {
 	return e
 }
 func dnsChange(ctx context.Context, dir, operation, server, iface string) (string, error) {
-	if operation == "reset" {
-		return "", errors.New("общий сброс NRPT доступен только в Windows; здесь используйте восстановление DNS выбранной службы")
-	}
-	path := filepath.Join(dir, "dns-backup.json")
-	if operation == "restore" {
-		raw, e := os.ReadFile(path)
-		if e != nil {
-			return "", errors.New("нет копии прежнего DNS")
-		}
-		var b dnsBackup
-		if json.Unmarshal(raw, &b) != nil || b.Version != 1 || b.OS != runtime.GOOS {
-			return "", errors.New("копия DNS не соответствует этой системе")
-		}
-		now, e := currentDNS(ctx, b.Interface)
-		if e != nil {
-			return "", e
-		}
-		if len(now) != 1 || now[0] != b.Applied {
-			return "", errors.New("DNS изменён вне Dagami; автоматический откат отменён")
-		}
-		if e = applyDNS(ctx, b.Interface, b.Before); e != nil {
-			return "", e
-		}
-		restored, e := currentDNS(ctx, b.Interface)
-		if e != nil || strings.Join(restored, " ") != strings.Join(b.Before, " ") {
-			return "", errors.New("откат не подтверждён; копия сохранена")
-		}
-		if e = os.Rename(path, path+".restored-"+ID()); e != nil {
-			return "", e
-		}
-		return "Прежний DNS восстановлен", nil
-	}
-	if iface == "" || len(iface) > 128 || strings.ContainsAny(iface, "\x00\r\n") {
-		return "", errors.New("укажите точное имя сетевого интерфейса или службы")
-	}
-	if _, e := os.Stat(path); e == nil {
-		return "", errors.New("сначала восстановите предыдущую настройку DNS")
-	}
-	before, e := currentDNS(ctx, iface)
-	if e != nil {
-		return "", e
-	}
-	backup := dnsBackup{Version: 1, OS: runtime.GOOS, Interface: iface, Before: before, Applied: server}
-	raw, _ := json.MarshalIndent(backup, "", "  ")
-	if e = atomicWrite(path, raw, 0600); e != nil {
-		return "", e
-	}
-	if e = applyDNS(ctx, iface, []string{server}); e != nil {
-		return "", e
-	}
-	after, e := currentDNS(ctx, iface)
-	if e != nil || len(after) != 1 || after[0] != server {
-		rollback := applyDNS(context.Background(), iface, before)
-		if rollback != nil {
-			return "", errors.New("запись и откат не подтверждены; копия сохранена")
-		}
-		return "", errors.New("DNS не подтвердился; выполнена попытка отката, проверьте статус")
-	}
-	return "DNS записан и подтверждён; прежние значения сохранены", nil
+	return changeUnixDNS(ctx, dir, runtime.GOOS, operation, server, iface, currentDNS, applyDNS)
 }

@@ -51,19 +51,21 @@ type SessionInfo struct {
 }
 type session struct {
 	SessionInfo
-	cmd    *exec.Cmd
-	bridge *Bridge
-	stop   func() error
-	done   chan struct{}
+	bridge   *Bridge
+	stop     func() error
+	detach   func() error
+	released chan struct{}
 }
 type Controller struct {
-	mu       sync.Mutex
-	dnsMu    sync.Mutex
-	state    State
-	dir      string
-	sessions map[string]*session
-	events   []Event
-	preview  bool
+	mu           sync.Mutex
+	dnsMu        sync.Mutex
+	state        State
+	dir          string
+	sessions     map[string]*session
+	events       []Event
+	preview      bool
+	remoteLaunch func(error)
+	recovering   bool
 }
 
 func ID() string {
@@ -73,20 +75,43 @@ func ID() string {
 	}
 	return hex.EncodeToString(b)
 }
+func StateDirectory(dir string) (string, error) {
+	if dir == "" {
+		base, err := os.UserConfigDir()
+		if err != nil {
+			return "", err
+		}
+		dir = filepath.Join(base, "DagamiAgentProxy", "native-v1")
+	}
+	return filepath.Abs(dir)
+}
+func (c *Controller) SetRemoteLaunchCallback(fn func(error)) {
+	c.mu.Lock()
+	c.remoteLaunch = fn
+	c.mu.Unlock()
+}
+func (c *Controller) notifyRemoteLaunch(err error) {
+	c.mu.Lock()
+	fn := c.remoteLaunch
+	c.mu.Unlock()
+	if fn != nil {
+		fn(err)
+	}
+}
+
 func NewController(dir string, preview bool) (*Controller, error) {
 	c := &Controller{dir: dir, sessions: map[string]*session{}, preview: preview}
 	if preview {
 		c.state = State{Version: 1, Active: "demo", Profiles: []Profile{{ID: "demo", Name: "Рабочий профиль", Proxy: "direct"}}, Apps: []App{{ID: "antigravity", Name: "Antigravity"}, {ID: "antigravity-ide", Name: "Antigravity IDE"}, {ID: "codex", Name: "Codex"}, {ID: "vscode", Name: "Visual Studio Code"}}}
 		return c, nil
 	}
-	if dir == "" {
-		base, e := os.UserConfigDir()
-		if e != nil {
-			return nil, e
-		}
-		dir = filepath.Join(base, "DagamiAgentProxy", "native-v1")
-		c.dir = dir
+	var dirErr error
+	dir, dirErr = StateDirectory(dir)
+	if dirErr != nil {
+		return nil, dirErr
 	}
+	c.dir = dir
+
 	if e := os.MkdirAll(dir, 0700); e != nil {
 		return nil, e
 	}
@@ -105,10 +130,9 @@ func NewController(dir string, preview bool) (*Controller, error) {
 		if c.state.Version != 1 {
 			return nil, errors.New("неподдерживаемая версия настроек")
 		}
-		// The original install provided just the system route as a preset.
+		// Add the managed option without overriding the user's direct route.
 		if c.state.Active == "direct" && len(c.state.Profiles) == 1 && c.state.Profiles[0].ID == "direct" && c.state.Profiles[0].Proxy == "direct" {
 			c.state.Profiles = append(c.state.Profiles, pendingManagedProfile())
-			c.state.Active = managedDefaultID
 			if e = c.saveLocked(); e != nil {
 				return nil, e
 			}
@@ -117,7 +141,7 @@ func NewController(dir string, preview bool) (*Controller, error) {
 	} else if !os.IsNotExist(e) {
 		return nil, e
 	} else {
-		c.state = State{Version: 1, Active: managedDefaultID, Profiles: []Profile{pendingManagedProfile(), {ID: "direct", Name: "Системный маршрут / VPN", Proxy: "direct"}}, Apps: DiscoverApps()}
+		c.state = State{Version: 1, Active: "direct", Profiles: []Profile{pendingManagedProfile(), {ID: "direct", Name: "Системный маршрут / VPN", Proxy: "direct"}}, Apps: DiscoverApps()}
 		if e = c.saveLocked(); e != nil {
 			return nil, e
 		}
@@ -157,7 +181,7 @@ func (c *Controller) saveLocked() error {
 	return atomicWrite(filepath.Join(c.dir, "state.json"), b, 0600)
 }
 
-var redactURL = regexp.MustCompile(`(?i)(https?|socks5h?)://[^\s/@]+@`)
+var redactURL = regexp.MustCompile(`(?i)(https?|socks4a?|socks5[hs]?)://[^\s/@]+@`)
 var oauthURL = regexp.MustCompile(`https://accounts\.google\.com/[^\s]+`)
 var managedSecret = regexp.MustCompile(`(?i)(?:dagami v1\.[a-z0-9_.-]+|dagami_[a-z0-9_-]{43})`)
 
@@ -353,6 +377,9 @@ func childEnvironment(local string) []string {
 func (c *Controller) Launch(id string) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	if c.recovering {
+		return errors.New("дождитесь завершения восстановления")
+	}
 	if c.preview {
 		return errors.New("запуск отключён в превью")
 	}
@@ -383,38 +410,53 @@ func (c *Controller) Launch(id string) error {
 	if e != nil {
 		return e
 	}
-	bridge, e := route.start()
-	if e != nil {
-		return e
+	var bridge *Bridge
+	var url string
+	args, env := append([]string(nil), app.Args...), os.Environ()
+	if runtime.GOOS == "windows" || route.upstream != nil {
+		bridge, e = route.start()
+		if e != nil {
+			return e
+		}
+		url = bridge.URL()
+		args, env = launchProxySettings(app, url, runtime.GOOS)
 	}
-	args, env := launchProxySettings(app, bridge.URL(), runtime.GOOS)
+	closeBridge := func() {
+		if bridge != nil {
+			bridge.Close()
+		}
+	}
+
 	cmd := exec.Command(app.Path, args...)
 	cmd.Env = env
 	cmd.Dir = filepath.Dir(app.Path)
 	prepareProcess(cmd)
 	if e = cmd.Start(); e != nil {
-		bridge.Close()
+		closeBridge()
 		return errors.New("не удалось запустить приложение")
 	}
-	stop, e := manageProcess(cmd)
+	stop, detach, e := manageProcess(cmd)
 	if e != nil {
 		cmd.Process.Kill()
 		cmd.Wait()
-		bridge.Close()
+		closeBridge()
 		return e
 	}
-	s := &session{SessionInfo: SessionInfo{ID: ID(), App: id, Profile: profile.ID, PID: cmd.Process.Pid, Bridge: bridge.URL()}, cmd: cmd, bridge: bridge, stop: stop, done: make(chan struct{})}
+	s := &session{SessionInfo: SessionInfo{ID: ID(), App: id, Profile: profile.ID, PID: cmd.Process.Pid, Bridge: url}, bridge: bridge, stop: stop, released: make(chan struct{})}
+	var detachOnce sync.Once
+	s.detach = func() error { var err error; detachOnce.Do(func() { close(s.released); err = detach() }); return err }
+
 	c.sessions[s.ID] = s
 	c.eventLocked("Запущено: " + app.Name)
 	go func() {
 		cmd.Wait()
-		stop()
-		bridge.Close()
+		waitForDescendants(cmd, s.released)
+		s.detach()
+		closeBridge()
 		c.mu.Lock()
 		delete(c.sessions, s.ID)
 		c.eventLocked("Сессия завершена: " + app.Name)
 		c.mu.Unlock()
-		close(s.done)
 	}()
 	return nil
 }
@@ -438,13 +480,17 @@ func (c *Controller) RunAttached(id string, args []string, input io.Reader, outp
 	if err != nil {
 		return err
 	}
-	bridge, err := route.start()
-	if err != nil {
-		return err
+	env := os.Environ()
+	if runtime.GOOS == "windows" || route.upstream != nil {
+		bridge, err := route.start()
+		if err != nil {
+			return err
+		}
+		defer bridge.Close()
+		env = childEnvironment(bridge.URL())
 	}
-	defer bridge.Close()
 	cmd := exec.Command(app.Path, append(append([]string(nil), app.Args...), args...)...)
-	cmd.Env = childEnvironment(bridge.URL())
+	cmd.Env = env
 	cmd.Dir = filepath.Dir(app.Path)
 	cmd.Stdin = input
 	cmd.Stdout = output
@@ -466,17 +512,16 @@ func (c *Controller) Close() {
 	for _, s := range c.sessions {
 		sessions = append(sessions, s)
 	}
+	c.sessions = map[string]*session{}
 	c.mu.Unlock()
+	// Closing the launcher never terminates work in IDEs or terminals.
 	for _, s := range sessions {
-		s.stop()
-		s.bridge.Close()
-	}
-	for _, s := range sessions {
-		select {
-		case <-s.done:
-		case <-time.After(5 * time.Second):
+		s.detach()
+		if s.bridge != nil {
+			s.bridge.Close()
 		}
 	}
+
 }
 func (c *Controller) activeRoute() (*Bridge, error) {
 	c.mu.Lock()

@@ -83,9 +83,9 @@ func TestSOCKSAuthAndRemoteHostname(t *testing.T) {
 		}
 		defer c.Close()
 		c.SetDeadline(time.Now().Add(5 * time.Second))
-		method := make([]byte, 4)
+		method := make([]byte, 3)
 		io.ReadFull(c, method)
-		if !bytes.Equal(method, []byte{5, 2, 0, 2}) {
+		if !bytes.Equal(method, []byte{5, 1, 2}) {
 			result <- "methods"
 			return
 		}
@@ -234,13 +234,13 @@ func TestSettingsPersistAndRedact(t *testing.T) {
 	}
 }
 
-func TestDefaultRouteRequiresPairing(t *testing.T) {
+func TestDefaultRouteOpensWithoutKey(t *testing.T) {
 	c, err := NewController(t.TempDir(), false)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := c.activeRoute(); err == nil {
-		t.Fatal("new install could connect without pairing or selecting a route")
+	if route, err := c.activeRoute(); err != nil || route.upstream != nil {
+		t.Fatal("new install requires a key or changes its direct route", err)
 	}
 	if err := c.SelectProfile("direct"); err != nil {
 		t.Fatal(err)
