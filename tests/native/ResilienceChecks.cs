@@ -172,13 +172,48 @@ class ResilienceChecks {
   ((Stream)result.GetType().GetField("Stream",BindingFlags.NonPublic|BindingFlags.Instance).GetValue(result)).Dispose();
   Console.WriteLine("PASS: unrestricted application, proxy-only keys, partial recovery, cleanup containment and TLS failover");
  }
+ static void ControlTlsAndFallback() {
+  const BindingFlags flags=BindingFlags.Static|BindingFlags.NonPublic;
+  var managed=typeof(ManagedAccess);
+  var previous=ServicePointManager.SecurityProtocol;
+  try {
+   ServicePointManager.SecurityProtocol=SecurityProtocolType.Tls;
+   managed.GetMethod("ConfigureControlTls",flags).Invoke(null,null);
+   Require(ServicePointManager.SecurityProtocol==SecurityProtocolType.Tls12,"Managed API depended on an earlier update check");
+   ServicePointManager.SecurityProtocol=SecurityProtocolType.SystemDefault;
+   managed.GetMethod("ConfigureControlTls",flags).Invoke(null,null);
+   Require(ServicePointManager.SecurityProtocol==SecurityProtocolType.SystemDefault,"OS-default TLS policy was replaced");
+  }finally{ServicePointManager.SecurityProtocol=previous;}
+  var invoke=managed.GetMethod("SendThroughControl",flags);
+  var builtin=new Uri(ManagedAccess.Bootstrap);
+  Func<Uri,string,Func<Uri,Tuple<int,string>>,Tuple<int,string>> handle=
+    (uri,method,request)=>(Tuple<int,string>)invoke.Invoke(null,new object[]{uri,method,request});
+  foreach(var mode in new[]{"GET","POST"}) {
+   var calls=new System.Collections.Generic.List<Uri>();
+   var response=handle(builtin,mode,url=>{
+    calls.Add(url);
+    if(calls.Count==1)throw new WebException("fixture",WebExceptionStatus.SecureChannelFailure);
+    return Tuple.Create(200,"ok");
+   });
+   Require(response.Item1==200&&calls.Count==2&&calls[0].Host=="dns.dagami.ru"&&calls[1]==builtin,"Managed TLS failure did not use the reserved control route");
+  }
+  int attempted=0;bool failed=false;
+  try{handle(builtin,"POST",url=>{attempted++;throw new WebException("fixture",WebExceptionStatus.Timeout);});}
+  catch(TargetInvocationException e){failed=e.InnerException is WebException;}
+  Require(failed&&attempted==1,"Activation was sent twice when delivery was uncertain");
+  attempted=0;
+  Require(handle(builtin,"POST",url=>{attempted++;return Tuple.Create(409,"");}).Item1==409&&attempted==1,"Reached gateway response was ignored");
+  var custom=new Uri("https://example.invalid:7443");
+  Require(handle(custom,"GET",url=>Tuple.Create(200,url.AbsoluteUri)).Item2==custom.AbsoluteUri,"Custom endpoint was sent to Dagami");
+  Console.WriteLine("PASS: explicit managed TLS, restricted fallback and no replay on an ambiguous activation result");
+ }
  static void Main() {
   string root=Path.Combine(Path.GetTempPath(),"Dagami-review-"+Guid.NewGuid().ToString("N"));Directory.CreateDirectory(root);
   var instance=typeof(ConfigManager).GetField("instance",BindingFlags.NonPublic|BindingFlags.Static);object old=instance.GetValue(null);
   var log=typeof(Logger).GetField("_logFilePath",BindingFlags.NonPublic|BindingFlags.Static);object oldLog=log.GetValue(null);
   try {
    instance.SetValue(null,FixtureConfig(Path.Combine(root,"bridge-config")));log.SetValue(null,Path.Combine(root,"fixture.log"));
-   UnsavedBaseline(root);EnvironmentTransaction(root);ServiceRemoval(root);HalfCloseLease();HalfClosedUploadStillStreams();AdditionalChecks(root);CorruptConfigRecovery(root);UninstallFixture(root);
+   UnsavedBaseline(root);EnvironmentTransaction(root);ServiceRemoval(root);HalfCloseLease();HalfClosedUploadStillStreams();AdditionalChecks(root);ControlTlsAndFallback();CorruptConfigRecovery(root);UninstallFixture(root);
    Console.WriteLine("Review fixtures completed; no real DNS, shortcuts, licenses or registry settings were changed.");
   }finally{instance.SetValue(null,old);log.SetValue(null,oldLog);}
  }

@@ -61,7 +61,19 @@ namespace DevProxyApp {
   }
 
   static GatewayClock Clock(Uri address){return Clocks.GetOrAdd(address,_=>new GatewayClock());}
-  static Uri ControlEndpoint(Uri address){return address.Equals(BootstrapUri)?BuiltInControlUri:address;}
+  static Tuple<int,string> SendThroughControl(Uri address,string method,Func<Uri,Tuple<int,string>> send) {
+   if(!address.Equals(BootstrapUri))return send(address);
+   try {return send(BuiltInControlUri);}
+   catch(WebException error) {
+    var status=error.Status;
+    bool beforeRequest= status==WebExceptionStatus.NameResolutionFailure||status==WebExceptionStatus.ConnectFailure||
+      status==WebExceptionStatus.SecureChannelFailure||status==WebExceptionStatus.TrustFailure;
+    bool repeatable=method=="GET"&&(status==WebExceptionStatus.Timeout||status==WebExceptionStatus.ReceiveFailure||
+      status==WebExceptionStatus.ConnectionClosed||status==WebExceptionStatus.SendFailure);
+    if(!beforeRequest&&!repeatable)throw;
+    return send(BootstrapUri);
+   }
+  }
 
   ManagedAccess(Uri endpoint,byte[] key){Endpoint=endpoint;privateKey=key;}
   public static Uri ParseEndpoint(string raw) {
@@ -175,7 +187,7 @@ namespace DevProxyApp {
    string custom=Environment.GetEnvironmentVariable("DAGAMI_MANAGED_URL");
    Uri address;
    if(string.IsNullOrWhiteSpace(custom)) {
-    var discovery=Send(BuiltInControlUri,"GET","/v1/config",null,null);
+    var discovery=SendThroughControl(BootstrapUri,"GET",url=>Send(url,"GET","/v1/config",null,null));
     if(discovery.Item1==404) address=BootstrapUri;
     else {
      if(discovery.Item1!=200)throw new IOException("Не удалось получить адрес шлюза Dagami.");
@@ -196,24 +208,13 @@ namespace DevProxyApp {
    return device;
   }
 
-  static TcpClient Dial(string host,int port,int timeout) {
-   var tcp=new TcpClient{NoDelay=true};
-   try {
-    var result=tcp.BeginConnect(host,port,null,null);
-    using(result.AsyncWaitHandle) {
-     if(!result.AsyncWaitHandle.WaitOne(timeout))throw new TimeoutException("Истекло время подключения к шлюзу Dagami.");
-     tcp.EndConnect(result);
-    }
-    return tcp;
-   } catch {tcp.Close();throw;}
-  }
   internal TcpClient ConnectTls(out Stream stream) {
    var clock=Clock(Endpoint);
-   lock(clock.Sync) {
-    if(clock.StartProbe()) {
-     try {Send(ControlEndpoint(Endpoint),"GET","/v1/config",null,null);}
-     catch(IOException){}catch(SocketException){}catch(WebException){}catch(TimeoutException){}
-    }
+   bool probe;
+   lock(clock.Sync)probe=clock.StartProbe();
+   if(probe) {
+    try {Send(Endpoint,"GET","/v1/config",null,null);}
+    catch(IOException){}catch(SocketException){}catch(WebException){}catch(TimeoutException){}
    }
    var connection=GatewayTransport.Open(Endpoint,"managed-proxy",12000);
    stream=connection.Stream;return connection.Client;
@@ -223,12 +224,12 @@ namespace DevProxyApp {
    var clock=Clock(Endpoint);
    long signedAt,started=Stopwatch.GetTimestamp();
    lock(clock.Sync)signedAt=clock.Now;
-   var response=Send(ControlEndpoint(Endpoint),method,path,ProofAt(audience,method,path,signedAt),body);
+   var response=SendThroughControl(Endpoint,method,url=>Send(url,method,path,ProofAt(audience,method,path,signedAt),body));
    if(response.Item1==401) {
     long corrected;
     lock(clock.Sync)corrected=clock.Now;
     if(Math.Abs(corrected-signedAt-(Stopwatch.GetTimestamp()-started)/Stopwatch.Frequency)>5)
-     response=Send(ControlEndpoint(Endpoint),method,path,ProofAt(audience,method,path,corrected),body);
+     response=SendThroughControl(Endpoint,method,url=>Send(url,method,path,ProofAt(audience,method,path,corrected),body));
    }
    return response;
   }
@@ -239,6 +240,7 @@ namespace DevProxyApp {
   }
   static Tuple<int,string> Send(Uri address,string method,string path,string proof,byte[] body) {
    if(address.Equals(BootstrapUri))return SendBootstrap(address,method,path,proof,body);
+   ConfigureControlTls();
    var request=(HttpWebRequest)WebRequest.Create(new Uri(address,path));
    request.Method=method;request.Timeout=10000;request.ReadWriteTimeout=8000;
    request.AllowAutoRedirect=false;request.Proxy=null;request.KeepAlive=false;
@@ -263,6 +265,17 @@ namespace DevProxyApp {
      ObserveClock(address,(int)response.StatusCode,response.Headers["Date"]);
      return Tuple.Create((int)response.StatusCode,"");
     }
+   }
+  }
+  static void ConfigureControlTls() {
+   // The standalone WinForms EXE can inherit Ssl3|Tls from .NET Framework.
+   // In that case use TLS 1.2 before the first managed HTTP request, regardless
+   // of whether the updater has run. Preserve OS-default policy and TLS 1.3.
+   const SecurityProtocolType tls13=(SecurityProtocolType)12288;
+   var current=ServicePointManager.SecurityProtocol;
+   if(current!=SecurityProtocolType.SystemDefault) {
+    var modern=SecurityProtocolType.Tls12|(current&tls13);
+    if(current!=modern)ServicePointManager.SecurityProtocol=modern;
    }
   }
   static Tuple<int,string> SendBootstrap(Uri address,string method,string path,string proof,byte[] body) {
