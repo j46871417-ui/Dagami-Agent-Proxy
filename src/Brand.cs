@@ -3,14 +3,14 @@ using System.Drawing;
 using System.Reflection;
 [assembly: AssemblyTitle("Dagami Agent Proxy")]
 [assembly: AssemblyProduct("Dagami Agent Proxy")]
-[assembly: AssemblyVersion("0.7.2.0")]
-[assembly: AssemblyFileVersion("0.7.2.0")]
-[assembly: AssemblyInformationalVersion("0.7.2-beta")]
+[assembly: AssemblyVersion("0.7.3.0")]
+[assembly: AssemblyFileVersion("0.7.3.0")]
+[assembly: AssemblyInformationalVersion("0.7.3-beta")]
 namespace DevProxyApp {
     internal static class Brand {
         internal const string Name = "Dagami Agent Proxy";
-        internal const string Version = "0.7.2 бета";
-        internal const string ReleaseTag = "v0.7.2-beta";
+        internal const string Version = "0.7.3 бета";
+        internal const string ReleaseTag = "v0.7.3-beta";
         internal static Image LoadImage() {
             using(var stream=typeof(Brand).Assembly.GetManifestResourceStream("Dagami.AgentProxy.png"))
             using(var image=Image.FromStream(stream)) return new Bitmap(image);

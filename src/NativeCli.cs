@@ -76,7 +76,7 @@ namespace DevProxyApp {
                 return true;
             }
             if(command=="diagnose") {
-                if(args.Length!=2 || args[1]!="login")throw new ArgumentException("diagnose login — проверка userinfo без токена; настройки не меняются.");
+                if(args.Length!=2 || args[1]!="login")throw new ArgumentException("diagnose login — проверка входа и API Antigravity без учётных данных.");
                 var config=ConfigManager.Instance;
                 string routeProxy=string.IsNullOrWhiteSpace(config.EffectiveProxy)&&config.UseDagamiDns?"direct":config.EffectiveProxy;
                 if(string.IsNullOrWhiteSpace(routeProxy))throw new InvalidOperationException("Прокси не настроен.");
@@ -84,6 +84,7 @@ namespace DevProxyApp {
                     if(!bridge.Start(0,routeProxy,config.UseDagamiDns?config.DnsHost:null))throw new IOException("Не удалось запустить диагностический мост.");
                     Console.WriteLine(AntigravityDiagnostics.LoginRouteReport(bridge.BoundPort,config.UseDagamiDns,config.DnsHost,routeProxy));
                     Console.WriteLine(AntigravityDiagnostics.TokenRouteReport(bridge.BoundPort,config.UseDagamiDns,config.DnsHost,routeProxy));
+                    Console.WriteLine(AutomaticAiRoute.AntigravityApiReport(bridge.BoundPort));
                     Console.WriteLine(bridge.RouteReport());
                 }
                 return true;
@@ -202,7 +203,7 @@ namespace DevProxyApp {
         // Classify a supplied report without echoing account tokens, paths or its body.
         public static string FailureHint(string report){
             string value=(report??"").ToLowerInvariant();
-            if(value.Contains("user location is not supported")||value.Contains("region is not supported"))return "Google API отклонил условие региона. Проверьте регион выхода, фактический маршрут запросов модели и доступ аккаунта. Успешный вход и ответы других моделей не подтверждают доступ Gemini. Локальная подготовка CLI не меняет серверное решение о регионе.";
+            if(value.Contains("user location is not supported")||value.Contains("region is not supported"))return "Google API отклонил запрос по региону. Запустите diagnose login для проверки маршрута, затем проверьте регион выхода и страну аккаунта в Google. Доступ конкретной модели проверяется в Antigravity.";
             if(value.Contains("subscription_required"))return "Сервер требует подходящую подписку или доступ аккаунта. Региональный патч это ограничение не снимает.";
             if(System.Text.RegularExpressions.Regex.IsMatch(value,@"\b407\b"))return "Прокси отклонил авторизацию (HTTP 407). Обновите данные подключения в настройках.";
             if(value.Contains("certificate")||value.Contains("authenticationexception")||value.Contains("сертификат"))return "Не прошла проверка TLS. Проверьте время, имя сервера и цепочку доверия; отключать проверку сертификата не нужно.";

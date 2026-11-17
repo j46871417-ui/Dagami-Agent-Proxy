@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Drawing;
 using System.IO;
+using System.Net;
 using System.Windows.Forms;
 
 namespace DevProxyApp {
@@ -389,7 +390,15 @@ namespace DevProxyApp {
     :"Выбран системный маршрут. Прокси Windows выключен.";
   }
 
-  async void FindAutomaticAiRoute() {
+  void FindAutomaticAiRoute() {
+   FindAutomaticAiRoute((string)_autoAiService.SelectedItem,null,null);
+  }
+
+  void FindAntigravityRecoveryRoute(AiRoute refused,IEnumerable<IPAddress> refusedAddresses) {
+   FindAutomaticAiRoute("Antigravity",refused,refusedAddresses);
+  }
+
+  async void FindAutomaticAiRoute(string service,AiRoute refused,IEnumerable<IPAddress> refusedAddresses) {
    if(_preview||_nativeBusy)return;
    if(_findingPublicProxy) {
     AutomaticAiFeedback("Дождитесь окончания текущей проверки публичных прокси.");
@@ -403,15 +412,20 @@ namespace DevProxyApp {
    var snapshot=new AiRoute("Текущий маршрут",cfg.LastProxy,cfg.DnsHost,cfg.PublicProxySelected);
    string savedCustom=cfg.CustomProxy, dpiMode=cfg.DpiDesyncMode;
    bool useProxy=cfg.UseProxy, useDns=cfg.UseDagamiDns, obfuscation=cfg.DnsObfuscation;
-   string service=(string)_autoAiService.SelectedItem;
-   bool allowPublic=_autoAiPublic.Checked;
+   bool antigravity=service=="Antigravity";
+   DateTime now=DateTime.UtcNow;
+   bool recovering=antigravity&&(refused!=null||_antigravityRoutes.HasRecentRejection(now));
+   var avoided=antigravity?_antigravityRoutes.RefusedSmartDnsAddresses(now):null;
+   if(antigravity&&refusedAddresses!=null)avoided.UnionWith(refusedAddresses);
+   bool allowPublic=!recovering&&_autoAiPublic.Checked;
    string manualInput=_proxyBox.Text, dnsInput=_dnsBox.Text;
    int oldPort=_bridgePort;
    bool hasKey=ManagedAccess.HasActiveDevice();
    string custom=null;
    bool invalidCustom=false;
-   if(!string.IsNullOrWhiteSpace(manualInput)) {
-    try {custom=NormalizeCustomProxy(manualInput,oldPort);}
+   string customInput=recovering&&string.IsNullOrWhiteSpace(manualInput)?savedCustom:manualInput;
+   if(!string.IsNullOrWhiteSpace(customInput)) {
+    try {custom=NormalizeCustomProxy(customInput,oldPort);}
     catch(ArgumentException) {invalidCustom=true;}
    }
    string configuredProxy=null;
@@ -425,19 +439,25 @@ namespace DevProxyApp {
     catch(IOException) {currentValid=false;}
    }
    var current=currentValid?new AiRoute("Текущий маршрут",configuredProxy,useDns?snapshot.Dns:null,snapshot.PublicProxy&&useProxy):null;
+   string dns=AutomaticAiRoute.SupportsDns(service)&&DnsProviders.IsValidSpec(dnsInput)?dnsInput.Trim():null;
+   var candidates=AutomaticAiRoute.Candidates(service,current,hasKey,custom,dns,allowPublic);
+   var decisions=new List<string>();
+   if(antigravity)candidates=_antigravityRoutes.Prioritize(candidates,refused,now,decisions);
    _nativeBusy=true;
    SetNativeButtonsEnabled(false);
    _autoAiService.Enabled=_autoAiPublic.Enabled=false;
-   AutomaticAiFeedback("Подбираем подключение для "+service+"…");
+   AutomaticAiFeedback(recovering?"Antigravity · проверяем другие маршруты…":"Подбираем подключение для "+service+"…");
+   var currentBridge=_rescueBridge;
+   Logger.Log("[Auto AI route] "+service+" · вариантов для проверки: "+candidates.Count.ToString());
    try {
     var result=await System.Threading.Tasks.Task.Run(()=>{
-     string dns=null;
-     if(AutomaticAiRoute.SupportsDns(service)&&DnsProviders.IsValidSpec(dnsInput))dns=dnsInput.Trim();
-     var candidates=AutomaticAiRoute.Candidates(service,current,hasKey,custom,dns,allowPublic);
      Func<string> findPublic=allowPublic?(Func<string>)(()=>PublicProxyCandidates.FindForService(uri=>
       AutomaticAiRoute.Probe(new AiRoute("Публичный прокси",uri.AbsoluteUri,null,true),service)==null)):null;
-     return AutomaticAiRoute.Select(candidates,route=>route.SameRoute(current)&&oldPort>0&&route.ProbeDns(service)==route.Dns
-      ?AutomaticAiRoute.VerifyRunning(oldPort,service):AutomaticAiRoute.Probe(route,service),findPublic);
+     return AutomaticAiRoute.Select(candidates,route=>{
+      bool reuse=route.SameRoute(current)&&oldPort>0&&route.ProbeDns(service)==route.Dns;
+      if(antigravity)return reuse?AutomaticAiRoute.VerifyAntigravity(currentBridge,avoided):AutomaticAiRoute.ProbeAntigravity(route,avoided);
+      return reuse?AutomaticAiRoute.VerifyRunning(oldPort,service):AutomaticAiRoute.Probe(route,service);
+     },findPublic);
     });
     if(IsDisposed||Disposing||_exitRequested)return;
     if(cfg.LastProxy!=snapshot.Proxy||cfg.CustomProxy!=savedCustom||cfg.DnsHost!=snapshot.Dns||
@@ -447,9 +467,11 @@ namespace DevProxyApp {
      AutomaticAiFeedback("Подключение изменилось. Запустите подбор ещё раз.");
      return;
     }
+    result.Report.InsertRange(0,decisions);
     if(invalidCustom)result.Report.Insert(0,"Свой прокси — проверьте адрес и порт");
     string failures=result.Report.Count>0?"\r\n\r\n"+string.Join("\r\n",result.Report):"";
     if(result.Route==null) {
+     Logger.Log("[Auto AI route] "+service+" · подходящий маршрут не найден");
      AutomaticAiFeedback("Для "+service+" маршрут не найден · Подробности",
       "Текущее подключение сохранено."+failures);
      return;
@@ -463,11 +485,14 @@ namespace DevProxyApp {
     }
     if(!unchanged||oldPort<=0) {
      AutomaticAiFeedback("Включаем подключение для "+service+"…");
-     await ApplyVerifiedAiRoute(result.Route,service,oldPort);
+     await ApplyVerifiedAiRoute(result.Route,service,oldPort,avoided);
     }
     string outcome=unchanged?"Подключение активно":result.Route.Name+" включён";
-    AutomaticAiFeedback(service+" · "+outcome+" · Подробности",
-     outcome+". HTTPS-проверка "+service+" прошла. Вход и ответ модели проверяются в самом приложении."+failures);
+    string next=!recovering?"Вход и ответ модели проверяются в самом приложении."
+     :"Снова запустите Antigravity через Dagami и отправьте новый запрос.";
+    Logger.Log("[Auto AI route] "+service+" · "+outcome+" · HTTPS-проверка прошла");
+    AutomaticAiFeedback(service+(antigravity?" · сеть доступна, ответ модели не проверен":" · "+outcome)+" · Подробности",
+     outcome+". HTTPS-проверка "+service+" прошла. "+next+failures);
    } catch(Exception error) {
     if(!IsDisposed&&!Disposing&&!_exitRequested) {
      Logger.Log("[Auto AI route] "+error.GetType().Name);
@@ -484,7 +509,8 @@ namespace DevProxyApp {
    }
   }
 
-  async System.Threading.Tasks.Task ApplyVerifiedAiRoute(AiRoute route,string service,int oldPort) {
+  async System.Threading.Tasks.Task ApplyVerifiedAiRoute(AiRoute route,string service,int oldPort,
+   HashSet<IPAddress> refusedAddresses) {
    var cfg=ConfigManager.Instance;
    int port=oldPort>0?oldPort:53200;
    _pageControls[1].Enabled=_pageControls[2].Enabled=false;
@@ -492,8 +518,11 @@ namespace DevProxyApp {
    try {
     await AutomaticAiRoute.StartAndVerify(
      ()=>{RestartRescueBridge(port,true,route);return _bridgePort;},
-     candidatePort=>System.Threading.Tasks.Task.Run(()=>route.ProbeDns(service)==route.Dns
-      ?AutomaticAiRoute.VerifyRunning(candidatePort,service):AutomaticAiRoute.Probe(route,service)),
+     candidatePort=>{
+      var bridge=_rescueBridge;
+      return System.Threading.Tasks.Task.Run(()=>service=="Antigravity"?AutomaticAiRoute.VerifyAntigravity(bridge,refusedAddresses):
+       route.ProbeDns(service)==route.Dns?AutomaticAiRoute.VerifyRunning(candidatePort,service):AutomaticAiRoute.Probe(route,service));
+     },
      ()=>{
       if(IsDisposed||Disposing||_exitRequested)throw new OperationCanceledException();
       cfg.ChangeConnection(settings=>{

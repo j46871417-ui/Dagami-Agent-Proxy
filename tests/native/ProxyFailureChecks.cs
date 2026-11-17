@@ -15,6 +15,64 @@ using DevProxyApp;
 class ProxyFailureChecks {
  static int checks;
  static void Assert(bool ok,string message){checks++;if(!ok)throw new Exception(message);}
+
+ static void CheckAntigravityModelFeedback() {
+  var assembly=typeof(LocalProxyBridge).Assembly;
+  var parser=assembly.GetType("DevProxyApp.AntigravityModelLog");
+  var flags=BindingFlags.Instance|BindingFlags.NonPublic;
+  string root=Path.Combine(Path.GetTempPath(),"antigravity-feedback-"+Guid.NewGuid().ToString("N"));
+  Directory.CreateDirectory(root);
+  string first=Path.Combine(root,"first.log"),second=Path.Combine(root,"second.log");
+  DateTime since=DateTime.Now.AddSeconds(-10);
+  var stamp=since;
+  Func<string,string> line=message=>{
+   stamp=stamp.AddMilliseconds(10);
+   return "I"+stamp.ToString("MMdd HH:mm:ss.ffffff",System.Globalization.CultureInfo.InvariantCulture)+
+    "   3 executor.go:41] "+message+"\n";
+  };
+  const string region="FAILED_PRECONDITION (code 400): User location is not supported for the API use.";
+  const string reply="URL: https://daily-cloudcode-pa.googleapis.com/v1internal:streamGenerateContent?alt=sse Trace: test ResponseID: fixture";
+  try {
+   File.WriteAllText(first,line(region)+line(reply).TrimEnd('\n'));
+   var reader=parser.GetConstructor(flags,null,new[]{typeof(Func<IEnumerable<string>>),typeof(DateTime)},null)
+    .Invoke(new object[]{new Func<IEnumerable<string>>(()=>Directory.EnumerateFiles(root)),since});
+   var poll=parser.GetMethod("ReadNew",flags);
+   Func<string> outcome=()=>poll.Invoke(reader,null).ToString();
+   Assert(outcome()=="None","Pre-launch model events were replayed");
+   File.AppendAllText(first,"\n"+line("FAILED_PRECONDITION (code 400): invalid request")+line(
+     "URL: https://daily-cloudcode-pa.googleapis.com/v1internal:loadCodeAssist Trace: test ResponseID: fixture"));
+   Assert(outcome()=="None","Partial pre-launch event or non-generation endpoint became evidence");
+   File.AppendAllText(first,line(region).TrimEnd('\n'));
+   Assert(outcome()=="None","A partial new line triggered recovery");
+   File.AppendAllText(first,"\n");
+   Assert(outcome()=="RegionRejected","An explicit regional API rejection was missed");
+   Assert(outcome()=="None","Rereading an unchanged file repeated a rejection");
+   File.WriteAllText(second,line(reply));
+   Assert(outcome()=="Streaming","A genuine generation start in a new log was missed");
+   File.AppendAllText(second,line("Your current account is not eligible for Antigravity, because it is not currently available in your location."));
+   Assert(outcome()=="AccountRejected","Account eligibility was treated as a regional route outcome");
+   File.WriteAllText(first,line(reply));
+   Assert(outcome()=="Streaming","A truncated log lost the new model result");
+   File.AppendAllText(first,line("403 PERMISSION_DENIED {\"reason\": \"UNSUPPORTED_LOCATION\"}"));
+   Assert(outcome()=="RegionRejected","An explicit 403 region rejection was missed");
+   File.AppendAllText(first,line("403 PERMISSION_DENIED {\"reason\": \"PERMISSION_DENIED\"}"));
+   Assert(outcome()=="None","Generic permissions error triggered route recovery");
+  } finally {Directory.Delete(root,true);}
+  using(var bridge=new LocalProxyBridge()) {
+   var note=typeof(LocalProxyBridge).GetMethod("NoteAntigravityApiConnection",flags);
+   var peers=typeof(LocalProxyBridge).GetMethod("AntigravityApiPeers",flags);
+   var relay=IPAddress.Parse("192.0.2.12");
+   note.Invoke(bridge,new object[]{"daily-cloudcode-pa.googleapis.com:443",101,null});
+   note.Invoke(bridge,new object[]{"accounts.google.com:443",202,relay});
+   note.Invoke(bridge,new object[]{"cloudcode-pa.googleapis.com:443",303,relay});
+   Assert(((IList)peers.Invoke(bridge,new object[]{1L,new HashSet<int>{101,202}})).Count==0,
+    "Unrelated or pre-launch connections were attributed to the active session");
+   var owned=(IList)peers.Invoke(bridge,new object[]{1L,new HashSet<int>{303}});
+   Assert(owned.Count==1&&relay.Equals(owned[0].GetType().GetField("SmartDnsAddress",flags).GetValue(owned[0])),
+    "The session's own model relay address was not attributed to it");
+  }
+ }
+
  static void CheckAutomaticAiRoutes() {
   var assembly=typeof(LocalProxyBridge).Assembly;
   var route=assembly.GetType("DevProxyApp.AiRoute");
@@ -40,6 +98,36 @@ class ProxyFailureChecks {
    if(proxy.GetValue(item)!=null&&dns.GetValue(item)!=null)combo=item;
   }
   Assert(dnsDefaults==1&&combo!=null,"DNS deduplication or combined route is missing");
+  var routeHistoryType=assembly.GetType("DevProxyApp.AntigravityRouteHistory");
+  var modelOutcome=assembly.GetType("DevProxyApp.AntigravityModelOutcome");
+  var history=Activator.CreateInstance(routeHistoryType,true);
+  var record=routeHistoryType.GetMethod("Record",fields);
+  var prioritize=routeHistoryType.GetMethod("Prioritize",fields);
+  var refusedAddresses=routeHistoryType.GetMethod("RefusedSmartDnsAddresses",fields);
+  DateTime now=DateTime.UtcNow;
+  var sameRelay=IPAddress.Parse("192.0.2.85");
+  var newRelay=IPAddress.Parse("198.51.100.9");
+  record.Invoke(history,new[]{plan[0],Enum.Parse(modelOutcome,"RegionRejected"),now,new[]{sameRelay}});
+  record.Invoke(history,new[]{combo,Enum.Parse(modelOutcome,"Streaming"),now,new[]{newRelay}});
+  record.Invoke(history,new[]{combo,Enum.Parse(modelOutcome,"AccountRejected"),now,new[]{newRelay}});
+  var refused=(HashSet<IPAddress>)refusedAddresses.Invoke(history,new object[]{now});
+  Assert(refused.SetEquals(new[]{sameRelay}),"Recovery did not remember the actual rejected Smart DNS relay");
+  var refusal=chooser.GetMethod("RefusedSmartDnsAddress",flags);
+  Assert(((string)refusal.Invoke(null,new object[]{new[]{sameRelay},refused})).Contains(sameRelay.ToString()),
+   "A differently named DNS profile on the same relay passed recovery");
+  Assert(refusal.Invoke(null,new object[]{new[]{newRelay,null},refused})==null,"A distinct relay or direct connection was rejected");
+  Assert(((HashSet<IPAddress>)refusedAddresses.Invoke(history,new object[]{now.AddMinutes(6)})).Count==0,
+   "A relay remained banned after the cooldown");
+  var excluded=new List<string>();
+  var recovery=(IList)prioritize.Invoke(history,new object[]{plan,null,now,excluded});
+  Assert(recovery[0]==combo&&!recovery.Contains(plan[0])&&excluded.Count==1,
+   "Successful model route was not preferred or recent rejection was retried");
+  recovery=(IList)prioritize.Invoke(history,new object[]{plan,null,now.AddMinutes(6),new List<string>()});
+  Assert(recovery.Contains(plan[0]),"A regional rejection permanently disabled the route");
+  recovery=(IList)prioritize.Invoke(history,new object[]{plan,plan[0],now.AddMinutes(6),new List<string>()});
+  Assert(!recovery.Contains(plan[0]),"Explicit retry returned to the reported route");
+  Assert(plan.Cast<object>().Count(item=>(string)dns.GetValue(item)=="https://test-dns.dagami.ru/dns-query"&&proxy.GetValue(item)==null)==1,
+   "Antigravity needs an independent Dagami DoH candidate");
   var nonGoogle=(IList)candidates.Invoke(null,new object[]{"Codex",null,false,"http://127.0.0.1:1234","dns.dagami.ru",false});
   Assert(nonGoogle.Count==1&&dns.GetValue(nonGoogle[0])==null,"Codex was credited with an unrelated DNS route");
   Assert(route.GetMethod("ProbeDns",fields).Invoke(combo,new object[]{"Gemini"})==null,"Gemini check ignores its proxy-only launcher");
@@ -52,6 +140,30 @@ class ProxyFailureChecks {
   int fetches=0;
   var fallback=select.Invoke(null,new object[]{plan,probe(candidate=>"HTTP 502"),new Func<string>(()=>{fetches++;return "http://192.0.2.4:8080";})});
   Assert(fetches==1&&(bool)publicFlag.GetValue(winner.GetValue(fallback)),"Public fallback failed or ran more than once");
+  var antigravityChecks=(Array)chooser.GetMethod("Checks",flags).Invoke(null,new object[]{"Antigravity"});
+  var check=antigravityChecks.GetType().GetElementType();
+  var byHost=antigravityChecks.Cast<object>().ToDictionary(item=>(string)check.GetField("Host",fields).GetValue(item));
+  object login,token;
+  Assert(byHost.TryGetValue("accounts.google.com",out login)&&
+   ((string)check.GetField("Path",fields).GetValue(login)).StartsWith("/o/oauth2/v2/auth?"),"The browser OAuth endpoint is missing from preflight");
+  Assert(byHost.TryGetValue("oauth2.googleapis.com",out token)&&
+   (string)check.GetField("Path",fields).GetValue(token)=="/token"&&
+   (string)check.GetField("ContentType",fields).GetValue(token)=="application/x-www-form-urlencoded"&&
+   ((string)check.GetField("Body",fields).GetValue(token)).Contains("code=devproxy-invalid-diagnostic"),"The token endpoint must receive a synthetic form POST");
+  var tokenStatus=(Func<int,bool>)check.GetField("Accept",fields).GetValue(token);
+  Assert(tokenStatus(400)&&tokenStatus(401)&&!tokenStatus(403)&&!tokenStatus(502),"Unexpected OAuth token responses passed preflight");
+  foreach(string host in new[]{"cloudcode-pa.googleapis.com","daily-cloudcode-pa.googleapis.com"}) {
+   var model=byHost[host];
+   var modelStatus=(Func<int,bool>)check.GetField("Accept",fields).GetValue(model);
+   Assert((string)check.GetField("Path",fields).GetValue(model)=="/v1internal:streamGenerateContent?alt=sse"&&
+    (string)check.GetField("Body",fields).GetValue(model)=="{}"&&modelStatus(401)&&!modelStatus(400)&&!modelStatus(403)&&!modelStatus(502),
+    "Antigravity streaming preflight accepted a server error or omitted the synthetic model request");
+  }
+  object aiCode;
+  Assert(byHost.TryGetValue("aicode.googleapis.com",out aiCode)&&(string)check.GetField("Path",fields).GetValue(aiCode)=="/",
+   "The current CLI API host is missing from the transport preflight");
+  var apiCodeStatus=(Func<int,bool>)check.GetField("Accept",fields).GetValue(aiCode);
+  Assert(apiCodeStatus(404)&&!apiCodeStatus(400)&&!apiCodeStatus(429)&&!apiCodeStatus(502),"The aicode transport check accepted an API rejection");
   var redirect=chooser.GetMethod("IsGoogleLoginRedirect",flags);
   Assert((bool)redirect.Invoke(null,new object[]{302,"https://accounts.google.com/ServiceLogin"})&&
    !(bool)redirect.Invoke(null,new object[]{302,"https://accounts.google.com.example.test/"})&&
@@ -169,6 +281,7 @@ class ProxyFailureChecks {
   }}finally{server.Stop();worker.Join(1000);}
  }
  static int Main(){try {
+  CheckAntigravityModelFeedback();
   CheckAutomaticAiRoutes();
   string builtInPac=SelectiveProxyRules.BuiltInPac(53200);
   Assert(builtInPac.Contains("gemini.google.com")&&builtInPac.Contains("ttvnw.net")&&!builtInPac.Contains("test-dns.dagami.ru"),"Packaged PAC rules are missing or route the gateway");

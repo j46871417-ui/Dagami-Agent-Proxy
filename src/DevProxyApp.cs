@@ -786,6 +786,43 @@ namespace DevProxyApp
         private static int _connectionSequence;
 
         private int _activeConnections;
+        internal sealed class AntigravityApiPeer
+        {
+            internal long Sequence;
+            internal int ProcessId;
+            internal IPAddress SmartDnsAddress;
+        }
+
+        private readonly Queue<AntigravityApiPeer> _antigravityApiPeers = new Queue<AntigravityApiPeer>();
+        private long _antigravityApiConnections;
+        internal long AntigravityApiConnections { get { return Interlocked.Read(ref _antigravityApiConnections); } }
+
+        internal List<AntigravityApiPeer> AntigravityApiPeers(long after, HashSet<int> pids)
+        {
+            var peers = new List<AntigravityApiPeer>();
+            lock (_routeLock)
+            {
+                foreach (var entry in _antigravityApiPeers)
+                    if (entry.Sequence > after && pids.Contains(entry.ProcessId)) peers.Add(entry);
+            }
+            return peers;
+        }
+
+        private void NoteAntigravityApiConnection(string authority, int pid, IPAddress smartDnsAddress)
+        {
+            if (authority.Equals("cloudcode-pa.googleapis.com:443", StringComparison.OrdinalIgnoreCase) ||
+                authority.Equals("daily-cloudcode-pa.googleapis.com:443", StringComparison.OrdinalIgnoreCase))
+            {
+                lock (_routeLock)
+                {
+                    long sequence = Interlocked.Increment(ref _antigravityApiConnections);
+                    _antigravityApiPeers.Enqueue(new AntigravityApiPeer {
+                        Sequence = sequence, ProcessId = pid, SmartDnsAddress = smartDnsAddress
+                    });
+                    if (_antigravityApiPeers.Count > 128) _antigravityApiPeers.Dequeue();
+                }
+            }
+        }
         public const int MaximumConcurrentConnections = 128;
         private readonly SemaphoreSlim _connectionSlots = new SemaphoreSlim(MaximumConcurrentConnections);
 
@@ -1019,7 +1056,8 @@ namespace DevProxyApp
                 NetworkStream clientStream = client.GetStream();
 
                 clientStream.ReadTimeout = 15000;
-                if(!LoopbackPeer.IsCurrentUser(client)) {
+                int peerPid;
+                if(!LoopbackPeer.IsCurrentUser(client, out peerPid)) {
                     byte[] forbidden=Encoding.ASCII.GetBytes("HTTP/1.1 403 Forbidden\r\nConnection: close\r\nContent-Length: 0\r\n\r\n");
                     clientStream.Write(forbidden,0,forbidden.Length);return;
                 }
@@ -1303,6 +1341,7 @@ namespace DevProxyApp
 
                         tunnelEstablished = true;
 
+                        NoteAntigravityApiConnection(target, peerPid, dnsEndpoint);
                         if (bodyOffset < totalRead) upstreamStream.Write(buffer, bodyOffset, totalRead - bodyOffset);
 
                         if (routedHost != null) lock (_routeLock)
@@ -1331,6 +1370,7 @@ namespace DevProxyApp
                     if (method.Equals("CONNECT", StringComparison.OrdinalIgnoreCase)) {
                         byte[] success = Encoding.ASCII.GetBytes("HTTP/1.1 200 Connection established\r\n\r\n");
                         clientStream.Write(success, 0, success.Length); clientStream.Flush(); tunnelEstablished = true;
+                        NoteAntigravityApiConnection(target, peerPid, null);
                         if (bodyOffset < totalRead) upstreamStream.Write(buffer, bodyOffset, totalRead - bodyOffset);
                         Relay(clientStream, upstreamStream, client, upstream, connection); relaying = true; return;
                     }
@@ -1421,6 +1461,7 @@ namespace DevProxyApp
 
                         tunnelEstablished = true;
 
+                        NoteAntigravityApiConnection(target, peerPid, null);
                         int upstreamHeaderEnd = respText.IndexOf("\r\n\r\n", StringComparison.Ordinal) + 4;
 
                         if (upstreamHeaderEnd > 3 && upstreamHeaderEnd < respRead)
@@ -4024,6 +4065,7 @@ namespace DevProxyApp
         private ContextMenu _trayMenu;
 
         private LocalProxyBridge _rescueBridge;
+        private AiRoute _rescueAiRoute;
 
         private Process _activeSessionProc;
 
@@ -4276,6 +4318,8 @@ namespace DevProxyApp
                     {
 
                         _bridgePort = _rescueBridge.BoundPort;
+                        bool isPublic = candidate == null ? settings.UseProxy && settings.PublicProxySelected : candidate.PublicProxy;
+                        _rescueAiRoute = new AiRoute("Текущий маршрут", proxyUrl, dnsHost, isPublic);
 
                         Logger.Log("[+] Спасательный мост запущен на 127.0.0.1:" + _bridgePort);
 
@@ -4530,6 +4574,16 @@ namespace DevProxyApp
 
                 bool usesPackageAlias=ApplicationDiscovery.UseCodexDesktopAlias(psi,target);
                 Logger.Log("[Launch] " + target.Id + " · " + (usesPackageAlias ? "MSIX app execution alias" : "direct executable"));
+                if (!reuse && pendingBridge == null)
+                {
+                    session.ModelLog = AntigravityModelLog.ForExecutable(target.ExePath);
+                    if (session.ModelLog != null)
+                    {
+                        session.ModelBridge = _rescueBridge;
+                        session.ModelRoute = _rescueAiRoute;
+                        session.LastScannedModelTunnels = _rescueBridge.AntigravityApiConnections;
+                    }
+                }
                 Process launched = Process.Start(psi);
 
                 if (launched == null) { error = "Процесс приложения не был создан."; return false; }
@@ -4648,6 +4702,7 @@ namespace DevProxyApp
             }
 
             _bridgePort = 0;
+            _rescueAiRoute = null;
 
             StartRescueBridge(preferredPort, candidate);
 

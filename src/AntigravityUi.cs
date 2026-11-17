@@ -92,6 +92,7 @@ namespace DevProxyApp
                                 report.AppendLine(AntigravityDiagnostics.Probe(host, bridgePort));
                             } catch (Exception ex) { report.AppendLine(host + ": " + ex.Message); }
                         }
+                        report.AppendLine(AutomaticAiRoute.AntigravityApiReport(bridgePort));
                         if (_rescueBridge != null) report.AppendLine(_rescueBridge.RouteReport());
                         report.AppendLine("Защита от автообновлений Antigravity: " + (ConfigManager.Instance.BlockAntigravityUpdates ? "включена (обновления заблокированы)" : "выключена"));
                         try { report.AppendLine(VpnDiagnostics.Inspect(proxy, bridgePort).DetailedReport); }

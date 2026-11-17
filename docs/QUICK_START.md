@@ -1,8 +1,8 @@
-# Быстрый старт — Dagami Agent Proxy 0.7.1 beta
+# Быстрый старт — Dagami Agent Proxy 0.7.3 beta
 
 ## Windows: подключение за несколько шагов
 
-1. Скачайте `Dagami-Agent-Proxy-v0.7.1-beta-windows.zip` из
+1. Скачайте `Dagami-Agent-Proxy-v0.7.3-beta-windows.zip` из
    [релизов](https://github.com/j46871417-ui/Dagami-Agent-Proxy/releases/).
    Для локальной предварительной сборки используйте выданный ZIP.
    Распакуйте в постоянную папку и запустите `DagamiAgentProxy.exe`.

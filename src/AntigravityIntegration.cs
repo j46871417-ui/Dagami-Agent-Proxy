@@ -735,6 +735,9 @@ namespace DevProxyApp
 
     public static class AntigravityDiagnostics
     {
+        internal const string ModelProbePath = "/v1internal:streamGenerateContent?alt=sse";
+        internal const string TokenProbeContentType = "application/x-www-form-urlencoded";
+        internal const string TokenProbeBody = "grant_type=authorization_code&code=devproxy-invalid-diagnostic&client_id=devproxy-invalid-diagnostic&redirect_uri=http%3A%2F%2Flocalhost";
         private static string Header(Stream stream,out string detail,out string location)
         {
             detail="";
@@ -776,8 +779,7 @@ namespace DevProxyApp
         public static string ProbeToken(int bridgePort)
         {
             // Deliberately invalid identifiers: no account state or real code is read.
-            return ProbeRequest("oauth2.googleapis.com", "/token", "application/x-www-form-urlencoded",
-                "grant_type=authorization_code&code=devproxy-invalid-diagnostic&client_id=devproxy-invalid-diagnostic&redirect_uri=http%3A%2F%2Flocalhost", bridgePort, true);
+            return ProbeRequest("oauth2.googleapis.com", "/token", TokenProbeContentType, TokenProbeBody, bridgePort, true);
         }
 
         public static string ProbePublic(string host, int bridgePort) {
@@ -830,7 +832,9 @@ namespace DevProxyApp
         public static string LoginRouteReport(int bridgePort,bool useDns,string dnsHost,string proxy) {
             var report=new StringBuilder();
             report.AppendLine("Dagami Agent Proxy "+Brand.Version+"; FileVersion="+FileVersionInfo.GetVersionInfo(typeof(AntigravityDiagnostics).Assembly.Location).FileVersion);
-            report.AppendLine("Проверяемый мост: 127.0.0.1:"+bridgePort+"; Smart DNS: "+(useDns?"включён":"выключен"));
+            string proxySource=ManagedAccess.IsProfile(proxy)?"Dagami по ключу":
+                string.IsNullOrWhiteSpace(proxy)||proxy=="direct"?"без внешнего прокси":"свой или публичный прокси";
+            report.AppendLine("Проверяемый мост: 127.0.0.1:"+bridgePort+". Источник: "+proxySource+". Smart DNS: "+(useDns?"включён":"выключен"));
             report.AppendLine("userinfo: GET /oauth2/v2/userinfo, без токена; ожидается HTTP 401. Этот тест не выполняет вход.");
             try {report.AppendLine(ProbeUserInfo(bridgePort));}
             catch(Exception ex) {
@@ -883,9 +887,9 @@ namespace DevProxyApp
             return DescribeHttpResult(host,path,ProbeHttp(host,path,contentType,body,bridgePort,null,0,out location),token);
         }
 
-        internal static int ProbeHttpStatus(string host,string path,string body,int bridgePort,string headers,int timeout,out string location)
+        internal static int ProbeHttpStatus(string host,string path,string body,int bridgePort,string headers,int timeout,out string location,string contentType="application/json")
         {
-            return HttpStatus(ProbeHttp(host,path,"application/json",body,bridgePort,headers,timeout,out location));
+            return HttpStatus(ProbeHttp(host,path,contentType,body,bridgePort,headers,timeout,out location));
         }
 
         private static string ProbeHttp(string host,string path,string contentType,string body,int bridgePort,string headers,int timeout,out string location)

@@ -23,6 +23,7 @@ namespace DevProxyApp
         private AppRouteCheck _appRouteCheck;
         private NativeSession _modelAnswerSession;
         private LocalProxyBridge _modelAnswerBridge;
+        private readonly AntigravityRouteHistory _antigravityRoutes = new AntigravityRouteHistory();
         private System.Windows.Forms.Timer _sessionRefreshTimer;
         private volatile bool _showNativeLog;
         private bool _logUpdateQueued;
@@ -490,6 +491,12 @@ namespace DevProxyApp
             if (AppDiagnosticService(target) == null || !_nativeSessions.TryGetValue(target.Id, out session) ||
                 session.RunningProcess == null) return;
             var bridge = AppDiagnosticBridge(session);
+            if (session.ModelBridge == bridge && session.ModelRouteObserved &&
+                session.ModelOutcome == AntigravityModelOutcome.RegionRejected)
+            {
+                FindAntigravityRecoveryRoute(session.ModelRoute, session.ModelSmartDnsAddresses);
+                return;
+            }
             if (MessageBox.Show(this, "Отправьте тестовый запрос в «" + target.DisplayName + "». Модель прислала ответ?",
                 "Подтверждение ответа", MessageBoxButtons.YesNo, MessageBoxIcon.Question, MessageBoxDefaultButton.Button2) != DialogResult.Yes) return;
             NativeSession current;
@@ -497,6 +504,56 @@ namespace DevProxyApp
                 AppDiagnosticBridge(current) != bridge) return;
             _modelAnswerSession = session;
             _modelAnswerBridge = bridge;
+            if (session.ModelBridge == bridge)
+                _antigravityRoutes.Record(session.ModelRoute, AntigravityModelOutcome.Streaming, DateTime.UtcNow, session.ModelSmartDnsAddresses);
+            UpdateAppActionState();
+        }
+
+        private async void PollAntigravityModel(string id, NativeSession session)
+        {
+            if (session.ModelLog == null || session.ModelPollPending || session.ModelBridge != _rescueBridge) return;
+            session.ModelPollPending = true;
+            AntigravityModelOutcome outcome;
+            try { outcome = await System.Threading.Tasks.Task.Run(new Func<AntigravityModelOutcome>(session.ModelLog.ReadNew)); }
+            catch (Exception error)
+            {
+                Logger.Trace("[Antigravity] Журнал модели недоступен: " + error.GetType().Name);
+                session.ModelLog = null;
+                return;
+            }
+            finally { session.ModelPollPending = false; }
+
+            NativeSession current;
+            if (IsDisposed || Disposing || _exitRequested ||
+                !_nativeSessions.TryGetValue(id, out current) || current != session || session.ModelBridge != _rescueBridge) return;
+
+            bool previouslyObserved = session.ModelRouteObserved;
+            long observedThrough = session.ModelBridge.AntigravityApiConnections;
+            if (observedThrough > session.LastScannedModelTunnels)
+            {
+                foreach (var peer in session.ModelBridge.AntigravityApiPeers(session.LastScannedModelTunnels, session.ProcessIds()))
+                {
+                    session.ModelRouteObserved = true;
+                    if (peer.SmartDnsAddress != null) session.ModelSmartDnsAddresses.Add(peer.SmartDnsAddress);
+                }
+                session.LastScannedModelTunnels = observedThrough;
+            }
+            if (outcome == AntigravityModelOutcome.None)
+            {
+                if (session.ModelRouteObserved != previouslyObserved) UpdateAppActionState();
+                return;
+            }
+            session.ModelOutcome = outcome;
+            if (_modelAnswerSession == session && outcome != AntigravityModelOutcome.Streaming)
+            {
+                _modelAnswerSession = null;
+                _modelAnswerBridge = null;
+            }
+            if (session.ModelRouteObserved)
+                _antigravityRoutes.Record(session.ModelRoute, outcome, session.ModelLog.LastEventUtc, session.ModelSmartDnsAddresses);
+            string observedRoute = session.ModelRouteObserved ? "путь через Dagami подтверждён" : "путь через Dagami не подтверждён";
+            Logger.Log("[Antigravity model] " + outcome + " · " + observedRoute +
+                (session.ModelSmartDnsAddresses.Count == 0 ? "" : " · Smart DNS " + string.Join(", ", session.ModelSmartDnsAddresses)));
             UpdateAppActionState();
         }
 
@@ -522,7 +579,42 @@ namespace DevProxyApp
             bool modelAction = service != null && runningSession != null;
             bool confirmed = modelAction && _modelAnswerSession == runningSession && _modelAnswerBridge == bridge;
             string model = confirmed ? "Модель: ответ подтверждён вами" : modelAction ? "Модель: подтвердить ответ" : "Модель: ответ не проверен";
-            SetAppStatusLink(_appModelStatus, model, modelAction && !confirmed);
+            bool modelClickable = modelAction && !confirmed;
+            string modelTip = "Подтвердите результат после тестового запроса в выбранном приложении.";
+            if (modelAction && runningSession.ModelBridge == bridge)
+            {
+                switch (runningSession.ModelOutcome)
+                {
+                    case AntigravityModelOutcome.None:
+                        if (!confirmed)
+                        {
+                            model = runningSession.ModelRouteObserved ? "Модель: ждём ответ" : "Модель: ждём запрос";
+                            modelTip = runningSession.ModelRouteObserved
+                                ? "Dagami видит соединение с API. Отправьте запрос в Antigravity. Результат также можно подтвердить вручную."
+                                : "После запуска Dagami ещё не увидел соединение этой сессии с модельным API.";
+                        }
+                        break;
+                    case AntigravityModelOutcome.Streaming:
+                        model = "Модель: ответ начался";
+                        modelClickable = false;
+                        modelTip = "Antigravity зарегистрировал начало ответа. Завершение ответа проверяется в Antigravity.";
+                        break;
+                    case AntigravityModelOutcome.RegionRejected:
+                        model = runningSession.ModelRouteObserved ? "Регион · Другой маршрут" : "Модель: отказ по региону";
+                        modelClickable = runningSession.ModelRouteObserved && !_nativeBusy;
+                        modelTip = runningSession.ModelRouteObserved
+                            ? "Google вернул региональный отказ. Подберите другой маршрут и повторите запрос в Antigravity."
+                            : "Dagami обнаружил региональный отказ в журнале, но не видел соединения с API через этот мост.";
+                        break;
+                    case AntigravityModelOutcome.AccountRejected:
+                        model = "Модель: Google отклонил аккаунт";
+                        modelClickable = false;
+                        modelTip = "Antigravity сообщил, что аккаунт недоступен в текущем регионе.";
+                        break;
+                }
+            }
+            SetAppStatusLink(_appModelStatus, model, modelClickable);
+            if (_appStatusTip.GetToolTip(_appModelStatus) != modelTip) _appStatusTip.SetToolTip(_appModelStatus, modelTip);
         }
 
         private static void SetAppStatusLink(LinkLabel label, string text, bool clickable)
@@ -957,7 +1049,12 @@ namespace DevProxyApp
         {
             if (_nativeStatus == null) return;
             int active = 0;
-            foreach (var sessionEntry in _nativeSessions.Values) if (sessionEntry.RunningProcess != null) active++;
+            foreach (var entry in _nativeSessions)
+            {
+                if (entry.Value.RunningProcess == null) continue;
+                active++;
+                PollAntigravityModel(entry.Key, entry.Value);
+            }
             _nativeStatus.Text = _cachedTargets.Count == 0 && (_targetScanRunning || !_backgroundWorkStarted)
                 ? "Ищем установленные приложения…" : "Приложений: "+_cachedTargets.Count+" · Запущено через Dagami: "+active;
             SyncRouteCheckboxes();

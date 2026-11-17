@@ -14,6 +14,11 @@ namespace DevProxyApp {
         [DllImport("kernel32.dll")] static extern bool CloseHandle(IntPtr handle);
         static int Port(uint value) { return (int)(((value & 255) << 8) | ((value >> 8) & 255)); }
         public static bool IsCurrentUser(TcpClient client) {
+            int pid;
+            return IsCurrentUser(client, out pid);
+        }
+        internal static bool IsCurrentUser(TcpClient client, out int peerPid) {
+            peerPid=0;
             try {
                 var peer=(IPEndPoint)client.Client.RemoteEndPoint;
                 var local=(IPEndPoint)client.Client.LocalEndPoint;
@@ -35,7 +40,14 @@ namespace DevProxyApp {
                         try {
                             IntPtr token;
                             if(!OpenProcessToken(process,8,out token))return false;
-                            try {using(var identity=new WindowsIdentity(token))using(var current=WindowsIdentity.GetCurrent())return identity.User.Equals(current.User);}
+                            try {
+                                using(var identity=new WindowsIdentity(token))
+                                using(var current=WindowsIdentity.GetCurrent()) {
+                                    if(!identity.User.Equals(current.User))return false;
+                                    peerPid=pid;
+                                    return true;
+                                }
+                            }
                             finally {CloseHandle(token);}
                         } finally {CloseHandle(process);}
                     }

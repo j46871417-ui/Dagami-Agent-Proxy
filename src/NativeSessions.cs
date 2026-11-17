@@ -12,6 +12,21 @@ namespace DevProxyApp
         public readonly JobObjectManager Job = new JobObjectManager(false);
         public readonly List<Process> Processes = new List<Process>();
         public LocalProxyBridge PrivateBridge;
+        internal AntigravityModelLog ModelLog;
+        internal LocalProxyBridge ModelBridge;
+        internal AiRoute ModelRoute;
+        internal AntigravityModelOutcome ModelOutcome;
+        internal long LastScannedModelTunnels;
+        internal bool ModelRouteObserved;
+        internal readonly HashSet<System.Net.IPAddress> ModelSmartDnsAddresses = new HashSet<System.Net.IPAddress>();
+        internal bool ModelPollPending;
+        internal HashSet<int> ProcessIds()
+        {
+            var ids = new HashSet<int>(Job.ProcessIds());
+            foreach (var process in Processes)
+                try { if (!process.HasExited) ids.Add(process.Id); } catch (InvalidOperationException) { }
+            return ids;
+        }
         public Process RunningProcess {
             get {
                 Process first=null;

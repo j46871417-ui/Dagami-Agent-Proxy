@@ -1,6 +1,9 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
+using System.Net;
+using System.Diagnostics;
 using System.Threading.Tasks;
 
 namespace DevProxyApp {
@@ -31,15 +34,22 @@ namespace DevProxyApp {
  internal static class AutomaticAiRoute {
   internal static readonly string[] Services={"Gemini","Antigravity","Codex","Claude","Cursor"};
   const int ProbeTimeout=6500;
+  const string DagamiReserveDoh="https://test-dns.dagami.ru/dns-query";
 
   sealed class Check {
-   internal readonly string Host, Path, Body, Headers;
+   internal readonly string Host, Path, Body, Headers, ContentType;
    internal readonly Func<int,bool> Accept;
    internal readonly bool GoogleLogin;
-   internal Check(string host,string path,Func<int,bool> accept,string body=null,string headers=null,bool googleLogin=false) {
-    Host=host;Path=path;Accept=accept;Body=body;Headers=headers;GoogleLogin=googleLogin;
+   internal Check(string host,string path,Func<int,bool> accept,string body=null,string headers=null,bool googleLogin=false,string contentType="application/json") {
+    Host=host;Path=path;Accept=accept;Body=body;Headers=headers;GoogleLogin=googleLogin;ContentType=contentType;
    }
   }
+
+  static readonly Check[] AntigravityApiChecks={
+   new Check("cloudcode-pa.googleapis.com",AntigravityDiagnostics.ModelProbePath,status=>status==401,"{}"),
+   new Check("daily-cloudcode-pa.googleapis.com",AntigravityDiagnostics.ModelProbePath,status=>status==401,"{}"),
+   new Check("aicode.googleapis.com","/",status=>Ok(status)||status==401||status==404)
+  };
 
   static bool Ok(int status) {return status>=200&&status<300;}
   static bool ApiAvailable(int status) {return Ok(status)||status==400||status==401||status==404||status==405;}
@@ -56,10 +66,12 @@ namespace DevProxyApp {
      new Check("geminiweb-pa.clients6.google.com","/",ApiAvailable)
     };
     case "Antigravity": return new[]{
-     new Check("www.googleapis.com","/oauth2/v2/userinfo",status=>status==401),
-     new Check("cloudcode-pa.googleapis.com","/v1internal:loadCodeAssist",status=>status==401,"{}"),
-     new Check("daily-cloudcode-pa.googleapis.com","/v1internal:loadCodeAssist",status=>status==401,"{}")
-    };
+     new Check("accounts.google.com","/o/oauth2/v2/auth?client_id=dagami-connection-check.invalid&response_type=code",
+      status=>status==400,googleLogin:true),
+     new Check("oauth2.googleapis.com","/token",status=>status==400||status==401,
+      AntigravityDiagnostics.TokenProbeBody,contentType:AntigravityDiagnostics.TokenProbeContentType),
+     new Check("www.googleapis.com","/oauth2/v2/userinfo",status=>status==401)
+    }.Concat(AntigravityApiChecks).ToArray();
     case "Codex": return new[]{new Check("api.openai.com","/v1/models",status=>status==401)};
     case "Claude": return new[]{new Check("api.anthropic.com","/v1/models",status=>status==401,null,"anthropic-version: 2023-06-01\r\n")};
     case "Cursor": return new[]{new Check("api2.cursor.sh","/",ApiAvailable)};
@@ -80,6 +92,7 @@ namespace DevProxyApp {
    if(dnsSupported) {
     if(dns!=null)add(new AiRoute("Выбранный DNS",null,dns));
     add(new AiRoute("Dagami DNS / MagicDNS",null,"dns.dagami.ru"));
+    add(new AiRoute("Резервный Dagami DoH",null,DagamiReserveDoh));
     add(new AiRoute("Comss.one",null,"dns.comss.one"));
     add(new AiRoute("GeoHide",null,"dns.geohide.ru"));
     if(service=="Antigravity"&&custom!=null&&custom!="direct")
@@ -96,15 +109,49 @@ namespace DevProxyApp {
    }
   }
 
+  internal static string ProbeAntigravity(AiRoute route,HashSet<IPAddress> refused) {
+   using(var bridge=new LocalProxyBridge()) {
+    if(!bridge.Start(0,route.Proxy??"direct",route.Dns))return "временный мост не запустился";
+    return VerifyAntigravity(bridge,refused);
+   }
+  }
+
+  internal static string VerifyAntigravity(LocalProxyBridge bridge,HashSet<IPAddress> refused) {
+   if(bridge==null)return "локальный мост не запустился";
+   if(refused.Count==0)return VerifyRunning(bridge.BoundPort,"Antigravity");
+   int pid;
+   using(var process=Process.GetCurrentProcess())pid=process.Id;
+   long before=bridge.AntigravityApiConnections;
+   string failure=VerifyRunning(bridge.BoundPort,"Antigravity");
+   if(failure!=null)return failure;
+   var connections=bridge.AntigravityApiPeers(before,new HashSet<int>{pid});
+   return RefusedSmartDnsAddress(connections.Select(peer=>peer.SmartDnsAddress),refused);
+  }
+
+  internal static string RefusedSmartDnsAddress(IEnumerable<IPAddress> addresses,HashSet<IPAddress> refused) {
+   var shared=addresses.FirstOrDefault(address=>address!=null&&refused.Contains(address));
+   return shared==null?null:"повторяет адрес Smart DNS с региональным отказом ("+shared+")";
+  }
+
   internal static string VerifyRunning(int port,string service) {
+   return VerifyChecks(port,Checks(service));
+  }
+
+  internal static string AntigravityApiReport(int port) {
+   string failure=VerifyChecks(port,AntigravityApiChecks);
+   return failure==null
+    ?"API Antigravity: сетевые проверки прошли. Вход и ответ модели проверяются в Antigravity."
+    :"API Antigravity: "+failure+".";
+  }
+
+  static string VerifyChecks(int port,Check[] checks) {
     if(port<=0)return "локальный мост не запустился";
-    var checks=Checks(service);
     var errors=new string[checks.Length];
     Parallel.For(0,checks.Length,index=>{
      var check=checks[index];
      try {
       string location;
-      int status=AntigravityDiagnostics.ProbeHttpStatus(check.Host,check.Path,check.Body,port,check.Headers,ProbeTimeout,out location);
+      int status=AntigravityDiagnostics.ProbeHttpStatus(check.Host,check.Path,check.Body,port,check.Headers,ProbeTimeout,out location,check.ContentType);
       if(!check.Accept(status)&&!(check.GoogleLogin&&IsGoogleLoginRedirect(status,location)))errors[index]=check.Host+" — HTTP "+status;
      } catch(Exception error) {
       errors[index]=check.Host+" — "+error.GetType().Name;
