@@ -6,8 +6,8 @@ if(-not (Test-Path -LiteralPath $engine)){$engine=Join-Path $PSScriptRoot '..\..
 $script:Checks=0
 function Assert($Value,[string]$Message){$script:Checks++;if(-not $Value){throw $Message}}
 function Reject([scriptblock]$Action,[string]$Message){$caught=$false;try{& $Action | Out-Null}catch{$caught=$true};Assert $caught $Message}
-Assert (@(Get-ProviderDomains Full).Count -eq 85) 'Script domain list mismatch'
-Assert (@(Get-ProviderDomains Development).Count -lt 85) 'Development preset not filtered'
+Assert (@(Get-ProviderDomains Full).Count -eq 91) 'Script domain list mismatch'
+Assert (@(Get-ProviderDomains Development).Count -lt @(Get-ProviderDomains Full).Count) 'Development preset not filtered'
 foreach($domain in @('accounts.google.com','oauth2.googleapis.com','lh3.googleusercontent.com','www.gstatic.com','ssl.gstatic.com')) {
     Assert ($domain -in @(Get-ProviderDomains Development)) ('Missing Google dependency: '+$domain)
 }
@@ -229,12 +229,13 @@ try {
     Assert ($script:Mutations -eq 0) 'HTTPS preflight failure changed DNS or NRPT'
 
     Reset-Fixture;$request=Request;$request.Server='45.147.31.32';$script:UnavailableServers=@('45.147.31.32')
+    $request | Add-Member -NotePropertyName Servers -NotePropertyValue @('45.147.31.32','46.29.165.108','89.125.103.139') -Force
     $message=Invoke-SystemDns $request;$state=Read-State
-    Assert (($state.Servers -join ',') -eq '46.29.165.108,89.125.103.139,109.120.132.43,94.249.177.102,2.56.175.196') 'Healthy backup servers not selected'
+    Assert (($state.Servers -join ',') -eq '46.29.165.108,89.125.103.139') 'Healthy backup servers not selected'
     Assert ($state.Server -eq '46.29.165.108') 'Unavailable primary still selected'
     Assert ($message -match 'Unavailable servers skipped: 45.147.31.32') 'Skipped primary not reported'
-    foreach($adapter in $script:Adapters){Assert (($script:Families[$adapter.InterfaceGuid].IPv4.Static -join ',') -eq '46.29.165.108,89.125.103.139,109.120.132.43,94.249.177.102,2.56.175.196') 'Adapter backup list lost'}
-    foreach($rule in @($script:Rules | Where-Object Comment -eq $state.Tag)){Assert (($rule.NameServers -join ',') -eq '46.29.165.108,89.125.103.139,109.120.132.43,94.249.177.102,2.56.175.196') 'NRPT backup list lost'}
+    foreach($adapter in $script:Adapters){Assert (($script:Families[$adapter.InterfaceGuid].IPv4.Static -join ',') -eq '46.29.165.108,89.125.103.139') 'Adapter backup list lost'}
+    foreach($rule in @($script:Rules | Where-Object Comment -eq $state.Tag)){Assert (($rule.NameServers -join ',') -eq '46.29.165.108,89.125.103.139') 'NRPT backup list lost'}
     $null=Invoke-SystemDns (Request Restore)
     Assert ((Read-State).Status -eq 'Restored') 'Multi-server restore failed'
     Assert ($script:Families[$script:Adapters[0].InterfaceGuid].IPv4.Static.Count -eq 0) 'Multi-server restore lost DHCP'

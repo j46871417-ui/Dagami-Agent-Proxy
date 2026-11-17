@@ -559,7 +559,7 @@ namespace DevProxyApp
         private readonly IPEndPoint[] _testEndpoints;
         private readonly int _timeout = 1000;
         private readonly object _sync = new object();
-        private readonly Dictionary<string, KeyValuePair<DateTime, IPAddress>> _cache = new Dictionary<string, KeyValuePair<DateTime, IPAddress>>();
+        private readonly Dictionary<string, Tuple<DateTime, IPAddress, DnsEndpoint>> _cache = new Dictionary<string, Tuple<DateTime, IPAddress, DnsEndpoint>>();
         private readonly Dictionary<string, DateTime> _cooldown = new Dictionary<string, DateTime>();
         public ScopedDnsResolver(string server) { _configuredServer=server; _servers = ServerCandidates(server); }
         internal ScopedDnsResolver(IPEndPoint[] endpoints, int timeout) { _testEndpoints = endpoints; _servers = new string[0]; _timeout = timeout; }
@@ -672,12 +672,23 @@ namespace DevProxyApp
 
         public IPAddress Resolve(string host)
         {
+            DnsEndpoint source;
+            return ResolveWithSource(host, out source);
+        }
+
+        internal IPAddress ResolveWithSource(string host, out DnsEndpoint source)
+        {
+            source = null;
             // Route selection may exclude an OAuth host in DNS-only mode, but
             // resolution must accept every host admitted by either route mode.
             if (!IsScoped(host) && !IsScoped(host, true)) throw new InvalidOperationException("DNS-маршрут ограничен явным списком Google/Antigravity.");
             lock (_sync) {
-                KeyValuePair<DateTime, IPAddress> cached;
-                if (_cache.TryGetValue(host, out cached) && cached.Key > DateTime.UtcNow) return cached.Value;
+                Tuple<DateTime, IPAddress, DnsEndpoint> cached;
+                if (_cache.TryGetValue(host, out cached) && cached.Item1 > DateTime.UtcNow)
+                {
+                    source = cached.Item3;
+                    return cached.Item2;
+                }
             }
             byte[] transaction = new byte[2]; using (var rng = RandomNumberGenerator.Create()) rng.GetBytes(transaction);
             byte[] query;
@@ -694,7 +705,8 @@ namespace DevProxyApp
                     int remaining=5000-(int)deadline.ElapsedMilliseconds;if(remaining<=0)break;
                     int timeout=DnsProviders.AttemptTimeout(remaining,remainingAttempts--,1600);
                     int ttl;var address=ParseAnswer(DnsHttpsTransport.Exchange(endpoint,query,Math.Min(remaining,timeout)),transaction,host,out ttl);
-                    lock(_sync){_cooldown.Remove(endpoint.Address+"/"+(endpoint.Protocol??"HTTPS"));if(ttl>0)_cache[host]=new KeyValuePair<DateTime,IPAddress>(DateTime.UtcNow.AddSeconds(ttl),address);}
+                    source=endpoint;
+                    lock(_sync){_cooldown.Remove(endpoint.Address+"/"+(endpoint.Protocol??"HTTPS"));if(ttl>0)_cache[host]=Tuple.Create(DateTime.UtcNow.AddSeconds(ttl),address,source);}
                     Logger.Log("[DNS] provider="+endpoint.Provider+" resolver="+endpoint.Address+"/"+(endpoint.Protocol??"HTTPS")+" host="+host+" OK");return address;
                 }catch(Exception error){if(!(error is IOException)&&!(error is InvalidDataException)&&!(error is SocketException)&&!(error is TimeoutException)&&!(error is AuthenticationException))throw;lock(_sync)_cooldown[endpoint.Address+"/"+(endpoint.Protocol??"HTTPS")]=DateTime.UtcNow.AddSeconds(30);Logger.Log("[DNS] provider="+endpoint.Provider+" ("+endpoint.Address+") DoH failed: "+error.GetType().Name+" - "+error.Message);}
                 throw new IOException("Зашифрованный Smart DNS (Dagami / MagicDNS) временно недоступен. Проверьте подключение.");
@@ -718,9 +730,10 @@ namespace DevProxyApp
                 string key = server + (tcp ? "/TCP" : "/UDP");
                 try {
                     int ttl; IPAddress address = ParseAnswer(Exchange(server, query, tcp), transaction, host, out ttl);
+                    source = new DnsEndpoint("custom", server.Address.ToString(), server.Address.ToString(), "", tcp ? "TCP" : "UDP", server.Port);
                     lock (_sync) {
                         _cooldown.Remove(key);
-                        if (ttl > 0) _cache[host] = new KeyValuePair<DateTime, IPAddress>(DateTime.UtcNow.AddSeconds(ttl), address);
+                        if (ttl > 0) _cache[host] = Tuple.Create(DateTime.UtcNow.AddSeconds(ttl), address, source);
                     }
                     Logger.Log("[DNS] resolver=" + key + " host=" + host + " OK"); return address;
                 } catch (Exception error) {

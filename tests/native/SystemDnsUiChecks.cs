@@ -33,7 +33,9 @@ class SystemDnsUiChecks {
    Assert(SystemDnsManager.MatchesServerFamily("46.29.165.108, 89.125.103.139, 2001:db8::53",new[]{"46.29.165.108","89.125.103.139"}),"Status rejects backup DNS list");
    var poolRequest=new SystemDnsRequest{JobId=Guid.NewGuid().ToString("N"),Operation="Apply",Server="45.147.31.32",Preset="Full",UseNrpt=true,Adapters=new SystemDnsAdapter[0]};
    SystemDnsManager.Validate(poolRequest);
-   Assert(poolRequest.Servers.Length==5&&poolRequest.Server=="48.102.213.179"&&poolRequest.Servers[1]=="31.76.52.235","Dagami and MagicDNS backup pool not included in request");
+   Assert(poolRequest.Servers.Length==4&&poolRequest.Server=="48.102.213.179"&&poolRequest.Servers[1]=="31.76.52.235"
+    &&Array.IndexOf(poolRequest.Servers,"217.144.190.216")>=2&&Array.IndexOf(poolRequest.Servers,"109.120.187.249")>=2,
+    "Dagami and current MagicDNS backup pool not included in request");
    var encrypted=new SystemDnsRequest{JobId=Guid.NewGuid().ToString("N"),Operation="Apply",Server="127.0.0.1",EncryptedStub=true,Preset="Development",UseNrpt=true,Adapters=new SystemDnsAdapter[0]};
    SystemDnsManager.Validate(encrypted);Assert(encrypted.Servers.Length==1&&encrypted.Servers[0]=="127.0.0.1","Encrypted request escaped local resolver");
    encrypted.Server="8.8.8.8";Reject(()=>SystemDnsManager.Validate(encrypted));
@@ -117,6 +119,7 @@ class SystemDnsUiChecks {
     adapterList.Items.Add(new SystemDnsAdapter{Index=1,Guid=Guid.NewGuid().ToString(),Name="Wi Fi"},true);
     var create=typeof(SystemDnsForm).GetMethod("CreateRequest",fields);
     var apply=(SystemDnsRequest)create.Invoke(form,new object[]{"Apply"});
+    Assert(apply.EncryptedStub && apply.Server=="127.0.0.1" && apply.CustomUpstreamSpec=="api.magicinfo.art","Default MagicDNS must use the encrypted Windows service");
     Assert(apply.KeepExternalChanges && apply.ReplaceActiveSetup && apply.Adapters.Length==1,"Apply button does not recover an active setup in the same request");
     var restore=(SystemDnsRequest)create.Invoke(form,new object[]{"Restore"});
     Assert(restore.KeepExternalChanges,"Restore button still rejects VMware edits and missing devices");

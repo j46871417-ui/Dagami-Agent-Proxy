@@ -93,6 +93,7 @@ namespace DevProxyApp {
     if(dns!=null)add(new AiRoute("Выбранный DNS",null,dns));
     add(new AiRoute("Dagami DNS / MagicDNS",null,"dns.dagami.ru"));
     add(new AiRoute("Резервный Dagami DoH",null,DagamiReserveDoh));
+    if(service=="Antigravity")add(new AiRoute("MagicDNS",null,DnsProviders.MagicDnsHost));
     add(new AiRoute("Comss.one",null,"dns.comss.one"));
     add(new AiRoute("GeoHide",null,"dns.geohide.ru"));
     if(service=="Antigravity"&&custom!=null&&custom!="direct")
@@ -118,14 +119,23 @@ namespace DevProxyApp {
 
   internal static string VerifyAntigravity(LocalProxyBridge bridge,HashSet<IPAddress> refused) {
    if(bridge==null)return "локальный мост не запустился";
-   if(refused.Count==0)return VerifyRunning(bridge.BoundPort,"Antigravity");
+   if(refused.Count==0&&bridge.SelectedDnsProvider==null)return VerifyRunning(bridge.BoundPort,"Antigravity");
    int pid;
    using(var process=Process.GetCurrentProcess())pid=process.Id;
    long before=bridge.AntigravityApiConnections;
    string failure=VerifyRunning(bridge.BoundPort,"Antigravity");
    if(failure!=null)return failure;
    var connections=bridge.AntigravityApiPeers(before,new HashSet<int>{pid});
-   return RefusedSmartDnsAddress(connections.Select(peer=>peer.SmartDnsAddress),refused);
+   return UnexpectedDnsProvider(bridge.SelectedDnsProvider,connections.Select(peer=>peer.DnsSource)) ??
+    RefusedSmartDnsAddress(connections.Select(peer=>peer.SmartDnsAddress),refused);
+  }
+
+  internal static string UnexpectedDnsProvider(string expected,IEnumerable<DnsEndpoint> sources) {
+   if(expected==null)return null;
+   var providers=sources.Select(source=>source==null?null:source.Provider).Distinct().ToArray();
+   if(providers.Length==0||providers.Contains(null))return "выбранный Smart DNS не подтверждён для модельного API";
+   var alternatives=providers.Where(provider=>provider!=expected).Select(DnsProviders.ProviderName).ToArray();
+   return alternatives.Length==0?null:"API ответил через резервный DNS: "+string.Join(", ",alternatives);
   }
 
   internal static string RefusedSmartDnsAddress(IEnumerable<IPAddress> addresses,HashSet<IPAddress> refused) {

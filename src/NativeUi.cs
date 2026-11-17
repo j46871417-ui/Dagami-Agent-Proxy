@@ -479,7 +479,15 @@ namespace DevProxyApp
             int port = bridge.BoundPort;
             _appRouteCheck = check;
             UpdateAppActionState();
-            check.Result = await System.Threading.Tasks.Task.Run(() => ConnectionDiagnostics.CheckService(port, service));
+            check.Result = await System.Threading.Tasks.Task.Run(() =>
+            {
+                if (service != "Antigravity") return ConnectionDiagnostics.CheckService(port, service);
+                var failure = AutomaticAiRoute.VerifyAntigravity(bridge, new HashSet<System.Net.IPAddress>());
+                return new ProxyProbeResult {
+                    Available = failure == null,
+                    Message = failure ?? "Выбранный маршрут прошёл сетевую проверку. Ответ модели проверяется в Antigravity."
+                };
+            });
             if (!IsDisposed && !Disposing) UpdateAppActionState();
         }
 
@@ -494,7 +502,7 @@ namespace DevProxyApp
             if (session.ModelBridge == bridge && session.ModelRouteObserved &&
                 session.ModelOutcome == AntigravityModelOutcome.RegionRejected)
             {
-                FindAntigravityRecoveryRoute(session.ModelRoute, session.ModelSmartDnsAddresses);
+                FindAntigravityRecoveryRoute(session.ModelDnsFallback ? null : session.ModelRoute, session.ModelSmartDnsAddresses);
                 return;
             }
             if (MessageBox.Show(this, "Отправьте тестовый запрос в «" + target.DisplayName + "». Модель прислала ответ?",
@@ -505,7 +513,7 @@ namespace DevProxyApp
             _modelAnswerSession = session;
             _modelAnswerBridge = bridge;
             if (session.ModelBridge == bridge)
-                _antigravityRoutes.Record(session.ModelRoute, AntigravityModelOutcome.Streaming, DateTime.UtcNow, session.ModelSmartDnsAddresses);
+                _antigravityRoutes.Record(session.ModelDnsFallback ? null : session.ModelRoute, AntigravityModelOutcome.Streaming, DateTime.UtcNow, session.ModelSmartDnsAddresses);
             UpdateAppActionState();
         }
 
@@ -528,19 +536,34 @@ namespace DevProxyApp
                 !_nativeSessions.TryGetValue(id, out current) || current != session || session.ModelBridge != _rescueBridge) return;
 
             bool previouslyObserved = session.ModelRouteObserved;
+            var previousDns = session.ModelDnsSource;
+            var previousRelay = session.ModelRelay;
             long observedThrough = session.ModelBridge.AntigravityApiConnections;
             if (observedThrough > session.LastScannedModelTunnels)
             {
                 foreach (var peer in session.ModelBridge.AntigravityApiPeers(session.LastScannedModelTunnels, session.ProcessIds()))
                 {
                     session.ModelRouteObserved = true;
+                    if ((session.ModelDnsSource == null ? null : session.ModelDnsSource.Provider) !=
+                        (peer.DnsSource == null ? null : peer.DnsSource.Provider))
+                        session.ModelSmartDnsAddresses.Clear();
+                    session.ModelDnsSource = peer.DnsSource;
+                    session.ModelRelay = peer.SmartDnsAddress;
                     if (peer.SmartDnsAddress != null) session.ModelSmartDnsAddresses.Add(peer.SmartDnsAddress);
                 }
                 session.LastScannedModelTunnels = observedThrough;
             }
             if (outcome == AntigravityModelOutcome.None)
             {
-                if (session.ModelRouteObserved != previouslyObserved) UpdateAppActionState();
+                if ((previousDns == null ? null : previousDns.Provider+"/"+previousDns.Address) !=
+                    (session.ModelDnsSource == null ? null : session.ModelDnsSource.Provider+"/"+session.ModelDnsSource.Address) ||
+                    !Equals(previousRelay, session.ModelRelay))
+                {
+                    session.ModelOutcome = AntigravityModelOutcome.None;
+                    if (_modelAnswerSession == session) _modelAnswerSession = null;
+                    UpdateAppActionState();
+                }
+                else if (session.ModelRouteObserved != previouslyObserved) UpdateAppActionState();
                 return;
             }
             session.ModelOutcome = outcome;
@@ -550,7 +573,7 @@ namespace DevProxyApp
                 _modelAnswerBridge = null;
             }
             if (session.ModelRouteObserved)
-                _antigravityRoutes.Record(session.ModelRoute, outcome, session.ModelLog.LastEventUtc, session.ModelSmartDnsAddresses);
+                _antigravityRoutes.Record(session.ModelDnsFallback ? null : session.ModelRoute, outcome, session.ModelLog.LastEventUtc, session.ModelSmartDnsAddresses);
             string observedRoute = session.ModelRouteObserved ? "путь через Dagami подтверждён" : "путь через Dagami не подтверждён";
             Logger.Log("[Antigravity model] " + outcome + " · " + observedRoute +
                 (session.ModelSmartDnsAddresses.Count == 0 ? "" : " · Smart DNS " + string.Join(", ", session.ModelSmartDnsAddresses)));
@@ -572,8 +595,20 @@ namespace DevProxyApp
             if (service == null) route = "Маршрут: нет теста для приложения";
             else if (bridge == null || bridge.BoundPort <= 0) route = "Маршрут: мост остановлен";
             else if (probing && matching == null) route = "Маршрут: дождитесь проверки";
-            SetAppStatusLink(_appRouteStatus, route, routeAction);
             string details = result == null ? "Проверяется тестовый адрес сервиса через локальный мост." : result.Message;
+            if (runningSession != null && runningSession.ModelBridge == bridge && runningSession.ModelDnsSource != null)
+            {
+                var actual = runningSession.ModelDnsSource;
+                if (!probing) route = "DNS: " + DnsProviders.ProviderName(actual.Provider) + (runningSession.ModelDnsFallback ? " (резерв)" : "");
+                details = "Фактический DNS для API Antigravity: " + actual.Host + " · " + actual.Address + ":" + actual.Port +
+                    " · " + actual.Protocol + ". Адрес API: " + runningSession.ModelRelay + ". " + details;
+            }
+            else if (runningSession != null && runningSession.ModelBridge == bridge && runningSession.ModelDnsFallback && !probing)
+            {
+                route = "API: через прокси";
+                details = "Мост установил соединение с API без выбранного Smart DNS. " + details;
+            }
+            SetAppStatusLink(_appRouteStatus, route, routeAction);
             if (_appStatusTip.GetToolTip(_appRouteStatus) != details) _appStatusTip.SetToolTip(_appRouteStatus, details);
 
             bool modelAction = service != null && runningSession != null;

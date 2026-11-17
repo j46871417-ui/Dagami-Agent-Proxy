@@ -690,11 +690,11 @@ namespace DevProxyApp
             Panel settingsPage = BuildFlatConnectionPage(connectionSettings,advancedSettings);
             Panel dnsPage = BuildDnsPage();
             Panel[] pages = new Panel[] { apps, settingsPage, dnsPage, logCard, antigravityPage };
-            string[] names = new string[] { "Приложения", "Подключение", "DNS и сброс", "Журнал", "Диагностика" };
+            string[] names = new string[] { "Приложения", "Подключение", "DNS", "Журнал", "Диагностика" };
             string[] descriptions = new string[] {
                 "Выберите приложение и запустите через Dagami.",
                 "Профиль, автозапуск и параметры маршрута.",
-                "Ручной DNS, восстановление и сброс правил Windows.",
+                "Выберите провайдера, проверьте ответ DNS или настройте DNS в Windows.",
                 "События приложения и результаты проверок.",
                 "Проверка маршрута и backend Antigravity."
             };

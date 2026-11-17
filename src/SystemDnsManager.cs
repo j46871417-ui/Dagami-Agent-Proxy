@@ -318,7 +318,7 @@ namespace DevProxyApp
 
     public sealed class SystemDnsForm : Form
     {
-        readonly TextBox _server = new TextBox { Text = "45.147.31.32", Dock = DockStyle.Fill };
+        readonly TextBox _server = new TextBox { Text = DnsProviders.MagicDnsHost, Dock = DockStyle.Fill };
         readonly ComboBox _preset = new ComboBox { Dock = DockStyle.Fill, DropDownStyle = ComboBoxStyle.DropDownList };
         readonly CheckedListBox _adapters = new CheckedListBox { Dock = DockStyle.Fill, CheckOnClick = true, HorizontalScrollbar = true };
         readonly CheckBox _changeAdapters = new CheckBox { Text = "Дополнительно: изменить DNS отмеченных адаптеров для всей сети", AutoSize = true, Checked = false };
@@ -343,7 +343,7 @@ namespace DevProxyApp
             body.Controls.Add(new Label { Dock = DockStyle.Fill, Text = "Правила NRPT сохраняют DNS вашей сети и задают сервер для выбранных доменов.\r\nОбщий DNS адаптеров меняется лишь при выборе отдельного пункта ниже.\r\nПеред записью и после неё проверим сеть. При сбое — откат; для записи нужен UAC." }, 0, 0);
             var fields = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 2, RowCount = 2 };
             fields.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 130)); fields.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
-            fields.Controls.Add(new Label { Text = "DNS-сервер (IP)", AutoSize = true }, 0, 0); fields.Controls.Add(_server, 1, 0);
+            fields.Controls.Add(new Label { Text = "Адрес DNS", AutoSize = true }, 0, 0); fields.Controls.Add(_server, 1, 0);
             fields.Controls.Add(new Label { Text = "Домены NRPT", AutoSize = true }, 0, 1); fields.Controls.Add(_preset, 1, 1);
             _preset.Items.AddRange(new object[] { "Полный список + вход Google/Antigravity", "Разработка и ИИ (без игр и стриминга)" }); _preset.SelectedIndex = 1;
             body.Controls.Add(fields, 0, 1); body.Controls.Add(_changeAdapters, 0, 2); body.Controls.Add(_nrpt, 0, 3); body.Controls.Add(_replace, 0, 4); body.Controls.Add(_adapters, 0, 5);
@@ -380,7 +380,7 @@ namespace DevProxyApp
                 try {
                     adapters = SystemDnsManager.Adapters(); IPAddress ip;
                     if(IPAddress.TryParse(requestedServer,out ip))resolvedServer=ip.ToString();
-                    else if(DnsProviders.ParseCustomSpec(requestedServer)!=null)resolvedServer=requestedServer;
+                    else if(UsesDnsEndpoint(requestedServer))resolvedServer=requestedServer;
                     else {ip=Array.Find(Dns.GetHostAddresses(requestedServer),a=>a.AddressFamily==System.Net.Sockets.AddressFamily.InterNetwork);if(ip==null)throw new InvalidOperationException("Не найден IPv4 DNS-сервера. Введите его IP вручную.");resolvedServer=ip.ToString();}
                 } catch (Exception ex) { error = ex.Message; }
                 try { BeginInvoke(new Action(() => {
@@ -391,10 +391,13 @@ namespace DevProxyApp
                 })); } catch (InvalidOperationException) { }
             });
         }
+        static bool UsesDnsEndpoint(string spec) {
+            return DnsProviders.MatchBuiltInProvider(spec.TrimEnd('.'))!=null || DnsProviders.ParseCustomSpec(spec)!=null;
+        }
         SystemDnsRequest CreateRequest(string operation) {
             var selected = new List<SystemDnsAdapter>(); foreach (SystemDnsAdapter adapter in _adapters.CheckedItems) selected.Add(adapter);
             string rawServer = _server.Text.Trim();
-            bool isCustomEndpoint = operation == "Apply" && DnsProviders.ParseCustomSpec(rawServer) != null;
+            bool isCustomEndpoint = operation == "Apply" && UsesDnsEndpoint(rawServer);
             return new SystemDnsRequest { JobId = Guid.NewGuid().ToString("N"), Operation = operation, Server = isCustomEndpoint ? "127.0.0.1" : rawServer,
                 EncryptedStub = isCustomEndpoint, CustomUpstreamSpec = isCustomEndpoint ? rawServer : null,
                 Preset = _preset.SelectedIndex == 0 ? "Full" : "Development", ChangeAdapters = _changeAdapters.Checked, UseNrpt = _nrpt.Checked, ReplaceExisting = _replace.Checked, KeepExternalChanges = true, ReplaceActiveSetup = true, ConfirmResetAll = operation == "ResetAll", Adapters = selected.ToArray() };

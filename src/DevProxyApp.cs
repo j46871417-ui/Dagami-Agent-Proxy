@@ -791,6 +791,7 @@ namespace DevProxyApp
             internal long Sequence;
             internal int ProcessId;
             internal IPAddress SmartDnsAddress;
+            internal DnsEndpoint DnsSource;
         }
 
         private readonly Queue<AntigravityApiPeer> _antigravityApiPeers = new Queue<AntigravityApiPeer>();
@@ -808,7 +809,7 @@ namespace DevProxyApp
             return peers;
         }
 
-        private void NoteAntigravityApiConnection(string authority, int pid, IPAddress smartDnsAddress)
+        private void NoteAntigravityApiConnection(string authority, int pid, IPAddress smartDnsAddress, DnsEndpoint dnsSource)
         {
             if (authority.Equals("cloudcode-pa.googleapis.com:443", StringComparison.OrdinalIgnoreCase) ||
                 authority.Equals("daily-cloudcode-pa.googleapis.com:443", StringComparison.OrdinalIgnoreCase))
@@ -817,7 +818,7 @@ namespace DevProxyApp
                 {
                     long sequence = Interlocked.Increment(ref _antigravityApiConnections);
                     _antigravityApiPeers.Enqueue(new AntigravityApiPeer {
-                        Sequence = sequence, ProcessId = pid, SmartDnsAddress = smartDnsAddress
+                        Sequence = sequence, ProcessId = pid, SmartDnsAddress = smartDnsAddress, DnsSource = dnsSource
                     });
                     if (_antigravityApiPeers.Count > 128) _antigravityApiPeers.Dequeue();
                 }
@@ -829,6 +830,7 @@ namespace DevProxyApp
         public int ActiveConnections {get{return Interlocked.CompareExchange(ref _activeConnections,0,0);}}
 
         public int BoundPort { get; private set; }
+        internal string SelectedDnsProvider { get; private set; }
         public bool ServesSelectivePac { get { return _running; } }
         private RouteHealth _routeHealth = new RouteHealth();
 
@@ -904,6 +906,7 @@ namespace DevProxyApp
                 }
 
                 _scopedDns = string.IsNullOrWhiteSpace(dnsHost) ? null : new ScopedDnsResolver(dnsHost);
+                SelectedDnsProvider = _scopedDns == null ? null : DnsProviders.PrimaryProvider(dnsHost);
 
                 var ports = new List<int>();
 
@@ -1198,6 +1201,7 @@ namespace DevProxyApp
                 string routedHost = null;
 
                 IPAddress dnsEndpoint = null;
+                DnsEndpoint dnsSource = null;
 
                 string destinationLabel = method.Equals("CONNECT", StringComparison.OrdinalIgnoreCase)
 
@@ -1253,7 +1257,7 @@ namespace DevProxyApp
 
                         try {
 
-                            dnsEndpoint = _scopedDns.Resolve(host);
+                            dnsEndpoint = _scopedDns.ResolveWithSource(host, out dnsSource);
 
                             routedHost = host;
 
@@ -1341,7 +1345,7 @@ namespace DevProxyApp
 
                         tunnelEstablished = true;
 
-                        NoteAntigravityApiConnection(target, peerPid, dnsEndpoint);
+                        NoteAntigravityApiConnection(target, peerPid, dnsEndpoint, dnsSource);
                         if (bodyOffset < totalRead) upstreamStream.Write(buffer, bodyOffset, totalRead - bodyOffset);
 
                         if (routedHost != null) lock (_routeLock)
@@ -1370,7 +1374,7 @@ namespace DevProxyApp
                     if (method.Equals("CONNECT", StringComparison.OrdinalIgnoreCase)) {
                         byte[] success = Encoding.ASCII.GetBytes("HTTP/1.1 200 Connection established\r\n\r\n");
                         clientStream.Write(success, 0, success.Length); clientStream.Flush(); tunnelEstablished = true;
-                        NoteAntigravityApiConnection(target, peerPid, null);
+                        NoteAntigravityApiConnection(target, peerPid, null, null);
                         if (bodyOffset < totalRead) upstreamStream.Write(buffer, bodyOffset, totalRead - bodyOffset);
                         Relay(clientStream, upstreamStream, client, upstream, connection); relaying = true; return;
                     }
@@ -1461,7 +1465,7 @@ namespace DevProxyApp
 
                         tunnelEstablished = true;
 
-                        NoteAntigravityApiConnection(target, peerPid, null);
+                        NoteAntigravityApiConnection(target, peerPid, null, null);
                         int upstreamHeaderEnd = respText.IndexOf("\r\n\r\n", StringComparison.Ordinal) + 4;
 
                         if (upstreamHeaderEnd > 3 && upstreamHeaderEnd < respRead)
@@ -2062,6 +2066,7 @@ namespace DevProxyApp
             });
         }
         public bool UseProxy { get; set; }
+        internal string SettingsPath { get { return configFile; } }
         public string LastLoadError { get; private set; }
         public string EffectiveProxy { get {
             if (!string.IsNullOrEmpty(LastLoadError)) throw new IOException(LastLoadError);
@@ -2121,7 +2126,7 @@ namespace DevProxyApp
             UseProxy = true;
             UseDagamiDns = false;
 
-            DnsHost = "dns.dagami.ru";
+            DnsHost = DnsProviders.MagicDnsHost;
 
             PrepareAntigravityClient = true;
 
@@ -4254,6 +4259,7 @@ namespace DevProxyApp
         {
             if (_backgroundWorkStarted || IsDisposed) return;
             _backgroundWorkStarted = true;
+            DnsProviders.Initialize();
             RefreshNativeTargets();
             StartUpdateChecks();
             if (_bridgePort == 0) StartRescueBridge();

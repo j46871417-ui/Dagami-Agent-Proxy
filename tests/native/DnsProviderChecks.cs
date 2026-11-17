@@ -10,7 +10,7 @@ class DnsProviderChecks {
  static int checks;static void Assert(bool value,string message){checks++;if(!value)throw new Exception(message);}
  sealed class TrackingStream:MemoryStream {public int Writes;public override void Write(byte[] data,int offset,int count){if(count>0)Writes++;base.Write(data,offset,count);}}
  static void Reject(Action action,string message){bool failed=false;try{action();}catch{failed=true;}Assert(failed,message);}
- static byte[] Profile(string provider,params string[] addresses){var values=new StringBuilder();foreach(string address in addresses)values.Append("<string>"+address+"</string>");return Encoding.UTF8.GetBytes("<?xml version='1.0'?><!DOCTYPE plist PUBLIC '-//Apple//DTD PLIST 1.0//EN' 'http://www.apple.com/DTDs/PropertyList-1.0.dtd'><plist><dict><key>PayloadContent</key><array><dict><key>DNSSettings</key><dict><key>DNSProtocol</key><string>HTTPS</string><key>ServerURL</key><string>https://"+DnsProviders.HostFor(provider)+"/dns-query</string><key>ServerAddresses</key><array>"+values+"</array></dict></dict></array></dict></plist>");}
+ static byte[] Profile(string provider,params string[] addresses){var values=new StringBuilder();foreach(string address in addresses)values.Append("<string>"+address+"</string>");string path=provider=="magicdns"?"/rpc":"/dns-query";return Encoding.UTF8.GetBytes("<?xml version='1.0'?><!DOCTYPE plist PUBLIC '-//Apple//DTD PLIST 1.0//EN' 'http://www.apple.com/DTDs/PropertyList-1.0.dtd'><plist><dict><key>PayloadContent</key><array><dict><key>DNSSettings</key><dict><key>DNSProtocol</key><string>HTTPS</string><key>ServerURL</key><string>https://"+DnsProviders.HostFor(provider)+path+"</string><key>ServerAddresses</key><array>"+values+"</array></dict></dict></array></dict></plist>");}
  static byte[] ReadHttp(string response){try{return (byte[])typeof(DnsHttpsTransport).GetMethod("ReadResponse",BindingFlags.Static|BindingFlags.NonPublic).Invoke(null,new object[]{new MemoryStream(Encoding.ASCII.GetBytes(response)),32,"application/dns-message",Stopwatch.StartNew(),1000,false});}catch(TargetInvocationException error){throw error.InnerException;}}
  static uint Checksum(uint sum,byte[] b,int offset,int length){for(int i=0;i<length;i+=2)sum+=(uint)(b[offset+i]<<8)|(uint)(i+1<length?b[offset+i+1]:0);while((sum>>16)!=0)sum=(sum&65535)+(sum>>16);return sum;}
  static void CheckPacketSplit(byte[] hello,bool ipv6){
@@ -30,7 +30,17 @@ class DnsProviderChecks {
  }
  static int Main(){string root=Path.Combine(Path.GetTempPath(),"Dagami-provider-check-"+Guid.NewGuid().ToString("N"));Directory.CreateDirectory(root);try{
   typeof(Logger).GetField("_logFilePath",BindingFlags.Static|BindingFlags.NonPublic).SetValue(null,Path.Combine(root,"proxy.log"));
+  var freshConfig=new ConfigManager();
+  Assert(freshConfig.DnsHost=="api.magicinfo.art"&&!freshConfig.UseDagamiDns,"A new profile must select MagicDNS without activating it");
+  var parseConfig=typeof(ConfigManager).GetMethod("ParseJsonConfig",BindingFlags.Instance|BindingFlags.NonPublic);
+  foreach(string savedServer in new[]{"dns.dagami.ru","tls://dns.google:853"}){
+   var existing=new ConfigManager();
+   parseConfig.Invoke(existing,new object[]{"{\"dns_host\":\""+savedServer+"\",\"use_dagami_dns\":true}"});
+   Assert(existing.DnsHost==savedServer&&existing.UseDagamiDns,"An upgrade changed the saved DNS");
+  }
   Assert(DnsProviders.ParseProfile("dagami",Profile("dagami","8.8.8.8","8.8.8.8","1.1.1.1")).Length==2,"Profile addresses not deduplicated");
+  var publicProfile=Encoding.UTF8.GetBytes(Encoding.UTF8.GetString(Profile("dagami","8.8.4.4")).Replace("doh.dagami.ru","dns.dagami.ru"));
+  Assert(DnsProviders.ParseProfile("dagami",publicProfile)[0]=="8.8.4.4","Current public Dagami profile ignored");
   foreach(string address in new[]{"127.0.0.1","10.1.2.3","192.168.0.1","169.254.1.2","100.64.0.1","224.1.1.1","0.0.0.0"})Reject(()=>DnsProviders.ParseProfile("dagami",Profile("dagami",address)),"Non-public address accepted: "+address);
   Reject(()=>DnsProviders.ParseProfile("magicdns",Profile("dagami","8.8.8.8")),"Profile changed TLS authority");
   Reject(()=>DnsProviders.ParseProfile("dagami",new byte[131073]),"Oversized profile accepted");
@@ -41,6 +51,12 @@ class DnsProviderChecks {
   var migrated=DnsProviders.ForServer("31.76.61.24");
   Assert(migrated[0].Address=="48.102.213.179"&&migrated[0].Host=="dns.dagami.ru","Public DoH bootstrap has the wrong TLS authority");
   Assert(migrated[1].Address=="31.76.52.235"&&migrated[1].Host=="doh.dagami.ru","Stale DoH address remained in the cached catalogue");
+  var magic=DnsProviders.ForServer("dns.magicdns.ru");
+  Assert(magic.Length==2&&Array.TrueForAll(magic,ep=>ep.Host=="api.magicinfo.art"&&ep.Path=="/rpc")
+   &&Array.Exists(magic,ep=>ep.Address=="109.120.187.249")&&Array.Exists(magic,ep=>ep.Address=="217.144.190.216"),
+   "Legacy MagicDNS setting or cache did not migrate to the current DoH endpoint");
+  var formerMagic=Encoding.UTF8.GetBytes(Encoding.UTF8.GetString(Profile("magicdns","8.8.8.8")).Replace("api.magicinfo.art/rpc","dns.magicdns.ru/dns-query"));
+  Reject(()=>DnsProviders.ParseProfile("magicdns",formerMagic),"Legacy MagicDNS profile was accepted");
   DnsProviders.Refresh(provider=>Profile(provider,provider=="dagami"?"8.8.4.4":"9.9.9.9"),endpoint=>endpoint.Address=="8.8.4.4"||endpoint.Address=="9.9.9.9");
   Assert(DnsProviders.LastError==null,"Verified update failed");var current=DnsProviders.Snapshot();Assert(current.Length==2&&current[0].Provider=="dagami"&&current[1].Provider=="magicdns","Provider priority lost");
   Assert(DnsProviders.ForServer("45.147.31.32")[0].Address=="8.8.4.4","Old configured provider IP did not adopt current addresses");
@@ -54,6 +70,8 @@ class DnsProviderChecks {
   DnsProviders.Refresh(provider=>provider=="dagami"?Profile(provider,"8.8.1.1","8.8.1.2","8.8.1.3","8.8.1.4","8.8.1.5","8.8.1.6","8.8.1.7","8.8.1.8"):Profile(provider,"9.9.9.9"),endpoint=>true);
   current=DnsProviders.Snapshot();Assert(Array.FindAll(current,x=>x.Provider=="dagami").Length==8&&Array.Exists(current,x=>x.Address=="31.76.52.235")&&Array.Exists(current,x=>x.Address=="48.102.213.179"),"Large profile lost reserved nodes or exceeded provider limit");
   Assert(File.Exists(Path.Combine(root,"cache.json"))&&Directory.GetFiles(root,"*.tmp").Length==0,"Cache write not atomic/clean");
+  DnsProviders.Initialize(cache,false);
+  Assert(DnsProviders.ForServer("api.magicinfo.art")[0].Address=="9.9.9.9","Catalogue did not persist addresses for the current MagicDNS endpoint");
   Assert(Encoding.ASCII.GetString(ReadHttp("HTTP/1.1 200 OK\r\nContent-Type: application/dns-message\r\nContent-Length: 3\r\n\r\nabc"))=="abc","DoH length body failed");
   Assert(Encoding.ASCII.GetString(ReadHttp("HTTP/1.1 200 OK\r\nContent-Type: application/dns-message\r\nTransfer-Encoding: chunked\r\n\r\n1\r\na\r\n2\r\nbc\r\n0\r\n\r\n"))=="abc","DoH chunked body failed");
   foreach(string header in new[]{"Content-Length: 50","Content-Length: 3\r\nTransfer-Encoding: chunked","Content-Length: 3\r\nContent-Length: 3","Transfer-Encoding: gzip"})Reject(()=>ReadHttp("HTTP/1.1 200 OK\r\nContent-Type: application/dns-message\r\n"+header+"\r\n\r\nabc"),"Unsafe HTTP framing accepted");
@@ -63,6 +81,14 @@ class DnsProviderChecks {
   var customDoh=DnsProviders.ParseCustomSpec("https://cloudflare-dns.com/dns-query");Assert(customDoh!=null&&customDoh.Length>=2&&customDoh[0].Protocol=="HTTPS"&&customDoh[0].Address=="1.1.1.1","Well-known DoH spec not parsed");
   Assert(DnsProviders.ForServer("dns.comss.one")!=null&&DnsProviders.ForServer("dns.comss.one")[0].Provider=="comss","Built-in Comss.one DNS missing");
   Assert(DnsProviders.ForServer("dns.geohide.ru")!=null&&DnsProviders.ForServer("dns.geohide.ru")[0].Provider=="geohide","Built-in GeoHide DNS missing");
+  var refreshNames=typeof(DnsProviders).GetMethod("RefreshNamedEndpoints",BindingFlags.NonPublic|BindingFlags.Static);
+  Func<string,IEnumerable<string>> lookup=host=>host=="dns.geohide.ru"?new[]{"9.9.9.10","10.0.0.1","9.9.9.11"}:new string[0];
+  Func<DnsEndpoint,bool> approve=ep=>ep.Provider=="geohide"&&ep.Host=="dns.geohide.ru"&&ep.Address=="9.9.9.10";
+  refreshNames.Invoke(null,new object[]{lookup,approve});
+  Assert(DnsProviders.ForServer("dns.geohide.ru")[0].Address=="9.9.9.10","A verified provider DNS change was ignored");
+  refreshNames.Invoke(null,new object[]{lookup,new Func<DnsEndpoint,bool>(ep=>false)});
+  Assert(DnsProviders.ForServer("dns.geohide.ru")[0].Address=="9.9.9.10","Temporary outage removed the last working DNS list");
+  Assert(!Array.Exists(DnsProviders.AllBuiltInEndpoints(),ep=>ep.Provider=="geohide"&&(ep.Address=="9.9.9.11"||ep.Address=="10.0.0.1")),"Unverified address entered the catalogue");
   Assert(DnsProviders.ForServer("dns.malw.link")!=null&&DnsProviders.ForServer("dns.malw.link")[0].Provider=="malw"&&DnsProviders.ForServer("dns.malw.link")[0].Protocol=="TLS","Built-in Malw.link DoT DNS missing");
   Assert(Array.TrueForAll(DnsProviders.ExtendedPool("dns.dagami.ru"),ep=>ep.Provider=="dagami"||ep.Provider=="magicdns"),"Unselected provider silently added to Dagami/MagicDNS");
   var budget=typeof(DnsProviders).GetMethod("AttemptTimeout",BindingFlags.NonPublic|BindingFlags.Static);int remainingBudget=12000,attempts=6;for(int i=0;i<6;i++){int allowed=(int)budget.Invoke(null,new object[]{remainingBudget,attempts--,2400});Assert(allowed>0&&allowed<=2400,"Invalid DNS time budget");remainingBudget-=allowed;if(i==2)Assert(remainingBudget>=6000,"Primary consumed reserve DNS budget");}
@@ -73,7 +99,7 @@ class DnsProviderChecks {
   var probeEp=DnsProviders.Snapshot()[0];var entered=new ManualResetEvent(false);var release=new ManualResetEvent(false);var finished=new ManualResetEvent(false);
   Func<DnsEndpoint,string> delayed=ep=>{entered.Set();release.WaitOne();finished.Set();return "late-fixture";};
   string incomplete=(string)probeMethod.Invoke(null,new object[]{new[]{probeEp},delayed,100});
-  Assert(entered.WaitOne(1000)&&incomplete.Contains("Не дождались"),"Delayed DNS probe did not time out safely");
+  Assert(entered.WaitOne(1000)&&incomplete.Contains("Тайм-аутов проверки: 1"),"Delayed DNS probe did not time out safely");
   Func<DnsEndpoint,string> immediate=ep=>"current-fixture";
   probeMethod.Invoke(null,new object[]{new[]{probeEp},immediate,2000});string expectedSummary=DnsProviders.LastProbeSummary;
   release.Set();Assert(finished.WaitOne(2000),"Delayed probe did not finish");Thread.Sleep(100);

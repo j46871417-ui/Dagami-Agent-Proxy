@@ -29,12 +29,17 @@ namespace DevProxyApp {
  public static class DnsProviders {
   static readonly object Sync=new object();
   static readonly string[] ProviderIds={"dagami","magicdns"};
+  static readonly string[] NamedProviderIds={"comss","geohide","malw","xboxdns"};
   const string DagamiDohIp="31.76.52.235";
   const string DagamiPublicDohIp="48.102.213.179";
   const string RetiredDagamiIp="31.76.61.24";
+  internal const string MagicDnsHost="api.magicinfo.art";
+  const string MagicDnsPath="/rpc";
+  internal const string MagicDnsAuthority="https://"+MagicDnsHost+MagicDnsPath;
+  static readonly string[] MagicDnsSeeds={"217.144.190.216","109.120.187.249"};
   static readonly Dictionary<string,string> Hosts=new Dictionary<string,string>{
    {"dagami","doh.dagami.ru"},
-   {"magicdns","dns.magicdns.ru"},
+   {"magicdns",MagicDnsHost},
    {"comss","dns.comss.one"},
    {"geohide","dns.geohide.ru"},
    {"malw","dns.malw.link"},
@@ -42,9 +47,10 @@ namespace DevProxyApp {
   };
   static readonly Dictionary<string,Uri> Profiles=new Dictionary<string,Uri>{
    {"dagami",new Uri("https://dns.dagami.ru/dagami.mobileconfig")},
-   {"magicdns",new Uri("https://magicdns.ru/profile.mobileconfig")}
+   {"magicdns",new Uri("https://"+MagicDnsHost+"/profile.mobileconfig")}
   };
   static List<DnsEndpoint> endpoints=Seeds();
+  static List<DnsEndpoint> namedEndpoints=new List<DnsEndpoint>();
   static readonly Dictionary<string,string> probeStatus=new Dictionary<string,string>();
   static readonly Dictionary<string,int> probeLatencyMs=new Dictionary<string,int>();
   static string cachePath;static Timer timer;static int refreshing;
@@ -53,18 +59,20 @@ namespace DevProxyApp {
   public static DateTime LastCheckedUtc {get{lock(Sync)return lastCheckedUtc;}}
   public static string LastError {get{lock(Sync)return lastError;}}
   public static string LastProbeSummary {get{lock(Sync)return lastProbeSummary;}}
+  internal static string CataloguePath {get{lock(Sync)return cachePath??Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),"devproxy","dns-endpoints.json");}}
+  internal const string ProbeDomain="cloudcode-pa.googleapis.com";
 
   static List<DnsEndpoint> Seeds(){
    var result=new List<DnsEndpoint>();
    result.Add(ProviderEndpoint("dagami",DagamiPublicDohIp));
    result.Add(ProviderEndpoint("dagami",DagamiDohIp));
-   foreach(string address in new[]{"2.56.175.196","109.120.132.43","94.249.177.102"})result.Add(new DnsEndpoint("magicdns",address,Hosts["magicdns"]));
+   foreach(string address in MagicDnsSeeds)result.Add(ProviderEndpoint("magicdns",address));
    return result;
   }
 
   static DnsEndpoint ProviderEndpoint(string provider,string address){
    string host=provider=="dagami"&&address==DagamiPublicDohIp?"dns.dagami.ru":Hosts[provider];
-   return new DnsEndpoint(provider,address,host);
+   return new DnsEndpoint(provider,address,host,provider=="magicdns"?MagicDnsPath:"/dns-query","HTTPS",443);
   }
 
   static void IncludeDagamiSeeds(List<string> addresses){
@@ -91,18 +99,65 @@ namespace DevProxyApp {
 
   public static DnsEndpoint[] AllBuiltInEndpoints(){
    var list=new List<DnsEndpoint>(Snapshot());
-   foreach(var ep in BuiltInExtraSeeds())if(!list.Exists(x=>x.Address==ep.Address&&x.Protocol==ep.Protocol))list.Add(ep);
+   var seeds=BuiltInExtraSeeds();
+   DnsEndpoint[] learned;lock(Sync)learned=namedEndpoints.ToArray();
+   foreach(string provider in NamedProviderIds){
+    var verified=Array.FindAll(learned,x=>x.Provider==provider);
+    list.AddRange(verified.Length>0?verified:Array.FindAll(seeds,x=>x.Provider==provider));
+   }
    return list.ToArray();
+  }
+
+  static DnsEndpoint NamedEndpoint(string provider,string address){
+   return new DnsEndpoint(provider,address,Hosts[provider],"/dns-query",provider=="malw"?"TLS":"HTTPS",provider=="malw"?853:443);
+  }
+
+  static IEnumerable<string> LookupNamedAddresses(string host){
+   var work=Dns.GetHostAddressesAsync(host);
+   if(!work.Wait(2500))return new string[0];
+   return Array.ConvertAll(work.Result,address=>address.ToString());
+  }
+
+  static bool VerifyEndpoint(DnsEndpoint endpoint){
+   int ttl;
+   byte[] query=DnsHttpsTransport.Question("example.com");
+   ScopedDnsResolver.ParseAnswer(DnsHttpsTransport.Exchange(endpoint,query,2500),new byte[]{0,0},"example.com",out ttl);
+   return true;
+  }
+
+  internal static void RefreshNamedEndpoints(Func<string,IEnumerable<string>> lookup,Func<DnsEndpoint,bool> verify){
+   System.Threading.Tasks.Parallel.ForEach(NamedProviderIds,new System.Threading.Tasks.ParallelOptions{MaxDegreeOfParallelism=4},provider=>{
+    try{
+     DnsEndpoint[] cached;
+     lock(Sync)cached=namedEndpoints.FindAll(x=>x.Provider==provider).ToArray();
+     var addresses=new List<string>();
+     foreach(string address in lookup(Hosts[provider])){
+      if(!PublicAddress(address))continue;
+      string canonical=IPAddress.Parse(address).ToString();
+      if(!addresses.Contains(canonical))addresses.Add(canonical);
+      if(addresses.Count==8)break;
+     }
+     foreach(var current in cached)if(addresses.Count<8&&!addresses.Contains(current.Address))addresses.Add(current.Address);
+     foreach(var seed in BuiltInExtraSeeds())if(seed.Provider==provider&&addresses.Count<8&&!addresses.Contains(seed.Address))addresses.Add(seed.Address);
+     var healthy=new List<DnsEndpoint>();
+     foreach(string address in addresses){
+      var candidate=NamedEndpoint(provider,address);
+      try{if(verify(candidate))healthy.Add(candidate);}catch(Exception error){Logger.Trace("[DNS catalogue] "+provider+" "+address+" "+error.GetType().Name);}
+     }
+     if(healthy.Count==0)return;
+     lock(Sync){namedEndpoints.RemoveAll(x=>x.Provider==provider);namedEndpoints.AddRange(healthy);}
+    }catch(Exception error){Logger.Trace("[DNS catalogue] "+provider+" lookup: "+error.GetType().Name);}
+   });
   }
 
   public static bool PublicAddress(string text){IPAddress ip;if(!IPAddress.TryParse(text,out ip)||ip.AddressFamily!=AddressFamily.InterNetwork)return false;byte[] b=ip.GetAddressBytes();return b[0]!=0&&b[0]!=10&&b[0]!=127&&b[0]<224&&!(b[0]==169&&b[1]==254)&&!(b[0]==172&&b[1]>=16&&b[1]<=31)&&!(b[0]==192&&b[1]==168)&&!(b[0]==100&&b[1]>=64&&b[1]<=127);}
   public static DnsEndpoint[] Snapshot(){lock(Sync)return endpoints.ToArray();}
 
-  static string MatchBuiltInProvider(string value){
+  internal static string MatchBuiltInProvider(string value){
    if(string.IsNullOrEmpty(value))return null;
    string lower=value.ToLowerInvariant();
    if(lower=="dns.dagami.ru"||lower=="doh.dagami.ru"||lower=="dagami.ru"||lower=="dagami"||lower=="auto")return "dagami";
-   if(lower=="dns.magicdns.ru"||lower=="magicdns.ru"||lower=="magicdns")return "magicdns";
+   if(lower==MagicDnsHost||lower=="dns.magicdns.ru"||lower=="magicdns.ru"||lower=="magicdns")return "magicdns";
    if(lower=="dns.comss.one"||lower=="router.comss.one"||lower=="comss.one"||lower=="comss")return "comss";
    if(lower=="dns.geohide.ru"||lower=="geohide.ru"||lower=="geohide")return "geohide";
    if(lower=="dns.malw.link"||lower=="malw.link"||lower=="malw")return "malw";
@@ -143,6 +198,21 @@ namespace DevProxyApp {
    // substituted for the selected Dagami -> MagicDNS chain.
    return OrderByProbeHealth(new List<DnsEndpoint>(primary));
   }
+  internal static string PrimaryProvider(string server){
+   var pool=ForServer(server);
+   return pool==null||pool.Length==0?"custom":pool[0].Provider;
+  }
+  internal static string ProviderName(string provider) {
+   switch(provider){
+    case "dagami":return "Dagami";
+    case "magicdns":return "MagicDNS";
+    case "geohide":return "GeoHide";
+    case "comss":return "Comss.one";
+    case "malw":return "Malw.link";
+    case "xboxdns":return "Xbox DNS";
+    default:return "Свой DNS";
+   }
+  }
   internal static int AttemptTimeout(int remaining,int attempts,int ceiling){
    return Math.Min(remaining,Math.Min(ceiling,Math.Max(1,remaining/Math.Max(1,attempts))));
   }
@@ -156,10 +226,10 @@ namespace DevProxyApp {
     foreach(string provider in providers){
      var working=new List<DnsEndpoint>();var untested=new List<DnsEndpoint>();var failed=new List<DnsEndpoint>();
      foreach(var ep in list){if(ep.Provider!=provider)continue;int ms;
-      if(probeLatencyMs.TryGetValue(ep.Provider+":"+ep.Address,out ms)){if(ms>=0)working.Add(ep);else failed.Add(ep);}
+      if(probeLatencyMs.TryGetValue(EndpointKey(ep),out ms)){if(ms>=0)working.Add(ep);else failed.Add(ep);}
       else untested.Add(ep);
      }
-     working.Sort((a,b)=>probeLatencyMs[a.Provider+":"+a.Address].CompareTo(probeLatencyMs[b.Provider+":"+b.Address]));
+     working.Sort((a,b)=>probeLatencyMs[EndpointKey(a)].CompareTo(probeLatencyMs[EndpointKey(b)]));
      result.AddRange(working);result.AddRange(untested);result.AddRange(failed);
     }
     return result.ToArray();
@@ -167,30 +237,61 @@ namespace DevProxyApp {
   }
 
   public static string FormatPoolStatus(string server){
-   var pool=ExtendedPool(server)??AllBuiltInEndpoints();
+   var pool=VerificationPool(server);
+   lock(Sync)return FormatProbeReport(pool,probeStatus);
+  }
+
+  static string FormatProbeReport(DnsEndpoint[] pool,Dictionary<string,string> statuses){
    var sb=new StringBuilder();
-   lock(Sync){
-    if(!string.IsNullOrEmpty(lastProbeSummary))sb.AppendLine(lastProbeSummary);
-    else sb.AppendLine("Выбранный Smart DNS и резервные узлы:");
-    int shown=0;
-    foreach(var ep in pool){
-     if(shown++>=10)break;
-     string key=ep.Provider+":"+ep.Address;
-     string st;
-     if(!probeStatus.TryGetValue(key,out st))st="ожидает проверки";
-     sb.AppendLine("• "+ep.Provider+" ("+ep.Host+" / "+ep.Address+") ["+ep.Protocol+"] — "+st);
-    }
+   if(pool.Length==0)return "Адрес DNS не найден. Проверьте имя или введите IP.";
+   string primary=pool[0].Provider;
+   foreach(var ep in pool){
+    string key=EndpointKey(ep);
+    string st;
+    if(!statuses.TryGetValue(key,out st))st="ожидает проверки";
+    string host=ep.Protocol=="HTTPS"?"https://"+ep.Host+ep.Path.Split('?')[0]:ep.Host;
+    sb.AppendLine(ProviderName(ep.Provider)+(ep.Provider!=primary?" (резерв)":"")+" · "+host);
+    sb.AppendLine("   "+ep.Address+":"+ep.Port+" · "+ep.Protocol+" · "+st);
    }
    return sb.ToString().TrimEnd();
   }
 
+  static string EndpointKey(DnsEndpoint ep){return ep.Provider+":"+ep.Address+":"+ep.Port+"/"+ep.Protocol+"/"+ep.Host+ep.Path;}
+
+  static DnsEndpoint[] VerificationPool(string server){
+   var pool=ExtendedPool(server);
+   if(pool!=null)return pool;
+   if(string.IsNullOrWhiteSpace(server)||Uri.CheckHostName(server.Trim())==UriHostNameType.Unknown)return new DnsEndpoint[0];
+   var fallback=new List<DnsEndpoint>();
+   foreach(var ip in ResolveBootstrapIps(server.Trim())){
+    fallback.Add(new DnsEndpoint("custom",ip,server,"","UDP",53));
+    fallback.Add(new DnsEndpoint("custom",ip,server,"","TCP",53));
+   }
+   return fallback.ToArray();
+  }
+
+  internal static string ProbeConfigured(string server,out string report){
+   var pool=VerificationPool(server);
+   if(pool.Length==0){report="";return "Адрес DNS не найден. Проверьте имя или IP.";}
+   return ProbePool(pool,out report);
+  }
+
   public static string ProbeAllBuiltIn(){
-   byte[] query=DnsHttpsTransport.Question("cloudcode-pa.googleapis.com");
-   return ProbeEndpoints(AllBuiltInEndpoints(),endpoint=>{
-    int ttl;return ScopedDnsResolver.ParseAnswer(DnsHttpsTransport.Exchange(endpoint,query,2500),new byte[]{0,0},"cloudcode-pa.googleapis.com",out ttl).ToString();
-   },4500);
+   string report;
+   return ProbePool(AllBuiltInEndpoints(),out report);
+  }
+
+  static string ProbePool(DnsEndpoint[] endpointsToCheck,out string report){
+   byte[] query=DnsHttpsTransport.Question(ProbeDomain);
+   return RunEndpointProbes(endpointsToCheck,endpoint=>{
+    int ttl;return ScopedDnsResolver.ParseAnswer(DnsHttpsTransport.Exchange(endpoint,query,2500),new byte[]{0,0},ProbeDomain,out ttl).ToString();
+   },4500,out report);
   }
   internal static string ProbeEndpoints(DnsEndpoint[] all,Func<DnsEndpoint,string> probe,int waitMilliseconds){
+   string report;
+   return RunEndpointProbes(all,probe,waitMilliseconds,out report);
+  }
+  static string RunEndpointProbes(DnsEndpoint[] all,Func<DnsEndpoint,string> probe,int waitMilliseconds,out string report){
    if(all==null||probe==null)throw new ArgumentNullException();
    int generation;lock(Sync){generation=++probeGeneration;}
    var gate=new object();bool accepting=true;
@@ -206,13 +307,13 @@ namespace DevProxyApp {
       string ip=probe(current);
       sw.Stop();
       latency=(int)sw.ElapsedMilliseconds;
-      statusText="✓ "+latency+" мс ("+ip+")";
+      statusText="ответ за "+latency+" мс, IP "+ip;
      }catch(Exception ex){
       sw.Stop();
-      statusText="✗ недоступен ("+ex.GetType().Name+")";
+      statusText=ex is TimeoutException?"тайм-аут":ex is System.Security.Authentication.AuthenticationException?"ошибка TLS":"нет ответа ("+ex.GetType().Name+")";
      }
      lock(gate){
-      if(accepting){string key=current.Provider+":"+current.Address;statuses[key]=statusText;latencies[key]=latency;if(latency>=0)okCount++;}
+      if(accepting){string key=EndpointKey(current);statuses[key]=statusText;latencies[key]=latency;if(latency>=0)okCount++;}
       remaining--;Monitor.PulseAll(gate);
      }
     });
@@ -221,10 +322,11 @@ namespace DevProxyApp {
     var watch=Stopwatch.StartNew();while(remaining>0){int left=waitMilliseconds-(int)watch.ElapsedMilliseconds;if(left<=0)break;Monitor.Wait(gate,left);}
     accepting=false;unfinished=remaining;
    }
-   string summary="Проверка завершена в "+DateTime.Now.ToString("HH:mm:ss")+": доступно узлов "+okCount+" из "+all.Length+"."+(unfinished>0?" Не дождались ответа: "+unfinished+".":"");
+   string summary=DateTime.Now.ToString("HH:mm:ss")+" · ответов DNS "+okCount+" из "+all.Length+"."+(unfinished>0?" Тайм-аутов проверки: "+unfinished+".":"");
+   foreach(var endpoint in all){string key=EndpointKey(endpoint);if(!statuses.ContainsKey(key)){statuses[key]="тайм-аут проверки";latencies[key]=-1;}}
+   report=FormatProbeReport(all,statuses);
    lock(Sync){
     if(generation==probeGeneration){
-     foreach(var endpoint in all){string key=endpoint.Provider+":"+endpoint.Address;if(!statuses.ContainsKey(key)){statuses[key]="✗ тайм-аут проверки";latencies[key]=-1;}}
      foreach(var item in statuses)probeStatus[item.Key]=item.Value;
      foreach(var item in latencies)probeLatencyMs[item.Key]=item.Value;
      lastCheckedUtc=DateTime.UtcNow;
@@ -397,6 +499,10 @@ namespace DevProxyApp {
   }
   public static string HostFor(string provider){return Hosts[provider];}
   public static string[] ParseProfile(string provider,byte[] content){
+   var primaryAddresses=new HashSet<string>();
+   return ParseOfficialProfile(provider,content,primaryAddresses);
+  }
+  static string[] ParseOfficialProfile(string provider,byte[] content,HashSet<string> primaryAddresses){
    if(content==null||content.Length>131072)throw new InvalidDataException("DNS profile too large.");
    if(content.Length==0)throw new InvalidDataException("Empty DNS profile.");
    if(content[0]==0x30){var signed=new SignedCms();signed.Decode(content);signed.CheckSignature(true);content=signed.ContentInfo.Content;}
@@ -407,16 +513,33 @@ namespace DevProxyApp {
    foreach(XmlNode settings in document.SelectNodes("//key[text()='DNSSettings']/following-sibling::*[1][self::dict]")){
     var protocol=settings.SelectSingleNode("key[text()='DNSProtocol']/following-sibling::*[1][self::string]");
     var url=settings.SelectSingleNode("key[text()='ServerURL']/following-sibling::*[1][self::string]");
-    if(protocol==null||protocol.InnerText!="HTTPS"||url==null||url.InnerText!="https://"+Hosts[provider]+"/dns-query")continue;
+    if(protocol==null||protocol.InnerText!="HTTPS"||url==null)continue;
+    bool primary=provider=="dagami"&&url.InnerText=="https://dns.dagami.ru/dns-query";
+    if(!primary&&url.InnerText!=(provider=="magicdns"?MagicDnsAuthority:"https://"+Hosts[provider]+"/dns-query"))continue;
     foreach(XmlNode item in settings.SelectNodes("key[text()='ServerAddresses']/following-sibling::*[1][self::array]/string")){
-     string value=item.InnerText.Trim();if(PublicAddress(value)&&!addresses.Contains(value))addresses.Add(IPAddress.Parse(value).ToString());
+     string value=item.InnerText.Trim();
+     if(!PublicAddress(value))continue;
+     value=IPAddress.Parse(value).ToString();
+     if(!addresses.Contains(value))addresses.Add(value);
+     if(primary)primaryAddresses.Add(value);
      if(addresses.Count>8)throw new InvalidDataException("Too many DNS profile addresses.");
     }
    }
    if(addresses.Count==0)throw new InvalidDataException("Official DNS profile has no matching HTTPS resolver.");return addresses.ToArray();
   }
   static byte[] DownloadProfile(string provider){
-   Uri source=Profiles[provider];var candidates=new List<string>();
+   try{return DownloadProfileFrom(Profiles[provider]);}
+   catch(IOException){
+    if(provider!="magicdns")throw;
+    return DownloadProfileFrom(new Uri("https://magicdns.ru/profile.mobileconfig"));
+   }
+  }
+  static byte[] DownloadProfileFrom(Uri source){
+   var candidates=new List<string>();
+   if(source.Host==MagicDnsHost)
+    foreach(var endpoint in Snapshot())if(endpoint.Provider=="magicdns")candidates.Add(endpoint.Address);
+   foreach(string address in candidates)try{return DnsHttpsTransport.Request(address,source.Host,source.PathAndQuery,"GET",null,null,131072,3500);}catch{}
+   candidates.Clear();
    foreach(var endpoint in Snapshot()){
     try{int ttl;byte[] query=DnsHttpsTransport.Question(source.Host);var address=ScopedDnsResolver.ParseAnswer(DnsHttpsTransport.Exchange(endpoint,query),new byte[]{0,0},source.Host,out ttl);if(!candidates.Contains(address.ToString()))candidates.Add(address.ToString());if(candidates.Count>=2)break;}catch{}
    }
@@ -432,15 +555,18 @@ namespace DevProxyApp {
    try{
     var errors=new List<string>();
     foreach(string provider in ProviderIds)try{
-     var addresses=new List<string>(ParseProfile(provider,(download??DownloadProfile)(provider)));
+     var primaryAddresses=new HashSet<string>();
+     var addresses=new List<string>(ParseOfficialProfile(provider,(download??DownloadProfile)(provider),primaryAddresses));
      if(provider=="dagami")IncludeDagamiSeeds(addresses);
+     Func<string,DnsEndpoint> endpointFor=address=>primaryAddresses.Contains(address)
+      ?new DnsEndpoint(provider,address,"dns.dagami.ru"):ProviderEndpoint(provider,address);
      var healthy=new List<DnsEndpoint>();
      if(verify!=null){
-      foreach(string address in addresses){var candidate=ProviderEndpoint(provider,address);if(verify(candidate))healthy.Add(candidate);else Logger.Log("[DNS catalogue] provider="+provider+" rejected="+address+" (DoH verification)");}
+      foreach(string address in addresses){var candidate=endpointFor(address);if(verify(candidate))healthy.Add(candidate);else Logger.Log("[DNS catalogue] provider="+provider+" rejected="+address+" (DoH verification)");}
      }else{
       bool[] ok=new bool[addresses.Count];
-      System.Threading.Tasks.Parallel.For(0,addresses.Count,i=>{var candidate=ProviderEndpoint(provider,addresses[i]);try{int ttl;byte[] query=DnsHttpsTransport.Question("example.com");ScopedDnsResolver.ParseAnswer(DnsHttpsTransport.Exchange(candidate,query,2500),new byte[]{0,0},"example.com",out ttl);ok[i]=true;}catch{ok[i]=false;}});
-      for(int i=0;i<addresses.Count;i++){var candidate=ProviderEndpoint(provider,addresses[i]);if(ok[i])healthy.Add(candidate);else Logger.Log("[DNS catalogue] provider="+provider+" rejected="+addresses[i]+" (DoH verification)");}
+      System.Threading.Tasks.Parallel.For(0,addresses.Count,i=>{try{ok[i]=VerifyEndpoint(endpointFor(addresses[i]));}catch{ok[i]=false;}});
+      for(int i=0;i<addresses.Count;i++){var candidate=endpointFor(addresses[i]);if(ok[i])healthy.Add(candidate);else Logger.Log("[DNS catalogue] provider="+provider+" rejected="+addresses[i]+" (DoH verification)");}
      }
      if(healthy.Count==0)throw new IOException("No verified DoH endpoints in the official profile.");
      lock(Sync){var combined=new List<DnsEndpoint>();foreach(string id in ProviderIds)if(id==provider)combined.AddRange(healthy);else combined.AddRange(endpoints.FindAll(x=>x.Provider==id));endpoints=combined;}
@@ -459,6 +585,7 @@ namespace DevProxyApp {
      }
     }
     if(download==null&&verify==null){
+     RefreshNamedEndpoints(LookupNamedAddresses,VerifyEndpoint);
      try{ProbeAllBuiltIn();}catch{}
     }else{
      lock(Sync){lastCheckedUtc=DateTime.UtcNow;lastError=errors.Count==0?null:string.Join(", ",errors.ToArray());}
@@ -467,14 +594,28 @@ namespace DevProxyApp {
    }finally{Interlocked.Exchange(ref refreshing,0);}
   }
   public static void Initialize(string path=null,bool background=true){
-   lock(Sync){if(timer!=null)return;cachePath=path??Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),"devproxy","dns-endpoints.json");}
-   Load();if(background)timer=new Timer(state=>{try{Refresh();}catch(Exception error){Logger.Log("[DNS catalogue] "+error.GetType().Name);}},null,0,600000);
+   lock(Sync){
+    if(timer!=null)return;
+    cachePath=path??Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),"devproxy","dns-endpoints.json");
+    Load();
+    if(background)timer=new Timer(state=>{try{Refresh();}catch(Exception error){Logger.Log("[DNS catalogue] "+error.GetType().Name);}},null,0,600000);
+   }
   }
   static void Load(){try{
    if(!File.Exists(cachePath)||new FileInfo(cachePath).Length>32768)return;
    var json=new JavaScriptSerializer{MaxJsonLength=32768};var saved=json.Deserialize<Dictionary<string,object>>(File.ReadAllText(cachePath));
    if(Convert.ToInt32(saved["Version"])!=1)return;var values=new List<DnsEndpoint>();
+   object rawPrimary;
+   var primaryIps=new HashSet<string>();
+   if(saved.TryGetValue("dagami-primary",out rawPrimary)&&rawPrimary is System.Collections.IEnumerable&&!(rawPrimary is string)){
+    foreach(object item in (System.Collections.IEnumerable)rawPrimary)if(primaryIps.Count<8&&PublicAddress(Convert.ToString(item)))primaryIps.Add(Convert.ToString(item));
+   }
    foreach(string provider in ProviderIds){
+    object authority;
+    if(provider=="magicdns"&&(!saved.TryGetValue("magicdns-authority",out authority)||Convert.ToString(authority)!=MagicDnsAuthority)){
+     foreach(string ip in MagicDnsSeeds)values.Add(ProviderEndpoint(provider,ip));
+     continue;
+    }
     var list=(System.Collections.IEnumerable)saved[provider];
     var addresses=new List<string>();int count=0;
     foreach(object item in list){
@@ -484,12 +625,29 @@ namespace DevProxyApp {
     }
     if(count==0)throw new InvalidDataException("Empty cached provider.");
     if(provider=="dagami")IncludeDagamiSeeds(addresses);
-    foreach(string address in addresses)values.Add(ProviderEndpoint(provider,address));
+    foreach(string address in addresses)values.Add(provider=="dagami"&&primaryIps.Contains(address)
+     ?new DnsEndpoint(provider,address,"dns.dagami.ru"):ProviderEndpoint(provider,address));
    }
-   lock(Sync)endpoints=values;
+   var named=new List<DnsEndpoint>();
+   foreach(string provider in NamedProviderIds){
+    object stored;if(!saved.TryGetValue(provider,out stored))continue;
+    var list=stored as System.Collections.IEnumerable;if(list==null||stored is string)continue;
+    var accepted=new List<DnsEndpoint>();int count=0;
+    foreach(object item in list){
+     string address=Convert.ToString(item);
+     if(!PublicAddress(address)||++count>8){accepted.Clear();break;}
+     address=IPAddress.Parse(address).ToString();
+     if(!accepted.Exists(x=>x.Address==address))accepted.Add(NamedEndpoint(provider,address));
+    }
+    named.AddRange(accepted);
+   }
+   lock(Sync){endpoints=values;namedEndpoints=named;}
   }catch{}}
   static void Save(){if(cachePath==null)return;string temporary=null;try{
    Directory.CreateDirectory(Path.GetDirectoryName(cachePath));var data=new Dictionary<string,object>{{"Version",1}};foreach(string provider in ProviderIds){var values=new List<string>();foreach(var endpoint in Snapshot())if(endpoint.Provider==provider)values.Add(endpoint.Address);data[provider]=values.ToArray();}
+   data["magicdns-authority"]=MagicDnsAuthority;
+   data["dagami-primary"]=Array.ConvertAll(Array.FindAll(Snapshot(),x=>x.Provider=="dagami"&&x.Host=="dns.dagami.ru"),x=>x.Address);
+   lock(Sync)foreach(string provider in NamedProviderIds)data[provider]=namedEndpoints.FindAll(x=>x.Provider==provider).ConvertAll(x=>x.Address).ToArray();
    temporary=cachePath+"."+Guid.NewGuid().ToString("N")+".tmp";File.WriteAllText(temporary,new JavaScriptSerializer().Serialize(data),new UTF8Encoding(false));if(File.Exists(cachePath))File.Replace(temporary,cachePath,null);else File.Move(temporary,cachePath);
   }catch(Exception error){Logger.Log("[DNS catalogue cache] "+error.GetType().Name);}finally{if(temporary!=null&&File.Exists(temporary))try{File.Delete(temporary);}catch{}}}
  }

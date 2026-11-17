@@ -133,7 +133,7 @@ class DnsTransportChecks {
    try{using(var bridge=new LocalProxyBridge()){
     Assert(bridge.Start(0,"http://127.0.0.1:"+((IPEndPoint)upstream.LocalEndpoint).Port),"Proxy fixture bridge failed");
     var resolver=Resolver(dns);
-    if(connectionFailure){var cache=(Dictionary<string,KeyValuePair<DateTime,IPAddress>>)typeof(ScopedDnsResolver).GetField("_cache",BindingFlags.Instance|BindingFlags.NonPublic).GetValue(resolver);cache["www.googleapis.com"]=new KeyValuePair<DateTime,IPAddress>(DateTime.UtcNow.AddMinutes(1),IPAddress.Parse("127.203.10.17"));}
+    if(connectionFailure){var cache=(Dictionary<string,Tuple<DateTime,IPAddress,DnsEndpoint>>)typeof(ScopedDnsResolver).GetField("_cache",BindingFlags.Instance|BindingFlags.NonPublic).GetValue(resolver);cache["www.googleapis.com"]=Tuple.Create(DateTime.UtcNow.AddMinutes(1),IPAddress.Parse("127.203.10.17"),(DnsEndpoint)null);}
     typeof(LocalProxyBridge).GetField("_scopedDns",BindingFlags.Instance|BindingFlags.NonPublic).SetValue(bridge,resolver);
     using(var client=new TcpClient("127.0.0.1",bridge.BoundPort)){client.GetStream().ReadTimeout=5000;byte[] bytes=Encoding.ASCII.GetBytes("CONNECT www.googleapis.com:443 HTTP/1.1\r\nHost: www.googleapis.com:443\r\n\r\n");client.GetStream().Write(bytes,0,bytes.Length);Assert(Header(client.GetStream()).Contains(" 200 "),"Smart DNS failure did not recover through proxy");}
     Assert(worker.Join(5000)&&failure==null&&request.StartsWith("CONNECT www.googleapis.com:443"),"Configured upstream did not receive fallback CONNECT");
@@ -147,8 +147,13 @@ class DnsTransportChecks {
   try{using(var bridge=new LocalProxyBridge())using(var dns=new Server("dead")){
    Assert(bridge.Start(0,"http://127.0.0.1:"+((IPEndPoint)upstream.LocalEndpoint).Port),"Cloud Code fixture bridge failed");
    var resolver=Resolver(dns);
-   var cache=(Dictionary<string,KeyValuePair<DateTime,IPAddress>>)typeof(ScopedDnsResolver).GetField("_cache",BindingFlags.Instance|BindingFlags.NonPublic).GetValue(resolver);
-   cache[host]=new KeyValuePair<DateTime,IPAddress>(DateTime.UtcNow.AddMinutes(1),IPAddress.Parse("127.203.10.19"));
+   var cache=(Dictionary<string,Tuple<DateTime,IPAddress,DnsEndpoint>>)typeof(ScopedDnsResolver).GetField("_cache",BindingFlags.Instance|BindingFlags.NonPublic).GetValue(resolver);
+   var source=new DnsEndpoint("dagami","192.0.2.53","dns.dagami.ru");
+   cache[host]=Tuple.Create(DateTime.UtcNow.AddMinutes(1),IPAddress.Parse("127.203.10.19"),source);
+   var resolve=typeof(ScopedDnsResolver).GetMethod("ResolveWithSource",BindingFlags.Instance|BindingFlags.NonPublic);
+   var args=new object[]{host,null};
+   resolve.Invoke(resolver,args);
+   Assert(ReferenceEquals(source,args[1]),"Cached DNS response lost its source");
    typeof(LocalProxyBridge).GetField("_scopedDns",BindingFlags.Instance|BindingFlags.NonPublic).SetValue(bridge,resolver);
    using(var client=new TcpClient("127.0.0.1",bridge.BoundPort)){
     var stream=client.GetStream();stream.ReadTimeout=5000;byte[] bytes=Encoding.ASCII.GetBytes("CONNECT "+host+":443 HTTP/1.1\r\nHost: "+host+":443\r\n\r\n");stream.Write(bytes,0,bytes.Length);
@@ -171,7 +176,9 @@ class DnsTransportChecks {
   typeof(ConfigManager).GetField("instance",BindingFlags.Static|BindingFlags.NonPublic).SetValue(null,
    new ConfigManager{DnsObfuscation=true,DpiDesyncMode="TlsRecordSplit"});
   var defaults=ScopedDnsResolver.ServerCandidates("DNS.DAGAMI.RU.");
-  Assert(defaults.Length==5&&defaults[0]=="48.102.213.179"&&defaults[1]=="31.76.52.235","Dagami/MagicDNS default pool missing or out of order");
+  Assert(defaults.Length==4&&defaults[0]=="48.102.213.179"&&defaults[1]=="31.76.52.235"
+   &&Array.IndexOf(defaults,"217.144.190.216")>=2&&Array.IndexOf(defaults,"109.120.187.249")>=2,
+   "Dagami/MagicDNS default pool missing or out of order");
   Assert(ScopedDnsResolver.ServerCandidates("31.76.52.235")[0]=="31.76.52.235","Chosen node lost priority");
   Assert(ScopedDnsResolver.ServerCandidates("46.29.165.108")[0]=="48.102.213.179","Legacy node did not migrate to current Dagami bootstrap");
   Assert(ScopedDnsResolver.ServerCandidates("192.0.2.53").Length==1,"Custom DNS silently sent to Dagami");

@@ -173,7 +173,7 @@ namespace DevProxyApp {
     Directory.CreateDirectory(DirectoryPath);
     string customPath=Path.Combine(DirectoryPath,"dns-custom.json");
     string targetSpec=(spec??"").Trim();
-    if(string.IsNullOrEmpty(targetSpec))targetSpec="dns.dagami.ru";
+    if(string.IsNullOrEmpty(targetSpec))targetSpec=DnsProviders.MagicDnsHost;
     string temporary=customPath+"."+Guid.NewGuid().ToString("N")+".tmp";
     try {
      File.WriteAllText(temporary,new JavaScriptSerializer().Serialize(new{Spec=targetSpec,DnsObfuscation=ConfigManager.Instance.DnsObfuscation,DpiDesyncMode=ConfigManager.Instance.DpiDesyncMode}),new System.Text.UTF8Encoding(false));

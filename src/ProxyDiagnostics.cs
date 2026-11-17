@@ -256,7 +256,7 @@ namespace DevProxyApp {
    if (string.IsNullOrWhiteSpace(value)) return false;
    Uri proxy;if(!Uri.TryCreate(value.Trim(),UriKind.Absolute,out proxy))return false;
    string host=proxy.IdnHost.TrimEnd('.').ToLowerInvariant();
-   return host=="dns.dagami.ru" || host=="dns.magicdns.ru" || host=="dns.comss.one" || host=="dns.geohide.ru" || host=="dns.xbox-dns.ru" || host=="dns.malw.link";
+   return host=="dns.dagami.ru" || host=="dns.magicdns.ru" || host==DnsProviders.MagicDnsHost || host=="dns.comss.one" || host=="dns.geohide.ru" || host=="dns.xbox-dns.ru" || host=="dns.malw.link";
   }
 
   public static bool TryParse(string value,out Uri proxy) {

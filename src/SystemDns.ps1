@@ -179,11 +179,6 @@ function Validate-Request($Request) {
     if(-not [Net.IPAddress]::TryParse([string]$Request.Server,[ref]$ip)){throw 'Use a literal DNS server IP address.'}
     $Request.Server=$ip.ToString()
     $servers=@(Get-ConfiguredServers $Request)
-    if(-not $Request.PSObject.Properties['Servers'] -or $null -eq $Request.Servers){
-        $dagami=@('45.147.31.32','46.29.165.108','89.125.103.139');$magic=@('109.120.132.43','94.249.177.102','2.56.175.196')
-        $pool=if($Request.Server -in $magic){$magic}else{@($dagami)+@($magic)}
-        if($Request.Server -in $pool){$servers=@($Request.Server)+@($pool | Where-Object {$_ -ne $Request.Server})}
-    }
     if($servers.Count -lt 1 -or $servers.Count -gt 16){throw 'Use one to sixteen DNS server IP addresses.'}
     $normalized=@(@(foreach($server in $servers){
         $address=$null

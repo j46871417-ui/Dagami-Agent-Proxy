@@ -19,6 +19,12 @@ namespace DevProxyApp
         internal long LastScannedModelTunnels;
         internal bool ModelRouteObserved;
         internal readonly HashSet<System.Net.IPAddress> ModelSmartDnsAddresses = new HashSet<System.Net.IPAddress>();
+        internal DnsEndpoint ModelDnsSource;
+        internal System.Net.IPAddress ModelRelay;
+        internal bool ModelDnsFallback {
+            get { return ModelRouteObserved && ModelBridge.SelectedDnsProvider != null &&
+                (ModelDnsSource == null || ModelBridge.SelectedDnsProvider != ModelDnsSource.Provider); }
+        }
         internal bool ModelPollPending;
         internal HashSet<int> ProcessIds()
         {

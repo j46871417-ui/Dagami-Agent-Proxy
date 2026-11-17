@@ -57,19 +57,24 @@ class ProxyFailureChecks {
    Assert(outcome()=="RegionRejected","An explicit 403 region rejection was missed");
    File.AppendAllText(first,line("403 PERMISSION_DENIED {\"reason\": \"PERMISSION_DENIED\"}"));
    Assert(outcome()=="None","Generic permissions error triggered route recovery");
+   File.AppendAllText(first,line("Your location is not eligible for this service at this time. Detected location: RU"));
+   Assert(outcome()=="RegionRejected","Current Google regional denial was not recognized");
   } finally {Directory.Delete(root,true);}
   using(var bridge=new LocalProxyBridge()) {
    var note=typeof(LocalProxyBridge).GetMethod("NoteAntigravityApiConnection",flags);
    var peers=typeof(LocalProxyBridge).GetMethod("AntigravityApiPeers",flags);
    var relay=IPAddress.Parse("192.0.2.12");
-   note.Invoke(bridge,new object[]{"daily-cloudcode-pa.googleapis.com:443",101,null});
-   note.Invoke(bridge,new object[]{"accounts.google.com:443",202,relay});
-   note.Invoke(bridge,new object[]{"cloudcode-pa.googleapis.com:443",303,relay});
+   var source=new DnsEndpoint("dagami","192.0.2.53","dns.dagami.ru");
+   note.Invoke(bridge,new object[]{"daily-cloudcode-pa.googleapis.com:443",101,null,null});
+   note.Invoke(bridge,new object[]{"accounts.google.com:443",202,relay,source});
+   note.Invoke(bridge,new object[]{"cloudcode-pa.googleapis.com:443",303,relay,source});
    Assert(((IList)peers.Invoke(bridge,new object[]{1L,new HashSet<int>{101,202}})).Count==0,
     "Unrelated or pre-launch connections were attributed to the active session");
    var owned=(IList)peers.Invoke(bridge,new object[]{1L,new HashSet<int>{303}});
    Assert(owned.Count==1&&relay.Equals(owned[0].GetType().GetField("SmartDnsAddress",flags).GetValue(owned[0])),
     "The session's own model relay address was not attributed to it");
+   Assert(ReferenceEquals(source,owned[0].GetType().GetField("DnsSource",flags).GetValue(owned[0])),
+    "Provider provenance was lost after CONNECT");
   }
  }
 
@@ -81,6 +86,11 @@ class ProxyFailureChecks {
   var fields=BindingFlags.Instance|BindingFlags.NonPublic;
   var candidates=chooser.GetMethod("Candidates",flags);
   var select=chooser.GetMethod("Select",flags);
+  var gate=chooser.GetMethod("UnexpectedDnsProvider",flags);
+  var actual=new[]{new DnsEndpoint("dagami","192.0.2.53","dns.dagami.ru")};
+  Assert((string)gate.Invoke(null,new object[]{"dagami",actual})==null,"Selected DNS provider was rejected");
+  Assert(((string)gate.Invoke(null,new object[]{"geohide",actual})).Contains("Dagami"),"Backup DNS was credited to the selected provider");
+  Assert(gate.Invoke(null,new object[]{"geohide",new DnsEndpoint[]{null}})!=null,"Upstream fallback was credited to selected Smart DNS");
   var name=route.GetField("Name",fields);
   var dns=route.GetField("Dns",fields);
   var proxy=route.GetField("Proxy",fields);

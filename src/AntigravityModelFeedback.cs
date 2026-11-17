@@ -197,6 +197,7 @@ namespace DevProxyApp
                 message.IndexOf("not currently available in your location", StringComparison.OrdinalIgnoreCase) >= 0)
                 return AntigravityModelOutcome.AccountRejected;
             if (message.IndexOf("FAILED_PRECONDITION (code 400): User location is not supported for the API use", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                message.IndexOf("Your location is not eligible for this service at this time. Detected location:", StringComparison.OrdinalIgnoreCase) >= 0 ||
                 (message.IndexOf("403", StringComparison.Ordinal) >= 0 && RegionReason.IsMatch(message)))
                 return AntigravityModelOutcome.RegionRejected;
             return Response.IsMatch(message) ? AntigravityModelOutcome.Streaming : AntigravityModelOutcome.None;
@@ -219,11 +220,13 @@ namespace DevProxyApp
 
         internal void Record(AiRoute route, AntigravityModelOutcome outcome, DateTime at, IEnumerable<IPAddress> smartDnsAddresses)
         {
-            if (route == null || route.PublicProxy ||
+            if ((route != null && route.PublicProxy) ||
                 (outcome != AntigravityModelOutcome.RegionRejected && outcome != AntigravityModelOutcome.Streaming)) return;
+            var addresses = smartDnsAddresses.ToArray();
+            if (route == null && addresses.Length == 0) return;
             if (_entries.Exists(entry => SameTransport(route, entry.Route) && entry.At > at)) return;
             _entries.RemoveAll(entry => SameTransport(route, entry.Route));
-            _entries.Add(new Entry { Route = route, Outcome = outcome, At = at, SmartDnsAddresses = smartDnsAddresses.ToArray() });
+            _entries.Add(new Entry { Route = route, Outcome = outcome, At = at, SmartDnsAddresses = addresses });
             if (_entries.Count > 24) _entries.RemoveAt(0);
         }
 

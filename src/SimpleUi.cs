@@ -7,7 +7,8 @@ using System.Windows.Forms;
 
 namespace DevProxyApp {
  public partial class MainForm {
-  Label _dnsOverview,_dnsAddressDetails;
+  Label _dnsOverview,_dnsCheckStatus,_dnsScopeStatus;
+  TextBox _dnsReport,_dnsCustomSource;
   Label _connectionRouteStatus;
   TextBox _connectionFeedback;
   Func<int,int> _measureConnectionCard;
@@ -17,29 +18,29 @@ namespace DevProxyApp {
   LinkLabel _autoAiStatus;
   FluentButton _encryptedDnsAction;
   DateTime _nextDnsUiRead;
-  bool _encryptedDnsActive,_encryptedDnsRunning,_changingDnsPreference,_probingDnsAddresses;
+  bool _encryptedDnsActive,_encryptedDnsRunning,_changingDnsPreference,_probingDnsAddresses,_dnsDraftDirty;
   CheckBox _wholeNetworkDns;
   CheckBox _dnsObfuscation;
-  ComboBox _dpiModeBox,_dnsPresetBox,_dnsQuickPresetBox,_probeService;
-  LinkLabel _refreshDnsLink,_refreshDnsQuickLink;
+  ComboBox _dpiModeBox,_dnsQuickPresetBox,_probeService;
+  CheckBox _dnsDraftEnabled;
+  FluentButton _checkDnsButton;
   CheckedListBox _dnsNetworkAdapters;
-  Label _appDnsDescription;
-  string _cachedVpnBadge;
+  string _windowsDnsStatus;
 
   static readonly string[][] BuiltInDnsPresets=new string[][]{
-   new[]{"Dagami → MagicDNS (основной и резервный)","dns.dagami.ru"},
-   new[]{"MagicDNS — dns.magicdns.ru (DoH, Gemini + Antigravity)","dns.magicdns.ru"},
-   new[]{"Comss.one — dns.comss.one (DoH, Gemini + Antigravity)","dns.comss.one"},
-   new[]{"GeoHide — dns.geohide.ru (DoH, Gemini / Google AI)","dns.geohide.ru"},
-   new[]{"Malw.link — dns.malw.link (DoT :853, Gemini / AI)","dns.malw.link"},
-   new[]{"Xbox DNS — dns.xbox-dns.ru (DoH)","dns.xbox-dns.ru"},
-   new[]{"Свой DNS (ввести ниже вручную или из .mobileconfig)",""}
+   new[]{"Dagami (резерв MagicDNS)","dns.dagami.ru"},
+   new[]{"MagicDNS",DnsProviders.MagicDnsHost},
+   new[]{"Comss.one","dns.comss.one"},
+   new[]{"GeoHide","dns.geohide.ru"},
+   new[]{"Malw.link","dns.malw.link"},
+   new[]{"Xbox DNS","dns.xbox-dns.ru"},
+   new[]{"Свой DNS",""}
   };
 
   static int DnsPresetIndex(string host){
    string clean=(host??"").Trim().TrimEnd('.').ToLowerInvariant();
-   if(string.IsNullOrEmpty(clean)||clean=="dns.dagami.ru"||clean=="dagami.ru"||clean=="auto")return 0;
-   if(clean=="dns.magicdns.ru"||clean=="magicdns.ru")return 1;
+   if(clean=="dns.dagami.ru"||clean=="doh.dagami.ru"||clean=="dagami.ru"||clean=="dagami"||clean=="auto")return 0;
+   if(string.IsNullOrEmpty(clean)||clean==DnsProviders.MagicDnsHost||clean=="dns.magicdns.ru"||clean=="magicdns.ru"||clean=="magicdns")return 1;
    if(clean=="dns.comss.one"||clean=="router.comss.one"||clean=="comss.one")return 2;
    if(clean=="dns.geohide.ru"||clean=="geohide.ru")return 3;
    if(clean=="dns.malw.link"||clean=="malw.link")return 4;
@@ -414,7 +415,7 @@ namespace DevProxyApp {
    bool useProxy=cfg.UseProxy, useDns=cfg.UseDagamiDns, obfuscation=cfg.DnsObfuscation;
    bool antigravity=service=="Antigravity";
    DateTime now=DateTime.UtcNow;
-   bool recovering=antigravity&&(refused!=null||_antigravityRoutes.HasRecentRejection(now));
+   bool recovering=antigravity&&(refused!=null||refusedAddresses!=null||_antigravityRoutes.HasRecentRejection(now));
    var avoided=antigravity?_antigravityRoutes.RefusedSmartDnsAddresses(now):null;
    if(antigravity&&refusedAddresses!=null)avoided.UnionWith(refusedAddresses);
    bool allowPublic=!recovering&&_autoAiPublic.Checked;
@@ -636,21 +637,7 @@ namespace DevProxyApp {
    });
    _dpiModeBox.SelectedIndex=DpiModeIndex(ConfigManager.Instance.DpiDesyncMode); PreventAccidentalScroll(_dpiModeBox);
    rows.Controls.Add(_dpiModeBox);
-   rows.Controls.Add(FluentLabel("Встроенные DNS для Gemini / Antigravity и свой DNS",13,true));
-   _dnsPresetBox=new ComboBox{Width=450,DropDownStyle=ComboBoxStyle.DropDownList,AccessibleName="Выбор встроенного Smart DNS провайдера"};
-   foreach(var preset in BuiltInDnsPresets)_dnsPresetBox.Items.Add(preset[0]);
-   _dnsPresetBox.SelectedIndex=DnsPresetIndex(ConfigManager.Instance.DnsHost); PreventAccidentalScroll(_dnsPresetBox);
-   _dnsPresetBox.SelectedIndexChanged+=(s,e)=>{
-    if(_changingDnsPreference)return;
-    int idx=_dnsPresetBox.SelectedIndex;
-    if(idx>=0&&idx<BuiltInDnsPresets.Length-1&&!string.IsNullOrEmpty(BuiltInDnsPresets[idx][1]))_dnsBox.Text=BuiltInDnsPresets[idx][1];
-   };
-   rows.Controls.Add(_dnsPresetBox);
-   rows.Controls.Add(_dnsBox);
-   var importProfile=new LinkLabel{Text="Загрузить DNS из файла .mobileconfig…",AutoSize=true,LinkColor=FluentTheme.Accent,Margin=new Padding(0,2,0,4)};
-   importProfile.LinkClicked+=(s,e)=>ExecuteNativeAction(ImportDnsMobileConfig);
-   rows.Controls.Add(importProfile);
-   var dnsNote=new Label{AutoSize=false,Size=new Size(520,52),ForeColor=FluentTheme.Muted,Text="Вшиты: Dagami, MagicDNS, Comss.one, GeoHide, Malw.link и Xbox DNS. Также поддерживаются любые свои DoH (https://...), DoT (tls://...), UDP/TCP (ip:порт) и .mobileconfig."};rows.Controls.Add(dnsNote);
+   rows.Controls.Add(_dnsObfuscation);
    var save=new FlowLayoutPanel{Width=520,Height=44,WrapContents=false};AddNativeButton(save,"Сохранить параметры",()=>{if(!SaveNativeSettings())return;_appFeedback.Text="Параметры сохранены.";});rows.Controls.Add(save);
    _wholeNetworkDns=new CheckBox{Text="Шифровать DNS всей сети на выбранных адаптерах",AutoSize=true};rows.Controls.Add(_wholeNetworkDns);
    _dnsNetworkAdapters=new CheckedListBox{Width=520,Height=100,Visible=false,CheckOnClick=true,AccessibleName="Адаптеры для шифрованного DNS всей сети"};
@@ -659,11 +646,7 @@ namespace DevProxyApp {
     if(_wholeNetworkDns.Checked&&!_preview)try{var selected=new HashSet<string>(StringComparer.OrdinalIgnoreCase);foreach(SystemDnsAdapter item in _dnsNetworkAdapters.CheckedItems)selected.Add(item.Guid);_dnsNetworkAdapters.Items.Clear();foreach(var item in SystemDnsManager.Adapters())_dnsNetworkAdapters.Items.Add(item,selected.Contains(item.Guid));}
     catch(Exception error){MessageBox.Show(this,"Не удалось обновить список подключений: "+error.GetType().Name,"DNS",MessageBoxButtons.OK,MessageBoxIcon.Warning);}
    };
-   rows.Controls.Add(new Label{Size=new Size(520,76),ForeColor=FluentTheme.Muted,Text="По умолчанию меняются только DNS-маршруты ИИ-сервисов. Общий режим применяется при следующем включении в Windows; виртуальные VPN-интерфейсы отмечены [VPN/TUN]."});
-   _dnsAddressDetails=new Label{AutoSize=false,Size=new Size(520,180),ForeColor=FluentTheme.Muted};rows.Controls.Add(_dnsAddressDetails);
-   _refreshDnsLink=new LinkLabel{Text="Проверить актуальные адреса",AutoSize=true,LinkColor=FluentTheme.Accent};
-   _refreshDnsLink.LinkClicked+=(s,e)=>RunLiveDnsProbe();
-   rows.Controls.Add(_refreshDnsLink);
+   rows.Controls.Add(new Label{Size=new Size(520,52),ForeColor=FluentTheme.Muted,Text="Выбор адаптеров вступает в силу при включении DNS в Windows. Виртуальные адаптеры отмечены [VPN/TUN]."});
    page.Controls.Add(rows);return page;
   }
 
@@ -683,26 +666,29 @@ namespace DevProxyApp {
 
   void RunLiveDnsProbe(){
    if(_probingDnsAddresses||_preview)return;
+   string selected=DnsDraftSpec();
+   if(string.IsNullOrWhiteSpace(selected)){_dnsCheckStatus.Text="Введите адрес DNS или выберите провайдера.";return;}
    _probingDnsAddresses=true;
-   if(_refreshDnsLink!=null){_refreshDnsLink.Enabled=false;_refreshDnsLink.Text="Проверка доступности узлов…";}
-   if(_refreshDnsQuickLink!=null){_refreshDnsQuickLink.Enabled=false;_refreshDnsQuickLink.Text="Проверка адресов…";}
-   if(_dnsAddressDetails!=null)_dnsAddressDetails.Text="Проверяем ответы Dagami, MagicDNS, Comss.one, GeoHide, Malw.link и Xbox DNS…";
-   if(_dnsOverview!=null)_dnsOverview.Text="Выполняется проверка доступности встроенных DNS-узлов (DoH / DoT)…";
+   _checkDnsButton.Enabled=false;
+   _dnsReport.Clear();
+   _dnsCheckStatus.Text="Обновляем адреса и отправляем DNS-запрос…";
    System.Threading.ThreadPool.QueueUserWorkItem(state=>{
-    string summary;
+    string summary,report;
     try{
      DnsProviders.Initialize(null,false);
-     summary=DnsProviders.ProbeAllBuiltIn();
      DnsProviders.Refresh();
+     summary=DnsProviders.ProbeConfigured(selected,out report);
     }catch(Exception ex){
-     summary="Ошибка проверки DNS: "+ex.Message;
+     summary="Проверку DNS не удалось завершить. Проверьте адрес и повторите.";
+     report=ex.GetType().Name;
     }
     try{BeginInvoke(new Action(()=>{
      _probingDnsAddresses=false;
-     if(_refreshDnsLink!=null){_refreshDnsLink.Enabled=true;_refreshDnsLink.Text="Проверить актуальные адреса";}
-     if(_refreshDnsQuickLink!=null){_refreshDnsQuickLink.Enabled=true;_refreshDnsQuickLink.Text="Проверить актуальные адреса";}
-     _nextDnsUiRead=DateTime.MinValue;
-     UpdateDnsPage();
+     _checkDnsButton.Enabled=!_nativeBusy;
+     if(string.Equals(selected,DnsDraftSpec(),StringComparison.OrdinalIgnoreCase)){
+      _dnsCheckStatus.Text=summary;
+      _dnsReport.Text=report;
+     }else _dnsCheckStatus.Text="Источник изменился. Проверьте новый выбор.";
      Logger.Log("[DNS Probe] "+summary);
     }));}catch(InvalidOperationException){}
    });
@@ -719,9 +705,9 @@ namespace DevProxyApp {
     foreach(var ep in endpoints)if(!addrs.Contains(ep.Address))addrs.Add(ep.Address);
     string spec=first.Protocol=="TLS"?"tls://"+first.Host+(first.Port!=853?":"+first.Port:"")+"#"+string.Join(",",addrs.ToArray()):
      "https://"+first.Host+(first.Port!=443?":"+first.Port:"")+(string.IsNullOrEmpty(first.Path)?"/dns-query":first.Path)+"#"+string.Join(",",addrs.ToArray());
-    _dnsBox.Text=spec;
-    if(!SaveNativeSettings())return;
-    MessageBox.Show(this,"Профиль DNS загружен и сохранён:\r\n"+spec,"Свой DNS",MessageBoxButtons.OK,MessageBoxIcon.Information);
+    _dnsQuickPresetBox.SelectedIndex=BuiltInDnsPresets.Length-1;
+    _dnsCustomSource.Text=spec;
+    _dnsScopeStatus.Text="Профиль загружен. Нажмите «Применить для приложений», чтобы сохранить.";
    }
   }
   Panel BuildFlatConnectionPage(Panel connection, Panel advanced){
@@ -762,48 +748,112 @@ namespace DevProxyApp {
    rows.Controls.Add(connection,0,0);rows.Controls.Add(options,0,1);rows.Controls.Add(advanced,0,2);host.Controls.Add(rows);fit();return host;
   }
   Panel BuildDnsPage(){
-   var page=new FluentLayout{Dock=DockStyle.Fill,ColumnCount=1,RowCount=3,Padding=new Padding(4)};page.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,100));page.RowStyles.Add(new RowStyle(SizeType.Absolute,236));page.RowStyles.Add(new RowStyle(SizeType.Absolute,266));page.RowStyles.Add(new RowStyle(SizeType.Percent,100));
-   var appCard=new FluentCard{Dock=DockStyle.Fill,Padding=new Padding(16,12,16,12),Margin=new Padding(0,0,0,8)};var appRows=new FluentLayout{Dock=DockStyle.Fill,ColumnCount=1,RowCount=5};appRows.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,100));foreach(int height in new[]{38,28,28,38})appRows.RowStyles.Add(new RowStyle(SizeType.Absolute,height));appRows.RowStyles.Add(new RowStyle(SizeType.Percent,100));
-   appRows.Controls.Add(FluentLabel("DNS для приложений",15,true),0,0);
-   appRows.Controls.Add(_dnsEnabled,0,1);
-   appRows.Controls.Add(_dnsObfuscation,0,2);
-   var quickRow=new FlowLayoutPanel{Dock=DockStyle.Fill,WrapContents=false,Margin=Padding.Empty};
-   _dnsQuickPresetBox=new ComboBox{Width=390,DropDownStyle=ComboBoxStyle.DropDownList,AccessibleName="Быстрый выбор DNS-провайдера"};
+   var host=new FluentPageHost{Dock=DockStyle.Fill,AutoScroll=true,BackColor=FluentTheme.Background};
+   var page=new FluentLayout{Dock=DockStyle.Top,Height=634,ColumnCount=1,RowCount=3,Padding=new Padding(4,4,8,4)};
+   page.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,100));
+   foreach(int height in new[]{220,246,160})page.RowStyles.Add(new RowStyle(SizeType.Absolute,height));
+   var appRows=DnsCard(page,0,30,31,30,32,37,34);
+   appRows.Controls.Add(FluentLabel("DNS для запуска через Dagami",15,true),0,0);
+   _dnsDraftEnabled=new CheckBox{Name="DnsForAppsEnabled",Text="Использовать DNS для поддерживаемых доменов",AutoSize=true};
+   appRows.Controls.Add(_dnsDraftEnabled,0,1);
+   _dnsQuickPresetBox=new ComboBox{Name="DnsProviderChoice",Dock=DockStyle.Fill,DropDownStyle=ComboBoxStyle.DropDownList,AccessibleName="Провайдер DNS для приложений"};
    foreach(var preset in BuiltInDnsPresets)_dnsQuickPresetBox.Items.Add(preset[0]);
-   _dnsQuickPresetBox.SelectedIndex=DnsPresetIndex(ConfigManager.Instance.DnsHost); PreventAccidentalScroll(_dnsQuickPresetBox);
+   PreventAccidentalScroll(_dnsQuickPresetBox);
+   appRows.Controls.Add(_dnsQuickPresetBox,0,2);
+   _dnsCustomSource=new TextBox{Name="DnsSourceField",Dock=DockStyle.Fill,AccessibleName="Адрес DNS или URL DoH/DoT"};
+   appRows.Controls.Add(_dnsCustomSource,0,3);
+   var appActions=new FlowLayoutPanel{Dock=DockStyle.Fill,WrapContents=false,Margin=Padding.Empty};
+   var apply=AddNativeButton(appActions,"Применить для приложений",SaveDnsPreference);apply.Name="ApplyAppDnsButton";apply.Primary=true;
+   AddNativeButton(appActions,"Импорт профиля…",ImportDnsMobileConfig);
+   appRows.Controls.Add(appActions,0,4);
+   _dnsScopeStatus=new Label{Name="AppDnsScopeStatus",Dock=DockStyle.Fill,ForeColor=FluentTheme.Muted};
+   appRows.Controls.Add(_dnsScopeStatus,0,5);
    _dnsQuickPresetBox.SelectedIndexChanged+=(s,e)=>{
-    if(_changingDnsPreference||_preview)return;
-    int idx=_dnsQuickPresetBox.SelectedIndex;
-    if(idx==BuiltInDnsPresets.Length-1){ShowFluentPage(1);_dnsBox.Focus();return;}
-    try{
-     _changingDnsPreference=true;
-     _dnsBox.Text=BuiltInDnsPresets[idx][1];
-     if(_dnsPresetBox!=null)_dnsPresetBox.SelectedIndex=idx;
-     _changingDnsPreference=false;
-     SaveDnsPreference();
-    }catch(Exception error){
-     _changingDnsPreference=true;_dnsQuickPresetBox.SelectedIndex=DnsPresetIndex(ConfigManager.Instance.DnsHost);_changingDnsPreference=false;
-     MessageBox.Show(this,error.Message,"DNS",MessageBoxButtons.OK,MessageBoxIcon.Warning);
-    }
+    if(_changingDnsPreference)return;
+    int index=_dnsQuickPresetBox.SelectedIndex;
+    if(index>=0&&index<BuiltInDnsPresets.Length-1)_dnsCustomSource.Text=DnsDraftSpecForDisplay(index,ConfigManager.Instance.DnsHost);
+    else _dnsCustomSource.Text=DnsPresetIndex(ConfigManager.Instance.DnsHost)==index?ConfigManager.Instance.DnsHost:"";
+    _dnsCustomSource.ReadOnly=index!=BuiltInDnsPresets.Length-1;
+    MarkDnsDraftChanged();
    };
-   quickRow.Controls.Add(_dnsQuickPresetBox);
-   _refreshDnsQuickLink=new LinkLabel{Text="Проверить актуальные адреса",AutoSize=true,LinkColor=FluentTheme.Accent,Margin=new Padding(12,6,0,0)};
-   _refreshDnsQuickLink.LinkClicked+=(s,e)=>RunLiveDnsProbe();
-   quickRow.Controls.Add(_refreshDnsQuickLink);
-   appRows.Controls.Add(quickRow,0,3);
-   _appDnsDescription=new Label{Dock=DockStyle.Fill,ForeColor=FluentTheme.Muted};appRows.Controls.Add(_appDnsDescription,0,4);appCard.Controls.Add(appRows);page.Controls.Add(appCard,0,0);
-   _dnsEnabled.CheckedChanged+=(s,e)=>{if(_changingDnsPreference||_preview)return;try{SaveDnsPreference();}catch(Exception error){_changingDnsPreference=true;_dnsEnabled.Checked=ConfigManager.Instance.UseDagamiDns;_changingDnsPreference=false;MessageBox.Show(this,error.Message,"DNS",MessageBoxButtons.OK,MessageBoxIcon.Warning);}};
-   _dnsObfuscation.CheckedChanged+=(s,e)=>{if(_changingDnsPreference||_preview)return;try{ConfigManager.Instance.ChangeConnection(cfg=>cfg.DnsObfuscation=_dnsObfuscation.Checked);}catch(Exception error){MessageBox.Show(this,error.Message,"DNS",MessageBoxButtons.OK,MessageBoxIcon.Warning);}UpdateDnsPage();};
-   var systemCard=new FluentCard{Dock=DockStyle.Fill,Padding=new Padding(16,12,16,12),Margin=Padding.Empty};var systemRows=new FluentLayout{Dock=DockStyle.Fill,ColumnCount=1,RowCount=5};systemRows.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,100));foreach(int height in new[]{38,42,46,46})systemRows.RowStyles.Add(new RowStyle(SizeType.Absolute,height));systemRows.RowStyles.Add(new RowStyle(SizeType.Percent,100));systemRows.Controls.Add(FluentLabel("Системный DNS и восстановление",15,true),0,0);systemRows.Controls.Add(new Label{Dock=DockStyle.Fill,ForeColor=FluentTheme.Muted,Text="Быстрый режим включает шифрованный DNS для ИИ. Ручная настройка позволяет выбрать сервер и адаптеры. Прежние параметры сохраняются."},0,1);
-   var actions=new FlowLayoutPanel{Dock=DockStyle.Fill,WrapContents=false};AddNativeButton(actions,"Включить в Windows",ToggleEncryptedDns);_encryptedDnsAction=(FluentButton)_nativeButtons[_nativeButtons.Count-1];_encryptedDnsAction.Primary=true;
-   AddNativeButton(actions,"Настроить DNS вручную…",()=>OpenSystemDns(false));
-   _nativeButtons[_nativeButtons.Count-1].Name="ManualDnsButton";
-   systemRows.Controls.Add(actions,0,2);
-   var resetRow=new FlowLayoutPanel{Dock=DockStyle.Fill,WrapContents=false};
-   AddNativeButton(resetRow,"Очистить все DNS и NRPT…",()=>OpenSystemDns(true));
-   var reset=(FluentButton)_nativeButtons[_nativeButtons.Count-1];reset.Name="ResetDnsNrptButton";reset.ForeColor=Color.Firebrick;
-   systemRows.Controls.Add(resetRow,0,3);
-   _dnsOverview=new Label{Dock=DockStyle.Fill,ForeColor=FluentTheme.Muted};systemRows.Controls.Add(_dnsOverview,0,4);systemCard.Controls.Add(systemRows);page.Controls.Add(systemCard,0,1);return page;
+   _dnsDraftEnabled.CheckedChanged+=(s,e)=>MarkDnsDraftChanged();
+   _dnsCustomSource.TextChanged+=(s,e)=>MarkDnsDraftChanged();
+   SyncDnsDraft();
+
+   var checkRows=DnsCard(page,1,31,31,38,27,91);
+   checkRows.Controls.Add(FluentLabel("Проверка DNS",15,true),0,0);
+   checkRows.Controls.Add(new Label{Dock=DockStyle.Fill,ForeColor=FluentTheme.Muted,Text="Запрос IPv4 для "+DnsProviders.ProbeDomain+". Результат показывает, отвечает ли DNS."},0,1);
+   var reportActions=new FlowLayoutPanel{Dock=DockStyle.Fill,WrapContents=false,Margin=Padding.Empty};
+   _checkDnsButton=AddNativeButton(reportActions,"Обновить и проверить DNS",RunLiveDnsProbe);
+   _checkDnsButton.Name="CheckDnsButton";_checkDnsButton.Primary=true;
+   AddNativeButton(reportActions,"Где сохраняется…",ShowDnsStorage);
+   checkRows.Controls.Add(reportActions,0,2);
+   _dnsCheckStatus=new Label{Name="DnsCheckStatus",Dock=DockStyle.Fill,ForeColor=FluentTheme.Muted,Text="Выберите источник выше и нажмите «Обновить и проверить DNS»."};
+   checkRows.Controls.Add(_dnsCheckStatus,0,3);
+   _dnsReport=new TextBox{Name="DnsProbeReport",Dock=DockStyle.Fill,ReadOnly=true,Multiline=true,ScrollBars=ScrollBars.Vertical,AccessibleName="Результаты проверки DNS по адресам"};
+   checkRows.Controls.Add(_dnsReport,0,4);
+
+   var systemRows=DnsCard(page,2,29,34,38,33);
+   systemRows.Controls.Add(FluentLabel("DNS в Windows",15,true),0,0);
+   systemRows.Controls.Add(new Label{Dock=DockStyle.Fill,ForeColor=FluentTheme.Muted,Text="Включает локальную службу DNS для ИИ-доменов в Windows. Требуются права администратора."},0,1);
+   var windowsActions=new FlowLayoutPanel{Dock=DockStyle.Fill,WrapContents=false,Margin=Padding.Empty};
+   _encryptedDnsAction=AddNativeButton(windowsActions,"Включить DNS в Windows",ToggleEncryptedDns);
+   AddNativeButton(windowsActions,"Ручная настройка…",()=>OpenSystemDns(false)).Name="ManualDnsButton";
+   AddNativeButton(windowsActions,"Сброс DNS и правил…",()=>OpenSystemDns(true)).Name="ResetDnsNrptButton";
+   systemRows.Controls.Add(windowsActions,0,2);
+   _dnsOverview=new Label{Name="WindowsDnsStatus",Dock=DockStyle.Fill,ForeColor=FluentTheme.Muted};
+   systemRows.Controls.Add(_dnsOverview,0,3);
+   host.Controls.Add(page);return host;
+  }
+
+  FluentLayout DnsCard(FluentLayout page,int row,params int[] heights){
+   var card=new FluentCard{Dock=DockStyle.Fill,Padding=new Padding(12,9,12,9),Margin=new Padding(0,0,0,8)};
+   var rows=new FluentLayout{Dock=DockStyle.Fill,ColumnCount=1,RowCount=heights.Length,Margin=Padding.Empty};
+   rows.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,100));
+   foreach(int height in heights)rows.RowStyles.Add(new RowStyle(SizeType.Absolute,height));
+   card.Controls.Add(rows);page.Controls.Add(card,0,row);return rows;
+  }
+
+  void ShowDnsStorage(){
+   MessageBox.Show(this,
+    "Выбранный DNS для приложений\r\n"+ConfigManager.Instance.SettingsPath+
+    "\r\n\r\nПроверенные адреса провайдеров\r\n"+DnsProviders.CataloguePath+
+    "\r\n\r\nЖурнал проверки\r\n"+Logger.LogFilePath+
+    "\r\n\r\nНастройки службы DNS Windows\r\n"+Path.Combine(DnsServiceHost.DirectoryPath,"dns-custom.json")+
+    "\r\n\r\nКопия настроек Windows для восстановления\r\n"+Path.Combine(SystemDnsManager.StoreRoot,"state.json"),
+    "Где Dagami сохраняет данные",MessageBoxButtons.OK,MessageBoxIcon.Information);
+  }
+
+  string DnsDraftSpec(){
+   int index=_dnsQuickPresetBox.SelectedIndex;
+   return index>=0&&index<BuiltInDnsPresets.Length-1?BuiltInDnsPresets[index][1]:_dnsCustomSource.Text.Trim();
+  }
+
+  void MarkDnsDraftChanged(){
+   if(_changingDnsPreference)return;
+   _dnsDraftDirty=true;
+   _dnsScopeStatus.Text="Нажмите «Применить для приложений», чтобы сохранить выбор.";
+   if(_dnsReport!=null&&!_probingDnsAddresses){
+    _dnsReport.Clear();
+    _dnsCheckStatus.Text="Нажмите «Обновить и проверить DNS» для этого источника.";
+   }
+  }
+
+  void SyncDnsDraft(){
+   var config=ConfigManager.Instance;
+   _changingDnsPreference=true;
+   try{
+    int index=DnsPresetIndex(config.DnsHost);
+    _dnsQuickPresetBox.SelectedIndex=index;
+    _dnsDraftEnabled.Checked=config.UseDagamiDns;
+    _dnsCustomSource.ReadOnly=index!=BuiltInDnsPresets.Length-1;
+    _dnsCustomSource.Text=DnsDraftSpecForDisplay(index,config.DnsHost);
+   }finally{_changingDnsPreference=false;}
+  }
+
+  static string DnsDraftSpecForDisplay(int index,string saved){
+   if(index==1)return DnsProviders.MagicDnsAuthority;
+   return index<BuiltInDnsPresets.Length-1?BuiltInDnsPresets[index][1]:saved;
   }
   void OpenSystemDns(bool reset){
    if(_preview)return;
@@ -811,59 +861,53 @@ namespace DevProxyApp {
    _nextDnsUiRead=DateTime.MinValue;UpdateNativeStatus();
   }
   void SaveDnsPreference(){
-   string dns=_dnsBox.Text.Trim().TrimEnd('.');
-   if(string.IsNullOrEmpty(dns))dns="dns.dagami.ru";
-   bool useDns=_dnsEnabled.Checked,obfuscation=_dnsObfuscation.Checked;
-   if(!EnsureSessionsStoppedForRouteChange()){
-    _changingDnsPreference=true;
-    try{_dnsBox.Text=ConfigManager.Instance.DnsHost;int index=DnsPresetIndex(ConfigManager.Instance.DnsHost);if(_dnsPresetBox!=null)_dnsPresetBox.SelectedIndex=index;if(_dnsQuickPresetBox!=null)_dnsQuickPresetBox.SelectedIndex=index;}
-    finally{_changingDnsPreference=false;}
-    SyncRouteCheckboxes();return;
+   if(_preview)return;
+   string dns=DnsDraftSpec();
+   if(!DnsProviders.IsValidSpec(dns)){_dnsScopeStatus.Text="Введите корректный DNS или выберите провайдера.";return;}
+   bool enabled=_dnsDraftEnabled.Checked;
+   var config=ConfigManager.Instance;
+   bool routeChanged=dns!=config.DnsHost||enabled!=config.UseDagamiDns;
+   if(routeChanged&&!EnsureSessionsStoppedForRouteChange())return;
+   if(routeChanged){
+    config.ChangeConnection(cfg=>{cfg.DnsHost=dns;cfg.UseDagamiDns=enabled;});
+    _dnsBox.Text=dns;
+    SyncRouteCheckboxes();
+    if(HasConfiguredConnection(config.LastProxy,enabled,config.UseProxy)||_bridgePort>0){
+     RestartRescueBridge(_bridgePort>0?_bridgePort:53200,true);
+     ReconcileAutomaticWindowsProxy();
+    }
    }
-   ConfigManager.Instance.ChangeConnection(cfg=>{cfg.DnsHost=dns;cfg.UseDagamiDns=useDns;cfg.DnsObfuscation=obfuscation;});
-   try { DnsServiceHost.SaveCustomUpstream(dns); } catch {}
-   if (HasConfiguredConnection(ConfigManager.Instance.LastProxy, ConfigManager.Instance.UseDagamiDns, ConfigManager.Instance.UseProxy) || _bridgePort > 0)
-       RestartRescueBridge();
+   _dnsDraftDirty=false;
    UpdateNativeStatus();
   }
   void UpdateDnsPage(){
    if(_dnsOverview==null)return;
-   var selectedPool=DnsProviders.ForServer(ConfigManager.Instance.DnsHost);
-   int presetIdx=DnsPresetIndex(ConfigManager.Instance.DnsHost);
-   if(_dnsPresetBox!=null&&!_changingDnsPreference&&!_dnsPresetBox.DroppedDown&&!_dnsPresetBox.Focused&&_dnsPresetBox.SelectedIndex!=presetIdx){_changingDnsPreference=true;_dnsPresetBox.SelectedIndex=presetIdx;_changingDnsPreference=false;}
-   if(_dnsQuickPresetBox!=null&&!_changingDnsPreference&&!_dnsQuickPresetBox.DroppedDown&&!_dnsQuickPresetBox.Focused&&_dnsQuickPresetBox.SelectedIndex!=presetIdx){_changingDnsPreference=true;_dnsQuickPresetBox.SelectedIndex=presetIdx;_changingDnsPreference=false;}
-   bool managed=selectedPool!=null&&selectedPool.Length>0&&presetIdx<6;
-   bool customEndpoint=selectedPool!=null&&selectedPool.Length>0&&!managed;
-   string nextEnabledText=managed?"Шифрованный Smart DNS для входа и приложений":"Свой DNS для входа и приложений ("+ConfigManager.Instance.DnsHost+")";
-   if(_dnsEnabled.Text!=nextEnabledText)_dnsEnabled.Text=nextEnabledText;
-   string obfText=ConfigManager.Instance.DnsObfuscation?" Экспериментальная обработка DNS/TLS включена.":" Экспериментальная обработка DNS/TLS выключена.";
-   string nextDesc=(managed?(presetIdx==0?"Авто-пул: Dagami → MagicDNS (дополнительные DNS выбираются вручную).":
-    "Выбран провайдер: "+ConfigManager.Instance.DnsHost+" (с авторезервом по рабочим узлам)."):
-    customEndpoint?"Вшит свой резолвер ("+selectedPool[0].Protocol+" "+selectedPool[0].Address+":"+selectedPool[0].Port+").":
-    "Используется свой DNS ("+ConfigManager.Instance.DnsHost+").")+obfText;
-   if(_appDnsDescription.Text!=nextDesc)_appDnsDescription.Text=nextDesc;
+   var config=ConfigManager.Instance;
+   if(!_dnsDraftDirty&&!_dnsQuickPresetBox.DroppedDown){
+    SyncDnsDraft();
+    _dnsScopeStatus.Text=!config.UseDagamiDns?"DNS для приложений выключен.":
+     config.UseProxy&&ManagedAccess.IsProfile(config.LastProxy)?"DNS сохранён. При прокси по ключу адреса разрешает шлюз.":
+     !_preview&&_bridgePort<=0?"DNS сохранён. Локальный мост сейчас остановлен.":
+     "DNS включён для поддерживаемых доменов при запуске через Dagami.";
+   }
    if(!_preview&&DateTime.UtcNow>=_nextDnsUiRead){
     _encryptedDnsActive=SystemDnsManager.EncryptedDnsActive();
     _encryptedDnsRunning=_encryptedDnsActive&&DnsServiceHost.IsRunning();
-    try{_cachedVpnBadge=VpnDiagnostics.Inspect(ConfigManager.Instance.LastProxy,_bridgePort,false).StatusBadge;}catch{_cachedVpnBadge=null;}
+    _windowsDnsStatus=SystemDnsManager.BriefStatus();
     _nextDnsUiRead=DateTime.UtcNow.AddSeconds(3);
    }
-   string nextActionText=_encryptedDnsActive?"Восстановить прежний DNS":"Включить в Windows";
+   string nextActionText=_encryptedDnsActive?"Восстановить прежний DNS":
+    _wholeNetworkDns.Checked?"Включить на адаптерах":"Включить DNS для ИИ";
    if(_encryptedDnsAction.Text!=nextActionText)_encryptedDnsAction.Text=nextActionText;
-   string vpnSuffix=string.IsNullOrEmpty(_cachedVpnBadge)?"":" · "+_cachedVpnBadge;
-   string probeInfo=DnsProviders.LastProbeSummary!=null?DnsProviders.LastProbeSummary:(DnsProviders.LastCheckedUtc==DateTime.MinValue?"Нажмите «Проверить актуальные адреса» для теста узлов.":DnsProviders.LastError==null?"Адреса проверены: "+DnsProviders.LastCheckedUtc.ToLocalTime().ToString("HH:mm")+".":"Используются встроенные рабочие узлы.");
-   string nextOverview=(_encryptedDnsActive?(_encryptedDnsRunning?"Режим системного DNS настроен, служба запущена. ":"Режим DNS настроен, но служба не работает. Восстановите DNS и включите снова. "):"Системный DNS не менялся этим режимом. ")+probeInfo+vpnSuffix;
-   if(_dnsOverview.Text!=nextOverview)_dnsOverview.Text=nextOverview;
-   if(_dnsAddressDetails!=null && (_pageControls==null || _pageControls.Length<3 || _pageControls[2].Visible)){
-    string nextDetails=DnsProviders.FormatPoolStatus(ConfigManager.Instance.DnsHost);
-    if(_dnsAddressDetails.Text!=nextDetails)_dnsAddressDetails.Text=nextDetails;
-   }
+   _dnsOverview.Text=_encryptedDnsActive?
+    (_encryptedDnsRunning?"Windows использует локальную службу Dagami на 127.0.0.1.":"Служба DNS остановлена. Восстановите прежние параметры и включите DNS снова."):
+    "DNS Windows — "+(_windowsDnsStatus??"режим выключен")+".";
   }
   void ToggleEncryptedDns(){
+   if(_preview)return;
+   if(_dnsDraftDirty&&!_encryptedDnsActive){_dnsOverview.Text="Сначала примените выбранный DNS в верхнем блоке.";return;}
    string configuredDns=ConfigManager.Instance.DnsHost;
-   int presetIdx=DnsPresetIndex(configuredDns);
-   bool isDefaultAuto=presetIdx==0;
-   var request=new SystemDnsRequest{JobId=Guid.NewGuid().ToString("N"),Operation=_encryptedDnsActive?"Restore":"Apply",Server="127.0.0.1",EncryptedStub=true,CustomUpstreamSpec=(!_encryptedDnsActive&&!isDefaultAuto)?configuredDns:null,Preset="Development",UseNrpt=true,ChangeAdapters=false,ReplaceExisting=false,KeepExternalChanges=true,ReplaceActiveSetup=true,Adapters=new SystemDnsAdapter[0]};
+   var request=new SystemDnsRequest{JobId=Guid.NewGuid().ToString("N"),Operation=_encryptedDnsActive?"Restore":"Apply",Server="127.0.0.1",EncryptedStub=true,CustomUpstreamSpec=_encryptedDnsActive?null:configuredDns,Preset="Development",UseNrpt=true,ChangeAdapters=false,ReplaceExisting=false,KeepExternalChanges=true,ReplaceActiveSetup=true,Adapters=new SystemDnsAdapter[0]};
    if(!_encryptedDnsActive&&_wholeNetworkDns.Checked){var selected=new List<SystemDnsAdapter>();foreach(SystemDnsAdapter adapter in _dnsNetworkAdapters.CheckedItems)selected.Add(adapter);if(selected.Count==0){MessageBox.Show(this,"Выберите адаптеры в «Настройки → Дополнительно».","DNS",MessageBoxButtons.OK,MessageBoxIcon.Information);return;}request.ChangeAdapters=true;request.Adapters=selected.ToArray();}
    _nativeBusy=true;SetNativeButtonsEnabled(false);_dnsOverview.Text="Проверяем службу и сеть. Для записи может потребоваться UAC…";
    System.Threading.ThreadPool.QueueUserWorkItem(state=>{string message;try{message=SystemDnsManager.Execute(request);}catch(Exception error){message=error.Message;}try{BeginInvoke(new Action(()=>{_nativeBusy=false;SetNativeButtonsEnabled(true);_nextDnsUiRead=DateTime.MinValue;UpdateDnsPage();_dnsOverview.Text=message;Logger.Log("[Encrypted DNS] "+message);}));}catch(InvalidOperationException){}});

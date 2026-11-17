@@ -124,7 +124,7 @@ namespace DevProxyApp {
                 Console.WriteLine("Подключение сохранено для CLI и Windows GUI.");return true;
             }
             if(command=="dns"){
-                if(args.Length==2&&args[1]=="refresh"){DnsProviders.Refresh();Console.WriteLine(new JavaScriptSerializer().Serialize(new{endpoints=DnsProviders.Snapshot(),checkedUtc=DnsProviders.LastCheckedUtc,error=DnsProviders.LastError}));return true;}
+                if(args.Length==2&&args[1]=="refresh"){DnsProviders.Refresh();Console.WriteLine(new JavaScriptSerializer().Serialize(new{endpoints=DnsProviders.AllBuiltInEndpoints(),checkedUtc=DnsProviders.LastCheckedUtc,error=DnsProviders.LastError}));return true;}
                 if(args.Length==2&&args[1]=="status"){Console.WriteLine(SystemDnsManager.LastStatus());return true;}
                 if(args.Length==2&&args[1]=="adapters"){Console.WriteLine(new JavaScriptSerializer().Serialize(SystemDnsManager.Adapters()));return true;}
                 SystemDnsRequest request;
