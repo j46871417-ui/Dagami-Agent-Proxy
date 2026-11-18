@@ -12,7 +12,7 @@ import (
 // become implicit proxy fallbacks. Custom gateways keep their own destination.
 func GatewayCandidates(address string) []string {
 	if address == bootstrapAuthority {
-		return []string{address, "31.76.52.235:9443", "150.241.83.174:9443"}
+		return []string{address, "179.254.186.80:9443", "45.86.72.85:9443", "31.76.52.235:9443", "150.241.83.174:9443"}
 	}
 	return []string{address}
 }

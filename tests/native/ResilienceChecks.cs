@@ -164,6 +164,9 @@ class ResilienceChecks {
   var transport=typeof(MainForm).Assembly.GetType("DevProxyApp.GatewayTransport");var flags=BindingFlags.Static|BindingFlags.NonPublic;
   var candidates=(string[])transport.GetMethod("Candidates",flags).Invoke(null,new object[]{new Uri(ManagedAccess.Bootstrap)});
   Require(Array.IndexOf(candidates,"48.102.213.179")<0&&candidates.Length>=2,"Proxy fallback contains RU or has no reserve");
+  Require(candidates[0]=="test-dns.dagami.ru"&&Array.IndexOf(candidates,"45.86.72.85")>0&&Array.IndexOf(candidates,"179.254.186.80")>0,"Independent reserve or pinned US gateway is missing");
+  var customCandidates=(string[])transport.GetMethod("Candidates",flags).Invoke(null,new object[]{new Uri("https://custom.example:8443")});
+  Require(customCandidates.Length==1&&customCandidates[0]=="custom.example","Custom gateway changed to a built-in gateway");
   int attempts=0;Func<string,TcpClient> dial=host=>{attempts++;return new TcpClient();};
   Func<TcpClient,Stream> secure=client=>{if(attempts==1)throw new IOException("TLS failure fixture");return new MemoryStream();};
   var result=transport.GetMethod("TryCandidates",flags).Invoke(null,new object[]{new[]{"first.test","second.test"},dial,secure});

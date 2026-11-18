@@ -16,6 +16,7 @@ using System.Drawing;
 namespace DevProxyApp {
  public sealed class ManagedAccess {
   public const string Profile = "Dagami (Telegram)";
+  public const string PaidProfile = "Dagami (оплаченный пул)";
   public const string BotChat = "https://t.me/bright26bot";
   public const string BotLink = BotChat + "?start=dagami_";
   public const string BotKeyLink = BotChat + "?start=dagamikey";
@@ -33,7 +34,9 @@ namespace DevProxyApp {
   static readonly string Active=Path.Combine(Folder,"managed-access.dat");
   readonly byte[] privateKey;
   public Uri Endpoint {get;private set;}
-  public static bool IsProfile(string value){return string.Equals((value??"").Trim(),Profile,StringComparison.OrdinalIgnoreCase);}
+  public bool PaidPool {get;private set;}
+  public static bool IsPaidProfile(string value){return string.Equals((value??"").Trim(),PaidProfile,StringComparison.OrdinalIgnoreCase);}
+  public static bool IsProfile(string value){return IsPaidProfile(value)||string.Equals((value??"").Trim(),Profile,StringComparison.OrdinalIgnoreCase);}
   public static bool HasActiveDevice(){return File.Exists(Active);}
   public sealed class Stored {public string Endpoint {get;set;} public string Key {get;set;} }
   public sealed class Result { public bool active {get;set;} public string code {get;set;} }
@@ -111,7 +114,8 @@ namespace DevProxyApp {
    }
   }
   public string ConnectRequest(string target) {
-   string header=Proof(Endpoint.Authority.ToLowerInvariant(),"CONNECT",target);
+   string header=Proof(Endpoint.Authority.ToLowerInvariant()+(PaidPool?"#paid":""),"CONNECT",target);
+   if(PaidPool)header="Dagami-Paid "+header.Substring("Dagami ".Length);
    return "CONNECT "+target+" HTTP/1.1\r\nHost: "+target+"\r\nProxy-Authorization: "+header+"\r\n\r\n";
   }
   static ManagedAccess Load(string path) {
@@ -121,6 +125,7 @@ namespace DevProxyApp {
    return new ManagedAccess(ParseEndpoint(value.Endpoint),Convert.FromBase64String(value.Key));
   }
   public static ManagedAccess LoadActive(){var value=Load(Active);if(value==null)throw new InvalidOperationException("Сначала подтвердите Dagami через бота.");return value;}
+  public static ManagedAccess LoadActive(bool paid){var value=LoadActive();value.PaidPool=paid;return value;}
   public static string CurrentEndpoint(){var value=Load(Pending)??Load(Active);return value==null?Environment.GetEnvironmentVariable("DAGAMI_MANAGED_URL")??Bootstrap:value.Endpoint.GetLeftPart(UriPartial.Authority);}
   static void Write(string file,byte[] data) {
    Directory.CreateDirectory(Folder);

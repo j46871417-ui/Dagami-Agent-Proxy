@@ -25,11 +25,13 @@ type App struct {
 	Console bool     `json:"console"`
 }
 type Profile struct {
-	ID        string `json:"id"`
-	Name      string `json:"name"`
-	Proxy     string `json:"proxy"`
-	Managed   bool   `json:"managed,omitempty"`
-	Protected string `json:"protected,omitempty"`
+	ID         string `json:"id"`
+	Name       string `json:"name"`
+	Proxy      string `json:"proxy"`
+	Managed    bool   `json:"managed,omitempty"`
+	Paid       bool   `json:"paid,omitempty"`
+	KeyProfile string `json:"key_profile,omitempty"`
+	Protected  string `json:"protected,omitempty"`
 }
 type State struct {
 	Pairing  pairing   `json:"pairing,omitempty"`

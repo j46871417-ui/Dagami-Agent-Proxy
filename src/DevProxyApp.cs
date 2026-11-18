@@ -846,7 +846,7 @@ namespace DevProxyApp
 
                 if (port < 0 || port > 65535) throw new ArgumentOutOfRangeException("port");
 
-                _managed = ManagedAccess.IsProfile(proxyUrl) ? ManagedAccess.LoadActive() : null;
+                _managed = ManagedAccess.IsProfile(proxyUrl) ? ManagedAccess.LoadActive(ManagedAccess.IsPaidProfile(proxyUrl)) : null;
                 if (_managed != null) {
                     proxyUrl = _managed.Endpoint.AbsoluteUri;
                     dnsHost = null;
@@ -2052,18 +2052,17 @@ namespace DevProxyApp
         public string SavedProxyAddress { get; private set; }
         public bool SavedProxyRequireGemini { get; private set; }
         public string SelectedProxyMode {
-            get { return SavedProxyMode ?? (ManagedAccess.IsProfile(LastProxy) ? "key" : PublicProxySelected ? "public" : "custom"); }
+            get { return SavedProxyMode ?? (ManagedAccess.IsPaidProfile(LastProxy)?"paid":ManagedAccess.IsProfile(LastProxy) ? "key" : PublicProxySelected ? "public" : "custom"); }
         }
         public string SelectedProxyAddress {
             get { return SavedProxyMode == null ? SavedCustomProxy : SavedProxyAddress ?? ""; }
         }
         internal void SaveProxySelection(string mode, string address, bool requireGemini) {
-            if (mode != "key" && mode != "public" && mode != "custom") throw new ArgumentException("Неизвестный источник прокси.");
-            ChangeConnection(cfg => {
-                cfg.SavedProxyMode = mode;
-                cfg.SavedProxyAddress = address;
-                cfg.SavedProxyRequireGemini = requireGemini;
-            });
+            ChangeConnection(cfg => cfg.SetProxySelectionDraft(mode,address,requireGemini));
+        }
+        internal void SetProxySelectionDraft(string mode,string address,bool requireGemini) {
+            if (mode != "key" && mode != "paid" && mode != "public" && mode != "custom") throw new ArgumentException("Неизвестный источник прокси.");
+            SavedProxyMode=mode;SavedProxyAddress=address;SavedProxyRequireGemini=requireGemini;
         }
         public bool UseProxy { get; set; }
         internal string SettingsPath { get { return configFile; } }
@@ -2072,7 +2071,7 @@ namespace DevProxyApp
             if (!string.IsNullOrEmpty(LastLoadError)) throw new IOException(LastLoadError);
             if (!UseProxy) return "direct";
             if (MainForm.IsDirectProxyValue(LastProxy)) return "direct";
-            if (ManagedAccess.IsProfile(LastProxy)) return ManagedAccess.Profile;
+            if (ManagedAccess.IsProfile(LastProxy)) return LastProxy;
             Uri parsed;
             if (!UpstreamProxyDiagnostics.TryParse(LastProxy, out parsed))
                 throw new IOException("Прокси включён, но настройки отсутствуют или недоступны. Сохраните подключение.");
@@ -2384,7 +2383,7 @@ namespace DevProxyApp
             if (selection == null) throw new InvalidDataException("Некорректный файл настроек.");
             object selectedMode, selectedAddress, selectedGemini;
             string mode = selection.TryGetValue("saved_proxy_mode",out selectedMode) ? selectedMode as string : null;
-            SavedProxyMode = mode == "key" || mode == "public" || mode == "custom" ? mode : null;
+            SavedProxyMode = mode == "key" || mode == "paid" || mode == "public" || mode == "custom" ? mode : null;
             SavedProxyAddress = selection.TryGetValue("saved_proxy_address_protected",out selectedAddress) ? UnprotectString(selectedAddress as string ?? "") : null;
             SavedProxyRequireGemini = selection.TryGetValue("saved_proxy_require_gemini",out selectedGemini) && object.Equals(selectedGemini,true);
             // Protected values are preferred; legacy plaintext is read only for migration.
@@ -4762,11 +4761,11 @@ namespace DevProxyApp
 
         {
 
-            if (_patchInProgress) {
+            if (_patchInProgress||_routeChangeInProgress||_nativeBusy) {
 
                 ShowNativeWindow();
 
-                _appFeedback.Text = "Дождитесь завершения подготовки перед выходом из Dagami Agent Proxy.";
+                _appFeedback.Text = "Дождитесь завершения подготовки или изменения сети перед выходом из Dagami Agent Proxy.";
 
                 return;
 

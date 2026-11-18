@@ -1098,7 +1098,7 @@ namespace DevProxyApp
                 bool managed = config.UseProxy && ManagedAccess.IsProfile(config.LastProxy);
                 bool paired = ManagedAccess.HasActiveDevice();
                 bool needsPairing = managed && !paired;
-                string route = managed ? "Прокси Dagami" : config.UseProxy && !IsDirectProxyValue(config.LastProxy)
+                string route = managed ? (ManagedAccess.IsPaidProfile(config.LastProxy)?"Приватные прокси по ключу":"Прокси Dagami") : config.UseProxy && !IsDirectProxyValue(config.LastProxy)
                     ? (config.PublicProxySelected ? "Публичный прокси" : "Свой прокси") : config.UseDagamiDns ? "Smart DNS" : "Системный маршрут / VPN";
                 string routeState = route;
                 if (managed) routeState += needsPairing ? (_activationKeySaved ? " · ключ сохранён, ожидает активации" : " · требуется активация ключа") :

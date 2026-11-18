@@ -88,6 +88,7 @@ namespace DevProxyApp {
    if(current!=null&&(!current.PublicProxy||allowPublic)&&
       (current.Proxy!=null||dnsSupported&&current.Dns!=null))add(current);
    if(hasKey)add(new AiRoute("Dagami по ключу",ManagedAccess.Profile,null));
+   if(hasKey)add(new AiRoute("Приватные прокси по ключу",ManagedAccess.PaidProfile,null));
    if(custom!=null&&custom!="direct")add(new AiRoute("Свой прокси",custom,null));
    if(dnsSupported) {
     if(dns!=null)add(new AiRoute("Выбранный DNS",null,dns));
@@ -145,6 +146,32 @@ namespace DevProxyApp {
 
   internal static string VerifyRunning(int port,string service) {
    return VerifyChecks(port,Checks(service));
+  }
+
+  internal static string VerifySystem(string service,bool proxy) {
+   foreach(var check in Checks(service)) {
+    try {
+     var request=(HttpWebRequest)WebRequest.Create("https://"+check.Host+check.Path);
+     request.Proxy=proxy?WebRequest.GetSystemWebProxy():null;
+     request.Timeout=ProbeTimeout;request.ReadWriteTimeout=ProbeTimeout;request.AllowAutoRedirect=false;request.KeepAlive=false;
+     if(check.Headers!=null)foreach(string line in check.Headers.Split(new[]{"\r\n"},StringSplitOptions.RemoveEmptyEntries)) {
+      int at=line.IndexOf(':');if(at>0)request.Headers.Add(line.Substring(0,at),line.Substring(at+1).Trim());
+     }
+     if(check.Body!=null){request.Method="POST";request.ContentType=check.ContentType;byte[] body=System.Text.Encoding.UTF8.GetBytes(check.Body);request.ContentLength=body.Length;using(var stream=request.GetRequestStream())stream.Write(body,0,body.Length);}
+     HttpWebResponse response;
+     try{response=(HttpWebResponse)request.GetResponse();}
+     catch(WebException error){response=error.Response as HttpWebResponse;if(response==null)throw;}
+     using(response){
+      int status=(int)response.StatusCode;
+      using(var reader=new StreamReader(response.GetResponseStream())){
+       var chars=new char[8192];int count=reader.Read(chars,0,chars.Length);string body=new string(chars,0,count);
+       if(body.IndexOf("User location is not supported",StringComparison.OrdinalIgnoreCase)>=0||body.IndexOf("UNSUPPORTED_LOCATION",StringComparison.OrdinalIgnoreCase)>=0||body.IndexOf("unsupported_country",StringComparison.OrdinalIgnoreCase)>=0)return check.Host+" — региональный отказ";
+      }
+      if(!check.Accept(status)&&!(check.GoogleLogin&&IsGoogleLoginRedirect(status,response.Headers["Location"])))return check.Host+" — HTTP "+status;
+     }
+    }catch(Exception error){return check.Host+" — "+error.GetType().Name;}
+   }
+   return null;
   }
 
   internal static string AntigravityApiReport(int port) {

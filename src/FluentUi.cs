@@ -689,14 +689,16 @@ namespace DevProxyApp
             reportActions.Controls.Add(saveLogButton); logCard.Controls.Add(reportActions);
             Panel settingsPage = BuildFlatConnectionPage(connectionSettings,advancedSettings);
             Panel dnsPage = BuildDnsPage();
-            Panel[] pages = new Panel[] { apps, settingsPage, dnsPage, logCard, antigravityPage };
-            string[] names = new string[] { "Приложения", "Подключение", "DNS", "Журнал", "Диагностика" };
+            Panel benchPage=BuildBenchPage();
+            Panel[] pages = new Panel[] { apps, settingsPage, dnsPage, logCard, antigravityPage,benchPage };
+            string[] names = new string[] { "Приложения", "Подключение", "DNS", "Журнал", "Диагностика","Замер DNS" };
             string[] descriptions = new string[] {
                 "Выберите приложение и запустите через Dagami.",
                 "Профиль, автозапуск и параметры маршрута.",
                 "Выберите провайдера, проверьте ответ DNS или настройте DNS в Windows.",
                 "События приложения и результаты проверок.",
-                "Проверка маршрута и backend Antigravity."
+                "Проверка маршрута и backend Antigravity.",
+                "Доступность DNS и отдельная проверка доступа к ИИ."
             };
             for (int i = 0; i < pages.Length; i++) {
                 int pageIndex = i; pages[i].Visible = i == 0; _fluentPages.Controls.Add(pages[i]);

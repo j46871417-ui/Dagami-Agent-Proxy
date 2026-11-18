@@ -8,7 +8,7 @@ import subprocess
 import sys
 
 ROOT=Path(__file__).resolve().parents[1]
-SUITES=['ResilienceChecks','SecurityReviewChecks','BugReportChecks','ConsoleLaunchChecks','SessionStopChecks','HardReviewChecks','CliChecks','ApplicationSupportChecks',
+SUITES=['UpdateChecks','UpdateRouteChecks','ResilienceChecks','SecurityReviewChecks','BugReportChecks','ConsoleLaunchChecks','SessionStopChecks','HardReviewChecks','CliChecks','ApplicationSupportChecks',
         'ReviewRegressionChecks','ConnectionRecoveryChecks','CodexDiscoveryChecks','PatchChecks','ShortcutChecks','ShortcutRecoveryChecks',
         'NativeLoginChecks','GoogleGeminiChecks','AntigravityPatchChecks','Ide26Checks','ProxyFailureChecks','DnsTransportChecks','DnsProviderChecks','DnsAgentChecks','TlsDiagnosticsChecks','SystemDnsUiChecks','UserInfoChecks','LocalUiChecks','StartupChecks']
 
@@ -33,7 +33,7 @@ def main():
     for name in args.suite or SUITES:
         executable=output/(name+'.exe')
         command=[str(compiler),'/nologo','/target:exe','/out:'+str(executable),'/r:'+str(target)]
-        command+=['/r:'+reference for reference in ('System.Web.Extensions.dll','System.Drawing.dll','System.Windows.Forms.dll','System.Security.dll','System.Xml.dll','System.ServiceProcess.dll')]
+        command+=['/r:'+reference for reference in ('System.Web.Extensions.dll','System.Drawing.dll','System.Windows.Forms.dll','System.Security.dll','System.Xml.dll','System.ServiceProcess.dll','System.IO.Compression.dll')]
         subprocess.run([*command,str(ROOT/'tests/native'/(name+'.cs'))],check=True)
         try:
             result=subprocess.run([str(executable)],cwd=output,env=env,capture_output=True,text=True,encoding="utf-8",errors="replace",timeout=90)

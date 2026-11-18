@@ -10,6 +10,24 @@ namespace DevProxyApp
     {
         private TextBox _antigravityReport;
 
+        private async void RunBrowserDnsDiagnostics() {
+            if(_preview||_nativeBusy)return;
+            _nativeBusy=true;SetNativeButtonsEnabled(false);_antigravityReport.Text="Проверяем настройки браузеров и порт 53…";
+            try {
+                string report=await System.Threading.Tasks.Task.Run(()=>{
+                    var text=new StringBuilder();bool complete;
+                    var holders=LocalPort53.Find(53,out complete);
+                    text.AppendLine("Порт 53: "+(holders.Count>0?LocalPort53.Describe(holders):complete?"слушатели не обнаружены":"не удалось проверить все таблицы"));
+                    if(!complete)text.AppendLine("Результат порта 53 неполный; состояние не считается свободным.");
+                    foreach(var browser in BrowserDiagnostics.DetectAndInspect())text.AppendLine(browser.Name+": "+browser.Explanation);
+                    text.AppendLine("Это чтение сохранённых настроек. Политики, активный профиль и VPN могут влиять на фактический DNS. Настройки не менялись.");
+                    return text.ToString();
+                });
+                if(!IsDisposed)_antigravityReport.Text=report;
+            }catch(Exception error){if(!IsDisposed)_antigravityReport.Text="Не удалось завершить диагностику: "+error.GetType().Name;}
+            finally{_nativeBusy=false;if(!IsDisposed)SetNativeButtonsEnabled(true);}
+        }
+
         private Panel BuildAntigravityPage()
         {
             var page = new FluentLayout { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 3, BackColor = FluentTheme.Background };
@@ -40,6 +58,7 @@ namespace DevProxyApp
             var actions = new FlowLayoutPanel { Dock = DockStyle.Fill, WrapContents = false, AutoScroll = true };
             AddNativeButton(actions, "Вход в Antigravity", OpenAntigravityLogin);
             AddNativeButton(actions, "Проверить Antigravity", () => RunAntigravityOperation("diagnose"));
+            AddNativeButton(actions,"Браузеры и порт 53",RunBrowserDnsDiagnostics);
             page.Controls.Add(actions, 0, 1);
             var reportCard = new FluentCard { Dock = DockStyle.Fill };
             _antigravityReport = new TextBox { Dock = DockStyle.Fill, Multiline = true, ReadOnly = true, WordWrap = true,

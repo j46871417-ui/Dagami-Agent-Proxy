@@ -30,6 +30,7 @@ class UpdateChecks {
  static void Unchanged(UpdatePlan p){Assert(File.ReadAllText(p.GuiPath)=="old-gui"&&Directory.GetFiles(Path.GetDirectoryName(p.GuiPath),"*.exe").Length==1,"Failed update changed the program or created extra EXE");}
  static void Layout(Control parent){foreach(Control c in parent.Controls)if(c.Visible){Assert(c.Left>=0&&c.Top>=0&&c.Right<=parent.ClientSize.Width+2&&c.Bottom<=parent.ClientSize.Height+2,"Clipped updater control "+c.Text);Layout(c);}}
  [STAThread]static int Main(){string root=Path.Combine(Path.GetTempPath(),"Dagami-update-check-"+Guid.NewGuid().ToString("N"));Directory.CreateDirectory(root);try{
+  typeof(NativeUpdates).GetProperty("FixtureRoot",BindingFlags.Static|BindingFlags.NonPublic).SetValue(null,Path.Combine(root,"update-state"),null);
   Assert(UpdateVersion.Parse("v0.1.0-alpha.10").CompareTo(UpdateVersion.Parse("v0.1.0-alpha.2"))>0,"Numeric prerelease order");
   Assert(UpdateVersion.Parse("v0.1.0").CompareTo(UpdateVersion.Parse("v0.1.0-alpha.99"))>0,"Stable before alpha");
   Assert(UpdateVersion.Parse("0.1.0-alpha.5+build.2").CompareTo(UpdateVersion.Parse("v0.1.0-alpha.5"))==0,"Build metadata changes order");

@@ -109,7 +109,7 @@ class LocalUiChecks {
     }
     Call(form,"UpdateAppActionState");
     var pages=(Panel[])Get(form,"_pageControls");
-    Assert(pages.Length==5,"Flat pages are missing");
+    Assert(pages.Length==6,"Flat pages are missing");
     var auto=pages[0].Controls.Find("AutomaticAiRouteButton",true);
     Assert(auto.Length==1&&auto[0].Visible&&auto[0].Text=="Автоматическая разблокировка ИИ"&&
      (bool)auto[0].GetType().GetProperty("Primary").GetValue(auto[0],null),"Home automatic setup is missing or is not primary");
@@ -163,7 +163,7 @@ class LocalUiChecks {
     Call(form,"ShowFluentPage",1);
     Call(form,"ApplyThemeChoice","light");
     Assert(form.BackColor.ToArgb()==light.ToArgb(),"Switching back did not restore the light theme");
-    for(int index=0;index<5;index++){Call(form,"ShowFluentPage",index);Bounds(form);Picture(form,"local-page-"+index+".png");}
+    for(int index=0;index<6;index++){Call(form,"ShowFluentPage",index);Bounds(form);Picture(form,"local-page-"+index+".png");}
     Call(form,"ShowFluentPage",1);
     var advanced=(Button)form.Controls.Find("AdvancedConnectionButton",true)[0];
     var wholeNetwork=(CheckBox)Get(form,"_wholeNetworkDns");
@@ -219,7 +219,7 @@ class LocalUiChecks {
      Bounds(form);
     }
     custom.Clear();
-    for(int index=0;index<5;index++){Call(form,"ShowFluentPage",index);Bounds(form);Picture(form,"local-page-"+index+"-min.png");}
+    for(int index=0;index<6;index++){Call(form,"ShowFluentPage",index);Bounds(form);Picture(form,"local-page-"+index+"-min.png");}
 
    }
    Assert(themeMenu.IsDisposed,"Theme menu must be disposed when the form is disposed");

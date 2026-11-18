@@ -144,6 +144,9 @@ func routeForProfile(p Profile) (*Bridge, error) {
 		return nil, err
 	}
 	route := &Bridge{upstream: endpoint, proof: func(target string) (string, error) {
+		if p.Paid {
+			return managed.SignPaid(key, endpoint.Host, "CONNECT", target)
+		}
 		return managed.Sign(key, endpoint.Host, "CONNECT", target)
 	}}
 	if useManagedHTTP2() {
@@ -152,8 +155,56 @@ func routeForProfile(p Profile) (*Bridge, error) {
 	return route, nil
 }
 
+// SelectPaidManaged reuses the registered device, protecting its private key
+// under the new profile ID. Provider URLs never become local profiles.
+func (c *Controller) SelectPaidManaged() error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.preview {
+		return errors.New("приватный пул доступен в обычном режиме")
+	}
+	var source *Profile
+	for i := range c.state.Profiles {
+		p := &c.state.Profiles[i]
+		if p.Managed && !p.Paid && p.Proxy != "" && p.Protected != "" {
+			source = p
+			break
+		}
+	}
+	if source == nil {
+		return errors.New("сначала добавьте ключ прокси Dagami из /key")
+	}
+	raw, err := profileValue(*source)
+	if err != nil {
+		return err
+	}
+	const identifier = "dagami-managed-paid"
+	// Verify the protected key without copying/replacing keychain entries.
+	if _, err = managed.ParseKey(raw); err != nil {
+		return err
+	}
+	old := c.state
+	profiles := []Profile{}
+	for _, p := range c.state.Profiles {
+		if p.ID != identifier {
+			profiles = append(profiles, p)
+		}
+	}
+	c.state.Profiles = append(profiles, Profile{ID: identifier, Name: "Приватные прокси по ключу", Proxy: source.Proxy, Managed: true, Paid: true, Protected: source.Protected, KeyProfile: source.ID})
+	c.state.Active = identifier
+	if err = c.saveLocked(); err != nil {
+		c.state = old
+		return err
+	}
+	c.eventLocked("Выбран приватный пул по ключу; доступность проверяется при подключении")
+	return nil
+}
+
 func profileValue(p Profile) (string, error) {
 	if p.Protected != "" {
+		if p.Managed && p.Paid && p.KeyProfile != "" {
+			return unprotectSecret(p.KeyProfile, p.Protected)
+		}
 		return unprotectSecret(p.ID, p.Protected)
 	}
 	if p.Managed {

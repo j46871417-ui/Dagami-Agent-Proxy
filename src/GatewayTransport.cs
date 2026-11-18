@@ -14,20 +14,22 @@ namespace DevProxyApp {
   internal static string[] Candidates(Uri address) {
    // Control-plane may use a different country. Proxy data never falls back to RU.
    return address.Authority.Equals("test-dns.dagami.ru:9443",StringComparison.OrdinalIgnoreCase)
-    ?new[]{address.IdnHost,"31.76.52.235","150.241.83.174"}:new[]{address.IdnHost};
+    ?new[]{address.IdnHost,"179.254.186.80","45.86.72.85","31.76.52.235","150.241.83.174"}:new[]{address.IdnHost};
   }
   internal static GatewayConnection TryCandidates(IEnumerable<string> hosts,Func<string,TcpClient> dial,Func<TcpClient,Stream> secure) {
    Exception last=null;
    foreach(string host in hosts) {
     TcpClient client=null;
-    try {client=dial(host);return new GatewayConnection(client,secure(client));}
+    string phase="TCP";
+    try {client=dial(host);phase="TLS";return new GatewayConnection(client,secure(client));}
     catch(Exception failure) {
      if(client!=null)client.Close();
      if(!(failure is IOException)&&!(failure is SocketException)&&!(failure is AuthenticationException)&&!(failure is TimeoutException))throw;
+     Logger.Log("[Gateway] endpoint="+host+" phase="+phase+" error="+failure.GetType().Name);
      last=failure;
     }
    }
-   throw new IOException("Шлюз Dagami недоступен по разрешённым маршрутам. "+(last==null?"":last.GetType().Name),last);
+   throw new IOException("Не удалось подключиться к шлюзу прокси. Попробуйте другую сеть. Подробности записаны в журнале.",last);
   }
   internal static GatewayConnection Open(Uri address,string phase,int timeout) {
    var clock=Stopwatch.StartNew();

@@ -46,7 +46,7 @@ func TestExternalSignerCompatibleWithGateway(t *testing.T) {
 }
 func TestTLSFailureRetriesWithoutRU(t *testing.T) {
 	candidates := GatewayCandidates(bootstrapAuthority)
-	if len(candidates) != 3 {
+	if len(candidates) != 5 {
 		t.Fatal(candidates)
 	}
 	for _, host := range candidates {

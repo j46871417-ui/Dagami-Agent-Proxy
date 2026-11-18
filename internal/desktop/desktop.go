@@ -296,6 +296,11 @@ func (d *desktop) profiles(snapshot portable.Snapshot) {
 		}),
 		action("Проверить связь", d.probe),
 		action("Dagami через бота", d.managedPair),
+		action("Приватные прокси по ключу", func() {
+			d.run("Приватные прокси", func() (string, error) {
+				return "Реквизиты поставщиков остаются на сервере. Используется действующая привязка устройства.", d.controller.SelectPaidManaged()
+			})
+		}),
 	}
 	d.showPage(v)
 }

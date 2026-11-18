@@ -17,6 +17,7 @@ import (
 )
 
 type Gateway struct {
+	replica      *replicaPolicy
 	registry     *registry
 	traffic      *trafficMeter
 	audience     string
@@ -92,6 +93,10 @@ func (g *Gateway) Public(w http.ResponseWriter, r *http.Request) {
 			return
 		case r.Method == http.MethodGet && target == "/v1/status":
 		case r.Method == http.MethodPost && (target == "/v1/pair" || target == "/v1/redeem"):
+			if g.replica != nil {
+				w.WriteHeader(http.StatusServiceUnavailable)
+				return
+			}
 		default:
 			w.WriteHeader(http.StatusNotFound)
 			return
@@ -100,11 +105,21 @@ func (g *Gateway) Public(w http.ResponseWriter, r *http.Request) {
 	now := time.Now()
 	device := ""
 	if values := r.Header.Values(header); len(values) == 1 {
+		proof, audience := values[0], g.audience
+		if strings.HasPrefix(proof, "Dagami-Paid ") {
+			if r.Method != http.MethodConnect {
+				w.WriteHeader(http.StatusUnauthorized)
+				return
+			}
+			proof = "Dagami " + strings.TrimPrefix(proof, "Dagami-Paid ")
+			audience += "#paid"
+			r = r.WithContext(WithPaidPool(r.Context()))
+		}
 		if r.Method == http.MethodPost && target == "/v1/redeem" {
 			// Initial activation can tolerate more clock drift without relaxing CONNECT.
-			device = g.redeemReplay.verifyWithin(values[0], g.audience, r.Method, target, now.Unix(), redeemProofWindow)
+			device = g.redeemReplay.verifyWithin(proof, audience, r.Method, target, now.Unix(), redeemProofWindow)
 		} else {
-			device = g.replay.verify(values[0], g.audience, r.Method, target, now.Unix())
+			device = g.replay.verify(proof, audience, r.Method, target, now.Unix())
 		}
 	}
 	if device == "" {
@@ -387,7 +402,11 @@ func dialLegacy(ctx context.Context, address, auth, target string) (net.Conn, in
 	if deadline, ok := ctx.Deadline(); ok {
 		conn.SetDeadline(deadline)
 	}
-	if _, err = fmt.Fprintf(conn, "CONNECT %s HTTP/1.1\r\nHost: %s\r\nProxy-Authorization: %s\r\n\r\n", target, target, auth); err != nil {
+	pool := ""
+	if PaidPool(ctx) {
+		pool = "X-Dagami-Pool: paid\r\n"
+	}
+	if _, err = fmt.Fprintf(conn, "CONNECT %s HTTP/1.1\r\nHost: %s\r\nProxy-Authorization: %s\r\n%s\r\n", target, target, auth, pool); err != nil {
 		conn.Close()
 		return nil, http.StatusBadGateway
 	}

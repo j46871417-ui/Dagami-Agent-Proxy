@@ -29,7 +29,9 @@ namespace DevProxyApp {
   public const string Api="https://api.github.com/repos/"+Repository+"/releases?per_page=100";
   public const long MaxBinary=128*1024*1024;
   static readonly byte[] Entropy=Encoding.UTF8.GetBytes("Dagami.Updates.v1");
-  public static string Root {get{return Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),"DagamiAgentProxy","updates");}}
+  // Fixtures must not share activity locks or staging files with a running client.
+  internal static string FixtureRoot {get;set;}
+  public static string Root {get{return FixtureRoot??Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),"DagamiAgentProxy","updates");}}
   public static string Hash(byte[] data){using(var sha=SHA256.Create())return BitConverter.ToString(sha.ComputeHash(data)).Replace("-","").ToLowerInvariant();}
   public static string FileHash(string path){using(var input=File.OpenRead(path))using(var sha=SHA256.Create())return BitConverter.ToString(sha.ComputeHash(input)).Replace("-","").ToLowerInvariant();}
   public static void Atomic(string path,byte[] data){Directory.CreateDirectory(Path.GetDirectoryName(path));string tmp=path+"."+Guid.NewGuid().ToString("N")+".tmp";try{File.WriteAllBytes(tmp,data);if(File.Exists(path))File.Replace(tmp,path,null);else File.Move(tmp,path);}finally{if(File.Exists(tmp))File.Delete(tmp);}}
