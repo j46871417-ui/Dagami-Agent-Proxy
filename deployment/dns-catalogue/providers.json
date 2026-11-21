@@ -1,0 +1,41 @@
+{
+  "Version": 1,
+  "Providers": [
+    {
+      "Id": "dagami-main",
+      "Name": "Dagami DNS",
+      "Url": "https://dns.dagami.ru/dns-query",
+      "Addresses": []
+    },
+    {
+      "Id": "dagami-backup",
+      "Name": "Dagami DNS · резерв",
+      "Url": "https://doh.dagami.ru/dns-query",
+      "Addresses": []
+    },
+    {
+      "Id": "magicdns",
+      "Name": "MagicDNS",
+      "Url": "https://api.magicinfo.art/rpc",
+      "Addresses": []
+    },
+    {
+      "Id": "comss",
+      "Name": "Comss.one",
+      "Url": "https://dns.comss.one/dns-query",
+      "Addresses": []
+    },
+    {
+      "Id": "geohide",
+      "Name": "GeoHide",
+      "Url": "https://dns.geohide.ru/dns-query",
+      "Addresses": []
+    },
+    {
+      "Id": "malw",
+      "Name": "Malw.link",
+      "Url": "tls://dns.malw.link",
+      "Addresses": []
+    }
+  ]
+}

@@ -60,6 +60,8 @@ class ConnectionRecoveryChecks {
     Assert(rejected,"Invalid custom proxy was accepted: "+invalid);
    }
    Assert((string)normalize.Invoke(null,new object[]{savedProxy,false,true})==savedProxy,"Saving DNS-only settings erased disabled proxy credentials");
+    Assert((string)normalize.Invoke(null,new object[]{ManagedAccess.PaidProfile,true,false})==ManagedAccess.PaidProfile,
+     "Restoring the private pool silently selected the ordinary keyed proxy");
    foreach(bool proxyEnabled in new[]{false,true})foreach(bool dnsEnabled in new[]{false,true}){
     legacy.LastProxy=savedProxy;legacy.UseProxy=proxyEnabled;legacy.UseDagamiDns=dnsEnabled;
     Assert(legacy.EffectiveProxy==(proxyEnabled?savedProxy:"direct"),"Route flags did not control effective upstream");

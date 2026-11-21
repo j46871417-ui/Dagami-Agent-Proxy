@@ -16,6 +16,11 @@ namespace DevProxyApp
         internal LocalProxyBridge ModelBridge;
         internal AiRoute ModelRoute;
         internal AntigravityModelOutcome ModelOutcome;
+        internal string ModelPreparationStatus;
+        internal bool ModelRecoveryAttempted;
+        internal bool ModelRecoveryPending;
+        internal AiRouteProgress ModelRecoveryProgress;
+        internal AiRoute ModelRecoveryRoute;
         internal long LastScannedModelTunnels;
         internal bool ModelRouteObserved;
         internal readonly HashSet<System.Net.IPAddress> ModelSmartDnsAddresses = new HashSet<System.Net.IPAddress>();

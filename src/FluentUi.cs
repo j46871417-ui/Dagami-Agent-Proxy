@@ -377,7 +377,7 @@ namespace DevProxyApp
 
         private void OpenBugReport()
         {
-            using (var dialog = new BugReportDialog()) ShowThemedDialog(dialog);
+            using (var dialog = new BugReportDialog(null, _lastAntigravityReport)) ShowThemedDialog(dialog);
         }
 
         private void ShowThemedDialog(Form dialog) {
@@ -559,7 +559,10 @@ namespace DevProxyApp
                 BackColor = Color.Transparent, ForeColor = Color.FromArgb(233, 240, 255), LinkColor = Color.FromArgb(233, 240, 255),
                 Margin = Padding.Empty, TextAlign = ContentAlignment.MiddleLeft };
             SetAppStatusLink(_autoAiStatus, "Подберёт и включит подключение для выбранного сервиса", false);
-            _autoAiStatus.LinkClicked += (sender, e) => ShowFluentPage(1);
+            _autoAiStatus.LinkClicked += (sender, e) => ShowAutomaticAiDetails();
+            var automaticStatusTip = new ToolTip();
+            _autoAiStatus.TextChanged += (sender, e) => automaticStatusTip.SetToolTip(_autoAiStatus, _autoAiStatus.Text);
+            _autoAiStatus.Disposed += (sender, e) => automaticStatusTip.Dispose();
             connectionRows.Controls.Add(_autoAiStatus, 1, 3);
             connectionRows.SetColumnSpan(_autoAiStatus, 2);
             connection.Controls.Add(connectionRows); apps.Controls.Add(connection, 0, 0);

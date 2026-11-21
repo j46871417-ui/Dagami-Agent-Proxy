@@ -122,7 +122,8 @@ namespace DevProxyApp {
   readonly PictureBox preview=new PictureBox{SizeMode=PictureBoxSizeMode.Zoom,Height=100,Dock=DockStyle.Fill};
   readonly TableLayoutPanel fields=new TableLayoutPanel{Dock=DockStyle.Fill,ColumnCount=1,RowCount=9,AutoScroll=true,Padding=new Padding(16)};
   BugReportPayload pending;string image="";bool busy,sent;
-  public BugReportDialog(string logPath=null) {
+  public BugReportDialog(string logPath=null):this(logPath,null) {}
+  internal BugReportDialog(string logPath,string diagnostics) {
    Text="Сообщить об ошибке · Dagami";Size=new Size(680,850);MinimumSize=new Size(440,600);StartPosition=FormStartPosition.CenterParent;Font=new Font("Segoe UI",10);AutoScaleMode=AutoScaleMode.Dpi; try { Icon = Brand.LoadIcon(); } catch { } BackColor = FluentTheme.Background; ForeColor = FluentTheme.Text;
    var panel=new TableLayoutPanel{Dock=DockStyle.Fill,RowCount=3,ColumnCount=1};panel.RowStyles.Add(new RowStyle(SizeType.Percent,100));panel.RowStyles.Add(new RowStyle(SizeType.AutoSize));panel.RowStyles.Add(new RowStyle(SizeType.AutoSize));Controls.Add(panel);panel.Controls.Add(fields,0,0);
    panel.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,100));fields.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,100));message.Dock=DockStyle.Fill;
@@ -134,6 +135,7 @@ namespace DevProxyApp {
    fields.Controls.Add(new Label{AutoSize=true,Text="PNG/JPEG до 2 МБ. Проверьте картинку: её содержимое не скрывается автоматически. При ошибке сети отчёт сохранится на этом компьютере для повторной отправки.",MaximumSize=new Size(590,0)},0,8);
    foreach(Control field in fields.Controls)if(field is Label)field.Dock=DockStyle.Fill;
    try{logs.Text=BugReports.ReadLogs(logPath??Logger.LogFilePath);}catch{logs.Text="Не удалось прочитать журнал.";}
+   if(!string.IsNullOrEmpty(diagnostics))logs.Text=BugReports.Clean(diagnostics)+Environment.NewLine+Environment.NewLine+logs.Text;
    choose.Click+=(s,e)=>{using(var picker=new OpenFileDialog{Filter="PNG или JPEG|*.png;*.jpg;*.jpeg",CheckFileExists=true})if(picker.ShowDialog(this)==DialogResult.OK)try{string data=BugReports.ImageData(picker.FileName);using(var stream=new MemoryStream(Convert.FromBase64String(data)))using(var picture=Image.FromStream(stream)){if(preview.Image!=null)preview.Image.Dispose();preview.Image=new Bitmap(picture);}image=data;}catch(Exception ex){MessageBox.Show(this,ex.Message,"Картинка");}};
    remove.Click+=(s,e)=>{image="";if(preview.Image!=null){preview.Image.Dispose();preview.Image=null;}};
    var actions=new FlowLayoutPanel{AutoSize=true,Dock=DockStyle.Fill,Padding=new Padding(16,4,16,4)};actions.Controls.Add(send);actions.Controls.Add(retry);var site=new Button{Text="Форма на сайте",AutoSize=true};actions.Controls.Add(site);site.Click+=(s,e)=>{try{System.Diagnostics.Process.Start(BugReports.Site);}catch(Exception ex){MessageBox.Show(this,ex.Message);}};panel.Controls.Add(actions,0,1);message.Padding=new Padding(16,4,16,16);panel.Controls.Add(message,0,2);

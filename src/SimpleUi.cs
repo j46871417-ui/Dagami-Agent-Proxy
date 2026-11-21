@@ -16,6 +16,9 @@ namespace DevProxyApp {
   ComboBox _autoAiService;
   CheckBox _autoAiPublic;
   LinkLabel _autoAiStatus;
+  string _autoAiDetails;
+  int _publicRouteNumber;
+  string _numberedPublicRoute;
   FluentButton _encryptedDnsAction;
   DateTime _nextDnsUiRead;
   bool _encryptedDnsActive,_encryptedDnsRunning,_changingDnsPreference,_probingDnsAddresses,_dnsDraftDirty;
@@ -182,8 +185,13 @@ namespace DevProxyApp {
   }
 
   void AutomaticAiFeedback(string brief,string details=null) {
+   _autoAiDetails=details;
    _connectionFeedback.Text=details??brief;
    SetAppStatusLink(_autoAiStatus,brief,details!=null);
+  }
+  void ShowAutomaticAiDetails() {
+   if(_autoAiDetails!=null)_connectionFeedback.Text=_autoAiDetails;
+   ShowFluentPage(1);
   }
   void PrepareBrowserExtension() {
    try {
@@ -252,7 +260,7 @@ namespace DevProxyApp {
 
   void OpenRecovery(bool uninstall) {
    if(_preview)return;
-   if(_patchInProgress||_routeChangeInProgress||_updatePreparing||_nativeBusy){_connectionFeedback.Text="Дождитесь завершения текущей операции.";return;}
+    if(_patchInProgress||_routeChangeInProgress||_updatePreparing||_nativeBusy||_findingPublicProxy){_connectionFeedback.Text="Дождитесь завершения текущей операции.";return;}
    string folder=Path.GetDirectoryName(typeof(MainForm).Assembly.Location);
    string helper=Path.Combine(folder,uninstall?"DagamiUninstall.exe":"DagamiRecovery.exe");
    if(!File.Exists(helper))helper=typeof(MainForm).Assembly.Location;
@@ -332,7 +340,9 @@ namespace DevProxyApp {
   }
 
   async void ToggleWindowsProxy() {
-   if(_preview||_findingPublicProxy||_routeChangeInProgress||_nativeBusy)return;
+   if(_preview||_findingPublicProxy||_routeChangeInProgress||_nativeBusy||_updatePreparing)return;
+   PublicProxyScan publicScan=null;
+   bool showPublicProgress=false;
    try {
     if(WindowsSelectiveProxy.Disable()) {
      _connectionFeedback.Text="Прокси Windows выключен. Запущенные через Dagami приложения сохраняют свой маршрут.";
@@ -353,46 +363,67 @@ namespace DevProxyApp {
      }
     } else if(mode=="public") {
      _findingPublicProxy=true;
-     _windowsProxyAction.Enabled=false;
+     SetNativeButtonsEnabled(false);
      _requireGemini.Enabled=false;
      bool gemini=config.SavedProxyRequireGemini;
-     _connectionFeedback.Text=gemini?"Ищем публичный прокси для Gemini…":"Проверяем публичные прокси…";
-     var result=await System.Threading.Tasks.Task.Run(()=>PublicProxyCandidates.Find(gemini));
-     if(IsDisposed||Disposing||_exitRequested||_nativeBusy||_routeChangeInProgress||!_publicProxyMode.Checked||
-        config.SelectedProxyMode!="public"||gemini!=_requireGemini.Checked)return;
-     proxy=result.Key;
-     if(proxy==null){_connectionFeedback.Text="Подходящий публичный прокси не найден.";return;}
+     _connectionFeedback.Text="Загружаем список публичных прокси…";
+     showPublicProgress=true;
+     var progress=new Progress<PublicProxyScan>(scan=>{
+      if(showPublicProgress&&!IsDisposed&&!Disposing&&!_exitRequested)
+       _connectionFeedback.Text=scan.Details();
+     });
+     publicScan=await System.Threading.Tasks.Task.Run(()=>PublicProxyCandidates.Find(gemini,progress));
+     showPublicProgress=false;
+     if(IsDisposed||Disposing||_exitRequested||_nativeBusy||_routeChangeInProgress)return;
+     if(!_publicProxyMode.Checked||config.SelectedProxyMode!="public"||gemini!=_requireGemini.Checked) {
+      _connectionFeedback.Text="Выбор прокси изменился. Сохраните его и повторите поиск.\r\n"+publicScan.Details();
+      return;
+     }
+     proxy=publicScan.Proxy;
+     if(proxy==null){_connectionFeedback.Text="Подходящий прокси не найден.\r\n"+publicScan.Details();return;}
     } else {
      proxy=NormalizeCustomProxy(config.SelectedProxyAddress,_bridgePort);
     }
     if(mode=="paid"){
-     _findingPublicProxy=true;_windowsProxyAction.Enabled=false;
+     _findingPublicProxy=true;SetNativeButtonsEnabled(false);
      _connectionFeedback.Text="Проверяем приватный пул по ключу…";
      string failure=await System.Threading.Tasks.Task.Run(()=>AutomaticAiRoute.Probe(new AiRoute("Приватные прокси",proxy,null),"Codex"));
      if(IsDisposed||Disposing||_exitRequested||config.SelectedProxyMode!="paid"||ProxyModeFromControls()!="paid")return;
      if(failure!=null)throw new IOException("Приватные прокси не прошли проверку; прокси Windows не включён. "+failure);
     }
-    EnableSelectedWindowsRoute(config,proxy,mode);
+    bool enabled=EnableSelectedWindowsRoute(config,proxy,mode);
+    if(publicScan!=null) {
+     if(enabled)RememberPublicRoute(proxy,publicScan.SelectedNumber);
+     _connectionFeedback.Text=(enabled?_connectionFeedback.Text:"Подключение отменено.")+
+      "\r\n"+publicScan.Details(enabled?publicScan.SelectedNumber:0);
+    }
    } catch(Exception error) {
-    if(!IsDisposed)_connectionFeedback.Text=BugReports.Clean(error.Message);
+    if(!IsDisposed&&!Disposing)_connectionFeedback.Text=BugReports.Clean(error.Message)+(publicScan==null?"":"\r\n"+publicScan.Details());
    } finally {
+    showPublicProgress=false;
+    bool searching=_findingPublicProxy;
     _findingPublicProxy=false;
-    if(!IsDisposed) {
-     _windowsProxyAction.Enabled=!_nativeBusy;
+    if(!IsDisposed&&!Disposing) {
+     if(searching&&!_nativeBusy)SetNativeButtonsEnabled(true);
      _requireGemini.Enabled=_publicProxyMode.Checked;
      UpdateNativeStatus();
     }
    }
   }
 
-  void EnableSelectedWindowsRoute(ConfigManager config,string proxy,string mode) {
+  void RememberPublicRoute(string proxy,int number) {
+   _numberedPublicRoute=proxy;
+   _publicRouteNumber=number;
+  }
+
+  bool EnableSelectedWindowsRoute(ConfigManager config,string proxy,string mode) {
    bool useWindowsProxy=!IsDirectProxyValue(proxy);
    bool changed=!config.UseProxy||proxy!=config.LastProxy||config.UseDagamiDns||
        config.PublicProxySelected!=(mode=="public")||((mode=="key"||mode=="paid")&&_managedBridgeRefreshNeeded);
    if(!changed&&_rescueBridge!=null&&_rescueBridge.ServesSelectivePac) {
     if(useWindowsProxy)WindowsSelectiveProxy.Enable(_bridgePort);
    } else {
-    if(!EnsureSessionsStoppedForRouteChange())return;
+    if(!EnsureSessionsStoppedForRouteChange())return false;
     LocalProxyBridge candidate=new LocalProxyBridge();
     try {
      if(!candidate.Start(0,proxy,null))throw new IOException("Не удалось запустить локальный мост для выбранного прокси.");
@@ -418,18 +449,22 @@ namespace DevProxyApp {
    _connectionFeedback.Text=useWindowsProxy
     ?"Выбранный прокси включён для запуска через Dagami и поддерживаемых приложений Windows. Оставьте Dagami запущенным."
     :"Выбран системный маршрут. Прокси Windows выключен.";
+    return true;
   }
 
   void FindAutomaticAiRoute() {
    FindAutomaticAiRoute((string)_autoAiService.SelectedItem,null,null);
   }
 
-  void FindAntigravityRecoveryRoute(AiRoute refused,IEnumerable<IPAddress> refusedAddresses) {
-   FindAutomaticAiRoute("Antigravity",refused,refusedAddresses);
+  void FindAntigravityRecoveryRoute(NativeSession session) {
+   FindAutomaticAiRoute("Antigravity",session.ModelDnsFallback?null:session.ModelRoute,
+    session.ModelSmartDnsAddresses,preferred:session.ModelRecoveryRoute);
   }
 
-  async void FindAutomaticAiRoute(string service,AiRoute refused,IEnumerable<IPAddress> refusedAddresses) {
-   if(_preview||_nativeBusy)return;
+  async void FindAutomaticAiRoute(string service,AiRoute refused,IEnumerable<IPAddress> refusedAddresses,
+   NativeSession backgroundSession=null,AiRoute preferred=null) {
+   bool background=backgroundSession!=null;
+   if(_preview||_nativeBusy||_routeChangeInProgress||_updatePreparing)return;
    if(_findingPublicProxy) {
     AutomaticAiFeedback("Дождитесь окончания текущей проверки публичных прокси.");
     return;
@@ -447,13 +482,13 @@ namespace DevProxyApp {
    bool recovering=antigravity&&(refused!=null||refusedAddresses!=null||_antigravityRoutes.HasRecentRejection(now));
    var avoided=antigravity?_antigravityRoutes.RefusedSmartDnsAddresses(now):null;
    if(antigravity&&refusedAddresses!=null)avoided.UnionWith(refusedAddresses);
-   bool allowPublic=!recovering&&_autoAiPublic.Checked;
+   bool allowPublic=!background&&!recovering&&_autoAiPublic.Checked;
    string manualInput=_proxyBox.Text, dnsInput=_dnsBox.Text;
    int oldPort=_bridgePort;
    bool hasKey=ManagedAccess.HasActiveDevice();
    string custom=null;
    bool invalidCustom=false;
-   string customInput=recovering&&string.IsNullOrWhiteSpace(manualInput)?savedCustom:manualInput;
+   string customInput=background||(recovering&&string.IsNullOrWhiteSpace(manualInput))?savedCustom:manualInput;
    if(!string.IsNullOrWhiteSpace(customInput)) {
     try {custom=NormalizeCustomProxy(customInput,oldPort);}
     catch(ArgumentException) {invalidCustom=true;}
@@ -469,32 +504,73 @@ namespace DevProxyApp {
     catch(IOException) {currentValid=false;}
    }
    var current=currentValid?new AiRoute("Текущий маршрут",configuredProxy,useDns?snapshot.Dns:null,snapshot.PublicProxy&&useProxy):null;
-   string dns=AutomaticAiRoute.SupportsDns(service)&&DnsProviders.IsValidSpec(dnsInput)?dnsInput.Trim():null;
+   string requestedDns=background?snapshot.Dns:dnsInput;
+   string dns=AutomaticAiRoute.SupportsDns(service)&&DnsProviders.IsValidSpec(requestedDns)?requestedDns.Trim():null;
    var candidates=AutomaticAiRoute.Candidates(service,current,hasKey,custom,dns,allowPublic);
+   if(background)candidates=AutomaticAiRoute.BackgroundAntigravityCandidates(candidates,current,useProxy,useDns,dns);
    var decisions=new List<string>();
    if(antigravity)candidates=_antigravityRoutes.Prioritize(candidates,refused,now,decisions);
-   _nativeBusy=true;
-   SetNativeButtonsEnabled(false);
-   _autoAiService.Enabled=_autoAiPublic.Enabled=false;
-   AutomaticAiFeedback(recovering?"Antigravity · проверяем другие маршруты…":"Подбираем подключение для "+service+"…");
+   if(preferred!=null) {
+    int index=candidates.FindIndex(preferred.SameRoute);
+    if(index>0){var route=candidates[index];candidates.RemoveAt(index);candidates.Insert(0,route);}
+   }
+   if(background) {
+    _antigravityRecoveryPending=true;
+    backgroundSession.ModelRecoveryAttempted=true;
+    backgroundSession.ModelRecoveryPending=true;
+    backgroundSession.ModelRecoveryProgress=null;
+    UpdateAppActionState();
+   } else {
+    _nativeBusy=true;
+    SetNativeButtonsEnabled(false);
+    _autoAiService.Enabled=_autoAiPublic.Enabled=false;
+    AutomaticAiFeedback(recovering?"Antigravity · проверяем другие маршруты…":"Подбираем подключение для "+service+"…");
+   }
    var currentBridge=_rescueBridge;
    Logger.Log("[Auto AI route] "+service+" · вариантов для проверки: "+candidates.Count.ToString());
+   PublicProxyScan publicScan=null;
+   bool showProbeProgress=true;
+   var routeProgress=new Progress<AiRouteProgress>(progress=>{
+    if(!showProbeProgress||IsDisposed||Disposing||_exitRequested)return;
+    if(background) {
+     backgroundSession.ModelRecoveryProgress=progress;
+     UpdateAppActionState();
+    } else AutomaticAiFeedback(progress.Summary);
+   });
+   IProgress<PublicProxyScan> publicProgress=new Progress<PublicProxyScan>(scan=>{
+    if(!showProbeProgress||IsDisposed||Disposing||_exitRequested)return;
+    if(scan==null)AutomaticAiFeedback("Загружаем список публичных прокси…");
+    else AutomaticAiFeedback(scan.Summary(),scan.Details());
+   });
+   bool publicTried=false;
+   Func<string> findPublic=allowPublic?(Func<string>)(()=>{
+    publicTried=true;
+    publicProgress.Report(null);
+    publicScan=PublicProxyCandidates.FindForService(uri=>AutomaticAiRoute.ProbePublic(uri,service),publicProgress);
+    return publicScan.Proxy;
+   }):null;
    try {
-    var result=await System.Threading.Tasks.Task.Run(()=>{
-     Func<string> findPublic=allowPublic?(Func<string>)(()=>PublicProxyCandidates.FindForService(uri=>
-      AutomaticAiRoute.Probe(new AiRoute("Публичный прокси",uri.AbsoluteUri,null,true),service)==null)):null;
-     return AutomaticAiRoute.Select(candidates,route=>{
+    var result=await System.Threading.Tasks.Task.Run(()=>AutomaticAiRoute.Select(candidates,route=>{
       bool reuse=route.SameRoute(current)&&oldPort>0&&route.ProbeDns(service)==route.Dns;
       if(antigravity)return reuse?AutomaticAiRoute.VerifyAntigravity(currentBridge,avoided):AutomaticAiRoute.ProbeAntigravity(route,avoided);
       return reuse?AutomaticAiRoute.VerifyRunning(oldPort,service):AutomaticAiRoute.Probe(route,service);
-     },findPublic);
-    });
+     },findPublic,routeProgress));
+    showProbeProgress=false;
     if(IsDisposed||Disposing||_exitRequested)return;
     if(cfg.LastProxy!=snapshot.Proxy||cfg.CustomProxy!=savedCustom||cfg.DnsHost!=snapshot.Dns||
        cfg.PublicProxySelected!=snapshot.PublicProxy||cfg.UseProxy!=useProxy||cfg.UseDagamiDns!=useDns||
        cfg.DnsObfuscation!=obfuscation||cfg.DpiDesyncMode!=dpiMode||_proxyBox.Text!=manualInput||_dnsBox.Text!=dnsInput||
-       ManagedAccess.HasActiveDevice()!=hasKey||_bridgePort!=oldPort) {
-     AutomaticAiFeedback("Подключение изменилось. Запустите подбор ещё раз.");
+       ManagedAccess.HasActiveDevice()!=hasKey||_bridgePort!=oldPort||_rescueBridge!=currentBridge) {
+     if(!background)AutomaticAiFeedback("Подключение изменилось. Запустите подбор ещё раз.");
+     return;
+    }
+    if(background) {
+     if(backgroundSession.RunningProcess==null||backgroundSession.ModelOutcome!=AntigravityModelOutcome.RegionRejected||
+        !backgroundSession.ModelRouteObserved||!_nativeSessions.ContainsValue(backgroundSession))return;
+     backgroundSession.ModelRecoveryProgress=result.Progress;
+     backgroundSession.ModelRecoveryRoute=result.Route;
+     Logger.Log(result.Route==null?"[Antigravity recovery] Допустимый резервный маршрут не найден.":
+      "[Antigravity recovery] Подобран маршрут: "+result.Route.Name+". Проверено соединение; нужен ответ модели.");
      return;
     }
     result.Report.InsertRange(0,decisions);
@@ -502,15 +578,22 @@ namespace DevProxyApp {
     string failures=result.Report.Count>0?"\r\n\r\n"+string.Join("\r\n",result.Report):"";
     if(result.Route==null) {
      Logger.Log("[Auto AI route] "+service+" · подходящий маршрут не найден");
-     AutomaticAiFeedback("Для "+service+" маршрут не найден · Подробности",
-      "Текущее подключение сохранено."+failures);
+     AutomaticAiFeedback(publicScan==null?"Для "+service+" маршрут не найден · Подробности":publicScan.Summary(),
+      "Подходящий маршрут не найден. Текущее подключение сохранено."+
+      (publicScan==null?"":"\r\n"+publicScan.Details())+failures);
      return;
     }
     bool unchanged=false;
-    var remaining=new List<AiRoute>(candidates);
+    var remaining=candidates.GetRange(result.Progress.Checked,candidates.Count-result.Progress.Checked);
+    var ready=new Queue<AiRoute>(result.Alternatives);
+    if(publicScan!=null)foreach(int number in publicScan.OtherPassedNumbers())
+     ready.Enqueue(new AiRoute("Публичный прокси №"+number,publicScan.Address(number),null,true));
     while(result.Route!=null) {
      unchanged=result.Route.SameRoute(current);
-     if(!unchanged&&!EnsureSessionsStoppedForRouteChange()){AutomaticAiFeedback("Смена отменена. Текущее подключение сохранено.");return;}
+     if(!unchanged&&!EnsureSessionsStoppedForRouteChange()){
+      const string canceled="Смена отменена. Текущее подключение сохранено.";
+      AutomaticAiFeedback(canceled,publicScan==null?null:canceled+"\r\n"+publicScan.Details());return;
+     }
      IOException applyFailure=null;
      try {
       AutomaticAiFeedback("Включаем "+result.Route.Name+" в Windows…");
@@ -521,33 +604,56 @@ namespace DevProxyApp {
       var error=applyFailure;
       for(Exception cause=error;cause!=null;cause=cause.InnerException)if(cause is AutomaticRouteRollbackException)throw error;
       failures+="\r\n"+result.Route.Name+" — "+BugReports.Clean(error.Message);
-      var failed=result.Route;
-      remaining.RemoveAll(failed.SameRoute);
-      if(remaining.Count==0)throw new IOException("Не удалось применить рабочий маршрут в Windows. "+failures,error);
+      if(ready.Count>0){result.Route=ready.Dequeue();continue;}
+      if(remaining.Count==0&&(publicTried||findPublic==null))
+       throw new IOException("Не удалось применить рабочий маршрут в Windows. "+failures,error);
       AutomaticAiFeedback("Этот вариант не применился. Проверяем следующий маршрут…");
+      showProbeProgress=true;
       result=await System.Threading.Tasks.Task.Run(()=>AutomaticAiRoute.Select(remaining,
-       route=>antigravity?AutomaticAiRoute.ProbeAntigravity(route,avoided):AutomaticAiRoute.Probe(route,service),null));
+       route=>antigravity?AutomaticAiRoute.ProbeAntigravity(route,avoided):AutomaticAiRoute.Probe(route,service),
+       publicTried?null:findPublic,routeProgress));
+      showProbeProgress=false;
+      if(IsDisposed||Disposing||_exitRequested)return;
+      remaining.RemoveRange(0,result.Progress.Checked);
+      foreach(var alternate in result.Alternatives)ready.Enqueue(alternate);
+      if(publicScan!=null)foreach(int number in publicScan.OtherPassedNumbers())
+       ready.Enqueue(new AiRoute("Публичный прокси №"+number,publicScan.Address(number),null,true));
+      if(result.Report.Count>0)failures+="\r\n"+string.Join("\r\n",result.Report);
       if(result.Route==null)throw new IOException("Остальные маршруты не прошли проверку. "+failures,error);
      }
     }
     string outcome=unchanged?"Подключение активно":result.Route.Name+" включён";
+    int connectedNumber=publicScan!=null&&result.Route.PublicProxy?publicScan.NumberOf(result.Route.Proxy):0;
+    if(connectedNumber!=0) {
+     RememberPublicRoute(result.Route.Proxy,connectedNumber);
+     outcome="Подключён публичный прокси №"+connectedNumber;
+    }
     string next=!recovering?"Вход и ответ модели проверяются в самом приложении."
      :"Снова запустите Antigravity через Dagami и отправьте новый запрос.";
     Logger.Log("[Auto AI route] "+service+" · "+outcome+" · HTTPS-проверка прошла");
-    AutomaticAiFeedback(service+(antigravity?" · сеть доступна, ответ модели не проверен":" · "+outcome)+" · Подробности",
-     outcome+". "+_automaticSystemSummary+" Проверка через Windows прошла. "+next+failures);
+    AutomaticAiFeedback(connectedNumber!=0?publicScan.Summary(connectedNumber):service+(antigravity?" · сеть доступна, ответ модели не проверен":" · "+outcome)+" · Подробности",
+     outcome+". "+_automaticSystemSummary+" Проверка через Windows прошла. "+next+
+     (publicScan==null?"":"\r\n\r\n"+publicScan.Details(connectedNumber))+failures);
    } catch(Exception error) {
     if(!IsDisposed&&!Disposing&&!_exitRequested) {
      Logger.Log("[Auto AI route] "+error.GetType().Name);
-     AutomaticAiFeedback("Не удалось настроить "+service+" · Подробности",
-      error is IOException?BugReports.Clean(error.Message):"Не удалось завершить подбор. Подробности в журнале.");
+     if(!background)AutomaticAiFeedback("Не удалось настроить "+service+" · Подробности",
+       (error is IOException?BugReports.Clean(error.Message):"Не удалось завершить подбор. Подробности в журнале.")+
+       (publicScan==null?"":"\r\n\r\n"+publicScan.Details()));
     }
    } finally {
-    _nativeBusy=false;
-    if(!IsDisposed&&!Disposing) {
+    showProbeProgress=false;
+    if(background) {
+     _antigravityRecoveryPending=false;
+     backgroundSession.ModelRecoveryPending=false;
+     if(!IsDisposed&&!Disposing&&!_exitRequested)UpdateAppActionState();
+    } else {
+     _nativeBusy=false;
+     if(!IsDisposed&&!Disposing) {
      _autoAiService.Enabled=_autoAiPublic.Enabled=true;
      SetNativeButtonsEnabled(true);
      UpdateNativeStatus();
+     }
     }
    }
   }
@@ -835,6 +941,7 @@ namespace DevProxyApp {
    var appActions=new FlowLayoutPanel{Dock=DockStyle.Fill,WrapContents=false,Margin=Padding.Empty};
    var apply=AddNativeButton(appActions,"Применить для приложений",SaveDnsPreference);apply.Name="ApplyAppDnsButton";apply.Primary=true;
    AddNativeButton(appActions,"Импорт профиля…",ImportDnsMobileConfig);
+    AddNativeButton(appActions,"Каталог DNS…",OpenDnsCatalogue).Name="OpenDnsCatalogueButton";
    appRows.Controls.Add(appActions,0,4);
    _dnsScopeStatus=new Label{Name="AppDnsScopeStatus",Dock=DockStyle.Fill,ForeColor=FluentTheme.Muted};
    appRows.Controls.Add(_dnsScopeStatus,0,5);
@@ -888,7 +995,8 @@ namespace DevProxyApp {
   void ShowDnsStorage(){
    MessageBox.Show(this,
     "Выбранный DNS для приложений\r\n"+ConfigManager.Instance.SettingsPath+
-    "\r\n\r\nПроверенные адреса провайдеров\r\n"+DnsProviders.CataloguePath+
+     "\r\n\r\nПроверенные адреса провайдеров\r\n"+DnsProviders.CataloguePath+
+     "\r\n\r\nОбщий каталог DNS\r\n"+Path.Combine(Path.GetDirectoryName(DnsProviders.CataloguePath),"dns-shared-catalogue.json")+
     "\r\n\r\nЖурнал проверки\r\n"+Logger.LogFilePath+
     "\r\n\r\nНастройки службы DNS Windows\r\n"+Path.Combine(DnsServiceHost.DirectoryPath,"dns-custom.json")+
     "\r\n\r\nКопия настроек Windows для восстановления\r\n"+Path.Combine(SystemDnsManager.StoreRoot,"state.json"),
@@ -908,6 +1016,51 @@ namespace DevProxyApp {
     _dnsReport.Clear();
     _dnsCheckStatus.Text="Нажмите «Обновить и проверить DNS» для этого источника.";
    }
+   }
+
+  void OpenDnsCatalogue(){
+    if(_preview)return;
+    using(var dialog=new Form{Text="Каталог DNS",ClientSize=new Size(520,296),Padding=new Padding(12),
+        StartPosition=FormStartPosition.CenterParent,MinimizeBox=false,MaximizeBox=false,ShowInTaskbar=false}) {
+     var rows=new TableLayoutPanel{Dock=DockStyle.Fill,ColumnCount=1,RowCount=3};
+     rows.RowStyles.Add(new RowStyle(SizeType.Absolute,48));
+     rows.RowStyles.Add(new RowStyle(SizeType.Percent,100));
+     rows.RowStyles.Add(new RowStyle(SizeType.Absolute,42));
+     var status=new Label{Dock=DockStyle.Fill};
+     var list=new ListBox{Dock=DockStyle.Fill,AccessibleName="DNS-провайдеры с проверенными адресами"};
+     var buttons=new FlowLayoutPanel{Dock=DockStyle.Fill,WrapContents=false};
+     var select=new Button{Text="Выбрать",AutoSize=true,DialogResult=DialogResult.OK,Enabled=false};
+     var refresh=new Button{Text="Обновить каталог",AutoSize=true};
+     var close=new Button{Text="Закрыть",AutoSize=true,DialogResult=DialogResult.Cancel};
+     Action show=()=>{
+      var previous=list.SelectedItem as CatalogueProvider;
+      var options=DnsCatalogue.Options();
+      list.Items.Clear();list.Items.AddRange(options);
+      int index=previous==null?-1:Array.FindIndex(options,provider=>provider.Id==previous.Id);
+      list.SelectedIndex=index;
+      status.Text=DnsCatalogue.Status;
+     };
+     list.SelectedIndexChanged+=(sender,e)=>select.Enabled=list.SelectedIndex>=0;
+     refresh.Click+=async (sender,e)=>{
+      refresh.Enabled=false;
+      status.Text="Загружаем каталог и проверяем DNS…";
+      await System.Threading.Tasks.Task.Run((Action)DnsProviders.RefreshSharedCatalogue);
+      if(dialog.IsDisposed||dialog.Disposing)return;
+      show();
+      refresh.Enabled=true;
+     };
+     buttons.Controls.AddRange(new Control[]{select,refresh,close});
+     rows.Controls.Add(status,0,0);rows.Controls.Add(list,0,1);rows.Controls.Add(buttons,0,2);
+     dialog.Controls.Add(rows);dialog.AcceptButton=select;dialog.CancelButton=close;
+     show();
+     ShowThemedDialog(dialog);
+     if(dialog.DialogResult!=DialogResult.OK)return;
+     var choice=list.SelectedItem as CatalogueProvider;
+     if(choice==null)return;
+     _dnsQuickPresetBox.SelectedIndex=BuiltInDnsPresets.Length-1;
+     _dnsCustomSource.Text=choice.Url;
+     _dnsDraftEnabled.Checked=true;
+    }
   }
 
   void SyncDnsDraft(){

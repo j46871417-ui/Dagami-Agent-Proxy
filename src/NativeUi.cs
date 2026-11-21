@@ -24,6 +24,8 @@ namespace DevProxyApp
         private NativeSession _modelAnswerSession;
         private LocalProxyBridge _modelAnswerBridge;
         private readonly AntigravityRouteHistory _antigravityRoutes = new AntigravityRouteHistory();
+        private bool _antigravityRecoveryPending;
+        private string _lastAntigravityReport;
         private System.Windows.Forms.Timer _sessionRefreshTimer;
         private volatile bool _showNativeLog;
         private bool _logUpdateQueued;
@@ -502,7 +504,7 @@ namespace DevProxyApp
             if (session.ModelBridge == bridge && session.ModelRouteObserved &&
                 session.ModelOutcome == AntigravityModelOutcome.RegionRejected)
             {
-                FindAntigravityRecoveryRoute(session.ModelDnsFallback ? null : session.ModelRoute, session.ModelSmartDnsAddresses);
+                if (!session.ModelRecoveryPending) FindAntigravityRecoveryRoute(session);
                 return;
             }
             if (MessageBox.Show(this, "Отправьте тестовый запрос в «" + target.DisplayName + "». Модель прислала ответ?",
@@ -514,7 +516,23 @@ namespace DevProxyApp
             _modelAnswerBridge = bridge;
             if (session.ModelBridge == bridge)
                 _antigravityRoutes.Record(session.ModelDnsFallback ? null : session.ModelRoute, AntigravityModelOutcome.Streaming, DateTime.UtcNow, session.ModelSmartDnsAddresses);
+            if (session.ModelLog != null) RememberAntigravityReport(session);
             UpdateAppActionState();
+        }
+
+        private void TryPrepareAntigravityRecovery(NativeSession session)
+        {
+            if (session.ModelRecoveryAttempted || _antigravityRecoveryPending || _nativeBusy || _patchInProgress ||
+                _routeChangeInProgress || _updatePreparing || _findingPublicProxy || session.RunningProcess == null ||
+                !session.ModelRouteObserved || session.ModelOutcome != AntigravityModelOutcome.RegionRejected) return;
+            FindAutomaticAiRoute("Antigravity", session.ModelDnsFallback ? null : session.ModelRoute,
+                session.ModelSmartDnsAddresses, backgroundSession: session);
+        }
+
+        private void RememberAntigravityReport(NativeSession session)
+        {
+            _lastAntigravityReport = AntigravityRouteHistory.DiagnosticSummary(session,
+                _modelAnswerSession == session && _modelAnswerBridge == session.ModelBridge);
         }
 
         private async void PollAntigravityModel(string id, NativeSession session)
@@ -560,13 +578,21 @@ namespace DevProxyApp
                     !Equals(previousRelay, session.ModelRelay))
                 {
                     session.ModelOutcome = AntigravityModelOutcome.None;
+                    session.ModelRecoveryRoute = null;
                     if (_modelAnswerSession == session) _modelAnswerSession = null;
+                    RememberAntigravityReport(session);
                     UpdateAppActionState();
                 }
-                else if (session.ModelRouteObserved != previouslyObserved) UpdateAppActionState();
+                else if (session.ModelRouteObserved != previouslyObserved)
+                {
+                    RememberAntigravityReport(session);
+                    UpdateAppActionState();
+                }
+                TryPrepareAntigravityRecovery(session);
                 return;
             }
             session.ModelOutcome = outcome;
+            if (outcome != AntigravityModelOutcome.RegionRejected) session.ModelRecoveryRoute = null;
             if (_modelAnswerSession == session && outcome != AntigravityModelOutcome.Streaming)
             {
                 _modelAnswerSession = null;
@@ -577,7 +603,9 @@ namespace DevProxyApp
             string observedRoute = session.ModelRouteObserved ? "путь через Dagami подтверждён" : "путь через Dagami не подтверждён";
             Logger.Log("[Antigravity model] " + outcome + " · " + observedRoute +
                 (session.ModelSmartDnsAddresses.Count == 0 ? "" : " · Smart DNS " + string.Join(", ", session.ModelSmartDnsAddresses)));
+            RememberAntigravityReport(session);
             UpdateAppActionState();
+            TryPrepareAntigravityRecovery(session);
         }
 
         private void UpdateAppRunStatus(AppTarget target, NativeSession runningSession)
@@ -636,9 +664,20 @@ namespace DevProxyApp
                         break;
                     case AntigravityModelOutcome.RegionRejected:
                         model = runningSession.ModelRouteObserved ? "Регион · Другой маршрут" : "Модель: отказ по региону";
-                        modelClickable = runningSession.ModelRouteObserved && !_nativeBusy;
+                        if (runningSession.ModelRecoveryPending)
+                        {
+                            var progress = runningSession.ModelRecoveryProgress;
+                            model = progress == null ? "Регион · ищем маршрут…" : "Регион · проверено "+progress.Checked+"/"+progress.Total;
+                        }
+                        else if (runningSession.ModelRecoveryRoute != null) model = "Регион · маршрут найден";
+                        else if (runningSession.ModelRecoveryProgress != null) model = "Регион · резерв не найден";
+                        modelClickable = runningSession.ModelRouteObserved && !_nativeBusy && !runningSession.ModelRecoveryPending;
                         modelTip = runningSession.ModelRouteObserved
-                            ? "Google вернул региональный отказ. Подберите другой маршрут и повторите запрос в Antigravity."
+                            ? (runningSession.ModelRecoveryRoute != null
+                                ? "Сетевая проверка пройдена. Нажмите, чтобы включить найденный маршрут, и отправьте новый запрос в Antigravity."
+                                : runningSession.ModelRecoveryPending
+                                    ? "Dagami проверяет доступные маршруты. Повторить запрос нужно будет в Antigravity."
+                                    : "Google вернул региональный отказ. Нажмите, чтобы подобрать другой маршрут.")
                             : "Dagami обнаружил региональный отказ в журнале, но не видел соединения с API через этот мост.";
                         break;
                     case AntigravityModelOutcome.AccountRejected:
@@ -647,6 +686,8 @@ namespace DevProxyApp
                         modelTip = "Antigravity сообщил, что аккаунт недоступен в текущем регионе.";
                         break;
                 }
+                if (runningSession.ModelOutcome == AntigravityModelOutcome.RegionRejected && runningSession.ModelRecoveryProgress != null)
+                    modelTip += "\r\n" + runningSession.ModelRecoveryProgress.Summary;
             }
             SetAppStatusLink(_appModelStatus, model, modelClickable);
             if (_appStatusTip.GetToolTip(_appModelStatus) != modelTip) _appStatusTip.SetToolTip(_appModelStatus, modelTip);
@@ -860,6 +901,7 @@ namespace DevProxyApp
             proxy = (proxy ?? "").Trim();
             // Disabling a route must not erase its saved address/credentials.
             if (!useProxy) return proxy;
+            if (ManagedAccess.IsPaidProfile(proxy)) return ManagedAccess.PaidProfile;
             if (ManagedAccess.IsProfile(proxy)) return ManagedAccess.Profile;
             if (IsDirectProxyValue(proxy) || (string.IsNullOrEmpty(proxy) && useDns)) return "direct";
             Uri parsed;
@@ -1100,6 +1142,8 @@ namespace DevProxyApp
                 bool needsPairing = managed && !paired;
                 string route = managed ? (ManagedAccess.IsPaidProfile(config.LastProxy)?"Приватные прокси по ключу":"Прокси Dagami") : config.UseProxy && !IsDirectProxyValue(config.LastProxy)
                     ? (config.PublicProxySelected ? "Публичный прокси" : "Свой прокси") : config.UseDagamiDns ? "Smart DNS" : "Системный маршрут / VPN";
+                if (config.UseProxy && config.PublicProxySelected && _bridgePort > 0 && _publicRouteNumber > 0 && config.LastProxy == _numberedPublicRoute)
+                    route += " №" + _publicRouteNumber;
                 string routeState = route;
                 if (managed) routeState += needsPairing ? (_activationKeySaved ? " · ключ сохранён, ожидает активации" : " · требуется активация ключа") :
                     _bridgePort > 0 ? " · устройство привязано, локальный мост запущен" : " · устройство привязано, локальный мост остановлен";

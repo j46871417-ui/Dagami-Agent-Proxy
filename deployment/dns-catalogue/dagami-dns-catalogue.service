@@ -1,0 +1,16 @@
+[Unit]
+Description=Refresh the Dagami DNS provider catalogue
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 /opt/dagami-dns-catalogue/refresh.py /etc/dagami-dns-catalogue/providers.json /var/lib/dagami-dns-catalogue/catalogue.json
+StateDirectory=dagami-dns-catalogue
+StateDirectoryMode=0755
+TimeoutStartSec=90
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectHome=yes
+ProtectSystem=strict
+CapabilityBoundingSet=

@@ -127,10 +127,77 @@ namespace DevProxyApp {
    if(reply[0]!=0||reply[1]!=90)throw new IOException("SOCKS4/4a CONNECT rejected");
   }
  }
+ internal sealed class PublicProxyProbe {
+  internal readonly bool Responded;
+  internal readonly string Failure;
+  internal PublicProxyProbe(bool responded,string failure) {Responded=responded;Failure=failure;}
+ }
+
+ internal sealed class PublicProxyScan {
+  readonly IList<Uri> _candidates;
+  readonly PublicProxyProbe[] _results;
+  readonly int _offset;
+  internal readonly int SelectedNumber, Total, Checked, Passed, Responded;
+  internal string Proxy {get {return SelectedNumber==0?null:Address(SelectedNumber);}}
+  internal string Address(int number) {return _candidates[number-1].GetLeftPart(UriPartial.Authority);}
+  internal IEnumerable<int> OtherPassedNumbers() {
+   for(int i=0;i<_results.Length;i++) {
+    int number=_offset+i+1;
+    if(_results[i]!=null&&_results[i].Failure==null&&number!=SelectedNumber)yield return number;
+   }
+  }
+  internal int NumberOf(string proxy) {
+   for(int i=0;i<_results.Length;i++) {
+    int number=_offset+i+1;
+    if(_results[i]!=null&&_results[i].Failure==null&&Address(number)==proxy)return number;
+   }
+   return 0;
+  }
+
+  internal PublicProxyScan(IList<Uri> candidates,PublicProxyProbe[] results,int offset,int selectedNumber) {
+   _candidates=candidates;
+   _results=(PublicProxyProbe[])results.Clone();
+   _offset=offset;
+   SelectedNumber=selectedNumber;
+   Total=candidates.Count;
+   foreach(var result in _results) {
+    if(result==null)continue;
+    Checked++;
+    if(result.Responded)Responded++;
+    if(result.Failure==null)Passed++;
+   }
+  }
+
+  internal string Summary(int connectedNumber=0) {
+   string summary="В списке "+Total+" · проверено "+Checked+"/"+_results.Length+" · ответили "+Responded+
+    " · подходят "+Passed+" · без ответа "+(Checked-Responded);
+   if(connectedNumber!=0)return summary+" · подключён №"+connectedNumber;
+   return SelectedNumber==0?summary:summary+" · выбран №"+SelectedNumber;
+  }
+
+  internal string Details(int connectedNumber=0) {
+   var report=new StringBuilder(Summary(connectedNumber));
+   if(Responded>Passed)report.Append("\r\nОтветили, но не прошли проверку: ").Append(Responded-Passed).Append('.');
+   if(Total>_results.Length)report.Append("\r\nПроверяем адреса №").Append(_offset+1).Append("–").Append(_offset+_results.Length)
+    .Append(". Повторный поиск проверит следующую группу.");
+   for(int i=0;i<_results.Length;i++) {
+    if(_results[i]==null)continue;
+    int number=_offset+i+1;
+    report.Append("\r\n№").Append(number).Append(" — ");
+    if(number==connectedNumber)report.Append("прошёл, подключён");
+    else if(connectedNumber==0&&number==SelectedNumber)report.Append("прошёл, выбран для подключения");
+    else report.Append(_results[i].Failure??"прошёл");
+   }
+   return report.ToString();
+  }
+ }
+
  internal static class PublicProxyCandidates {
   const string Source = "https://raw.githubusercontent.com/ProxyScrape/free-proxy-list/main/proxies/protocols/https/data.txt";
   const string Mirror = "https://cdn.jsdelivr.net/gh/ProxyScrape/free-proxy-list@main/proxies/protocols/https/data.txt";
   const string GeminiHost = "gemini.google.com";
+  const int BatchSize = 12;
+  static int _batch;
   static readonly string[] OtherHosts = {"github.com","chatgpt.com"};
 
   static bool IsPublicIpv4(IPAddress address) {
@@ -145,13 +212,14 @@ namespace DevProxyApp {
      !(b[0]==203 && b[1]==0 && b[2]==113);
   }
 
-  static bool Probe(Uri candidate,string host) {
+  static string Probe(Uri candidate,string host,out bool responded) {
+   responded=false;
    try {
     using(var tcp=new TcpClient(AddressFamily.InterNetwork))
-    using(var deadline=new System.Threading.Timer(_=>tcp.Close(),null,8000,System.Threading.Timeout.Infinite)) {
+    using(var deadline=new System.Threading.Timer(_=>tcp.Close(),null,6000,System.Threading.Timeout.Infinite)) {
      var pending=tcp.BeginConnect(IPAddress.Parse(candidate.Host),candidate.Port,null,null);
-     using(pending.AsyncWaitHandle) {
-      if(!pending.AsyncWaitHandle.WaitOne(2500))return false;
+     using(var completed=pending.AsyncWaitHandle) {
+      if(!completed.WaitOne(2500))return "нет ответа TCP";
       tcp.EndConnect(pending);
      }
      using(var stream=tcp.GetStream()) {
@@ -161,15 +229,32 @@ namespace DevProxyApp {
       stream.Write(request,0,request.Length);
       byte[] reply=new byte[4096];
       int length=LocalProxyBridge.ReadConnectResponse(stream,reply);
-      if(LocalProxyBridge.ConnectStatus(Encoding.ASCII.GetString(reply,0,length))!=200)return false;
-      using(var tls=TlsDiagnostics.Connect(stream,host,"public-proxy",2500))return tls.IsAuthenticated;
+      int status=LocalProxyBridge.ConnectStatus(Encoding.ASCII.GetString(reply,0,length));
+      responded=true;
+      if(status!=200)return "прокси ответил HTTP "+status;
+      using(var tls=TlsDiagnostics.Connect(stream,host,"public-proxy",2500))
+       return tls.IsAuthenticated?null:"TLS до сервиса не подтверждён";
      }
     }
-   } catch(IOException) {return false;}
-   catch(SocketException) {return false;}
-   catch(AuthenticationException) {return false;}
-   catch(InvalidDataException) {return false;}
-   catch(ObjectDisposedException) {return false;}
+   } catch(AuthenticationException) {return "TLS до сервиса не подтверждён";}
+   catch(EndOfStreamException) {return responded?"соединение оборвалось после CONNECT":"прокси закрыл соединение без ответа CONNECT";}
+   catch(InvalidDataException) {return "некорректный ответ CONNECT";}
+   catch(ObjectDisposedException) {return "истёк тайм-аут проверки";}
+   catch(SocketException error) {return NetworkFailure(error);}
+   catch(IOException error) {
+    var socket=error.InnerException as SocketException;
+    return socket==null?"соединение оборвалось":NetworkFailure(socket);
+   }
+  }
+
+  static string NetworkFailure(SocketException error) {
+   switch(error.SocketErrorCode) {
+    case SocketError.TimedOut: return "истёк тайм-аут";
+    case SocketError.ConnectionRefused: return "соединение отклонено";
+    case SocketError.Interrupted:
+    case SocketError.OperationAborted: return "истёк тайм-аут проверки";
+    default: return "соединение оборвалось";
+   }
   }
 
   static List<Uri> Download(string source) {
@@ -198,7 +283,6 @@ namespace DevProxyApp {
      if(!UpstreamProxyDiagnostics.TryParse(value,out uri)||uri.Scheme!="http"||uri.UserInfo.Length!=0||
          !IPAddress.TryParse(uri.Host,out ip)||!IsPublicIpv4(ip)||!seen.Add(uri.Authority))continue;
      candidates.Add(uri);
-     if(candidates.Count==12)break;
     }
    }
    if(candidates.Count==0)throw new InvalidDataException("В списке нет допустимых адресов.");
@@ -217,31 +301,50 @@ namespace DevProxyApp {
    return candidates;
   }
 
-  internal static string FindForService(Func<Uri,bool> verify) {
-   string found=null;
-   System.Threading.Tasks.Parallel.ForEach(LoadCandidates(),new System.Threading.Tasks.ParallelOptions{MaxDegreeOfParallelism=4},(candidate,state)=>{
-    if(state.IsStopped||!verify(candidate))return;
-    System.Threading.Interlocked.CompareExchange(ref found,candidate.GetLeftPart(UriPartial.Authority),null);
-    state.Stop();
-   });
-   return found;
-  }
-
-  public static KeyValuePair<string,string> Find(bool requireGemini) {
-   Tuple<string,string> found=null;
-   string[] hosts=requireGemini?new[]{GeminiHost}:OtherHosts;
-   System.Threading.Tasks.Parallel.ForEach(LoadCandidates(),new System.Threading.Tasks.ParallelOptions{MaxDegreeOfParallelism=4},(candidate,state)=>{
-    foreach(string host in hosts) {
-     if(state.IsStopped)return;
-     if(!Probe(candidate,host))continue;
-     System.Threading.Interlocked.CompareExchange(ref found,
-         Tuple.Create(candidate.GetLeftPart(UriPartial.Authority),host),null);
-     state.Stop();
-     return;
+  internal static PublicProxyScan Scan(IList<Uri> candidates,int offset,Func<Uri,PublicProxyProbe> verify,IProgress<PublicProxyScan> progress) {
+   var results=new PublicProxyProbe[Math.Min(candidates.Count-offset,BatchSize)];
+   var gate=new object();
+   int selected=0;
+   if(progress!=null)progress.Report(new PublicProxyScan(candidates,results,offset,selected));
+   System.Threading.Tasks.Parallel.For(0,results.Length,new System.Threading.Tasks.ParallelOptions{MaxDegreeOfParallelism=4},i=>{
+    PublicProxyProbe result;
+    try {result=verify(candidates[offset+i]);}
+    catch(TimeoutException) {result=new PublicProxyProbe(false,"истёк тайм-аут");}
+    catch(SocketException error) {result=new PublicProxyProbe(false,NetworkFailure(error));}
+    catch(IOException) {result=new PublicProxyProbe(false,"соединение оборвалось");}
+    catch(AuthenticationException) {result=new PublicProxyProbe(false,"TLS не подтверждён");}
+    lock(gate) {
+     results[i]=result;
+     if(result.Failure==null&&selected==0)selected=offset+i+1;
+     if(progress!=null)progress.Report(new PublicProxyScan(candidates,results,offset,selected));
     }
    });
-   return found==null?default(KeyValuePair<string,string>):new KeyValuePair<string,string>(found.Item1,found.Item2);
+   return new PublicProxyScan(candidates,results,offset,selected);
   }
+
+  internal static PublicProxyScan FindForService(Func<Uri,PublicProxyProbe> verify,IProgress<PublicProxyScan> progress) {
+   var candidates=LoadCandidates();
+   uint batch=unchecked((uint)(System.Threading.Interlocked.Increment(ref _batch)-1));
+   int groups=(candidates.Count+BatchSize-1)/BatchSize;
+   return Scan(candidates,(int)(batch%(uint)groups)*BatchSize,verify,progress);
+  }
+
+  internal static PublicProxyScan Find(bool requireGemini,IProgress<PublicProxyScan> progress) {
+   string[] hosts=requireGemini?new[]{GeminiHost}:OtherHosts;
+   return FindForService(candidate=>{
+    var failures=new List<string>(hosts.Length);
+    bool responded=false;
+    foreach(string host in hosts) {
+     bool answered;
+     string failure=Probe(candidate,host,out answered);
+     responded|=answered;
+     if(failure==null)return new PublicProxyProbe(true,null);
+     failures.Add(host+" · "+failure);
+    }
+    return new PublicProxyProbe(responded,string.Join(" / ",failures));
+   },progress);
+  }
+
  }
 
  public static class UpstreamProxyDiagnostics {

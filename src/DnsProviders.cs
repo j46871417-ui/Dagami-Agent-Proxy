@@ -105,6 +105,7 @@ namespace DevProxyApp {
     var verified=Array.FindAll(learned,x=>x.Provider==provider);
     list.AddRange(verified.Length>0?verified:Array.FindAll(seeds,x=>x.Provider==provider));
    }
+   foreach(var provider in DnsCatalogue.Options())list.AddRange(provider.Endpoints());
    return list.ToArray();
   }
 
@@ -167,6 +168,8 @@ namespace DevProxyApp {
 
   public static DnsEndpoint[] ForServer(string server){
    string value=(server??"").Trim().TrimEnd('.');
+   var shared=DnsCatalogue.ForUrl(value);
+   if(shared!=null)return shared;
    string provider=MatchBuiltInProvider(value);
    if(Array.Exists(new[]{"89.22.224.205","89.125.103.139","45.147.31.32","46.29.165.108",RetiredDagamiIp},x=>x==value))provider="dagami";
    foreach(var endpoint in Seeds())if(value==endpoint.Address)provider=endpoint.Provider;
@@ -210,7 +213,7 @@ namespace DevProxyApp {
     case "comss":return "Comss.one";
     case "malw":return "Malw.link";
     case "xboxdns":return "Xbox DNS";
-    default:return "Свой DNS";
+    default:return DnsCatalogue.ProviderName(provider)??"Свой DNS";
    }
   }
   internal static int AttemptTimeout(int remaining,int attempts,int ceiling){
@@ -586,6 +589,7 @@ namespace DevProxyApp {
     }
     if(download==null&&verify==null){
      RefreshNamedEndpoints(LookupNamedAddresses,VerifyEndpoint);
+     RefreshSharedCatalogue();
      try{ProbeAllBuiltIn();}catch{}
     }else{
      lock(Sync){lastCheckedUtc=DateTime.UtcNow;lastError=errors.Count==0?null:string.Join(", ",errors.ToArray());}
@@ -598,9 +602,11 @@ namespace DevProxyApp {
     if(timer!=null)return;
     cachePath=path??Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),"devproxy","dns-endpoints.json");
     Load();
+     DnsCatalogue.Initialize(Path.Combine(Path.GetDirectoryName(cachePath),"dns-shared-catalogue.json"));
     if(background)timer=new Timer(state=>{try{Refresh();}catch(Exception error){Logger.Log("[DNS catalogue] "+error.GetType().Name);}},null,0,600000);
    }
   }
+  internal static void RefreshSharedCatalogue(){DnsCatalogue.Refresh(null,VerifyEndpoint);}
   static void Load(){try{
    if(!File.Exists(cachePath)||new FileInfo(cachePath).Length>32768)return;
    var json=new JavaScriptSerializer{MaxJsonLength=32768};var saved=json.Deserialize<Dictionary<string,object>>(File.ReadAllText(cachePath));

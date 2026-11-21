@@ -272,7 +272,7 @@ namespace DevProxyApp {
     }
    }
   }
-  static void ConfigureControlTls() {
+  internal static void ConfigureControlTls() {
    // The standalone WinForms EXE can inherit Ssl3|Tls from .NET Framework.
    // In that case use TLS 1.2 before the first managed HTTP request, regardless
    // of whether the updater has run. Preserve OS-default policy and TLS 1.3.

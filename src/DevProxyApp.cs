@@ -797,6 +797,8 @@ namespace DevProxyApp
         private readonly Queue<AntigravityApiPeer> _antigravityApiPeers = new Queue<AntigravityApiPeer>();
         private long _antigravityApiConnections;
         internal long AntigravityApiConnections { get { return Interlocked.Read(ref _antigravityApiConnections); } }
+        private int _upstreamAnswered;
+        internal bool UpstreamAnswered { get { return Volatile.Read(ref _upstreamAnswered) != 0; } }
 
         internal List<AntigravityApiPeer> AntigravityApiPeers(long after, HashSet<int> pids)
         {
@@ -843,6 +845,7 @@ namespace DevProxyApp
             {
 
                 if (_running) throw new InvalidOperationException("Мост уже запущен.");
+                Volatile.Write(ref _upstreamAnswered, 0);
 
                 if (port < 0 || port > 65535) throw new ArgumentOutOfRangeException("port");
 
@@ -1440,6 +1443,8 @@ namespace DevProxyApp
                     string respText = Encoding.ASCII.GetString(respBuf, 0, respRead);
 
                     int status = ConnectStatus(respText);
+
+                    Volatile.Write(ref _upstreamAnswered, 1);
 
                     Logger.Trace(connection + " CONNECT status=" + status + " elapsed_ms=" + elapsed.ElapsedMilliseconds);
 
@@ -4461,11 +4466,15 @@ namespace DevProxyApp
                     }
                 }
 
+                string modelPreparation = ConfigManager.Instance.PrepareAntigravityClient
+                    ? "результат подготовки неизвестен" : "автоподготовка выключена";
                 if (AntigravityIntegration.Supports(target.ExePath) && !reuse && ConfigManager.Instance.PrepareAntigravityClient)
 
                 {
 
                     var preparation=AntigravityIntegration.PrepareClient(target.ExePath);
+                    modelPreparation = preparation.Complete ? "клиент подготовлен" :
+                        preparation.Prepared ? "клиент подготовлен частично" : "подготовка не выполнена";
 
                     if(preparation.Complete)_nativeClientNotices.Remove(target.Id);
 
@@ -4586,6 +4595,7 @@ namespace DevProxyApp
                     {
                         session.ModelBridge = _rescueBridge;
                         session.ModelRoute = _rescueAiRoute;
+                        session.ModelPreparationStatus = modelPreparation;
                         session.LastScannedModelTunnels = _rescueBridge.AntigravityApiConnections;
                     }
                 }
@@ -4594,6 +4604,7 @@ namespace DevProxyApp
                 if (launched == null) { error = "Процесс приложения не был создан."; return false; }
 
                 session.Processes.Add(launched);
+                if (!reuse && session.ModelLog != null) RememberAntigravityReport(session);
                 if(pendingBridge!=null){session.PrivateBridge=pendingBridge;pendingBridge=null;}
                 if(gemini)Logger.Log("[Gemini] effective route="+(session.PrivateBridge!=null?"upstream-only":"shared-explicit-route")+" bridge=127.0.0.1:"+new Uri(localProxy).Port+"; доступ чата не проверен.");
 

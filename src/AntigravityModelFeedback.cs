@@ -218,6 +218,35 @@ namespace DevProxyApp
 
         private readonly List<Entry> _entries = new List<Entry>();
 
+        internal static string DiagnosticSummary(NativeSession session, bool manuallyConfirmed)
+        {
+            var route = session.ModelRoute;
+            string observed = "соединение с API через Dagami пока не обнаружено";
+            if (session.ModelRouteObserved)
+            {
+                if (session.ModelDnsSource != null)
+                    observed = "Smart DNS · " + DnsProviders.ProviderName(session.ModelDnsSource.Provider) +
+                        (session.ModelRelay == null ? "" : " · ретранслятор API " + session.ModelRelay);
+                else if (route == null) observed = "через Dagami · выбранный выход неизвестен";
+                else if (route.PublicProxy) observed = "публичный прокси";
+                else if (ManagedAccess.IsPaidProfile(route.Proxy)) observed = "приватный прокси по ключу";
+                else if (ManagedAccess.IsProfile(route.Proxy)) observed = "Dagami по ключу";
+                else if (route.Proxy != null && route.Proxy != "direct") observed = "свой прокси";
+                else observed = "прямой маршрут от локального моста";
+            }
+            string result;
+            switch (session.ModelOutcome)
+            {
+                case AntigravityModelOutcome.Streaming: result = "начало ответа зарегистрировано"; break;
+                case AntigravityModelOutcome.RegionRejected: result = "региональный отказ Google"; break;
+                case AntigravityModelOutcome.AccountRejected: result = "Google отклонил допуск аккаунта"; break;
+                default: result = manuallyConfirmed ? "ответ подтверждён пользователем" : "ответ ещё не проверен"; break;
+            }
+            return "Antigravity" + Environment.NewLine +
+                "Подготовка клиента: " + (session.ModelPreparationStatus ?? "неизвестно") + Environment.NewLine +
+                "Маршрут API: " + observed + Environment.NewLine + "Результат модели: " + result;
+        }
+
         internal void Record(AiRoute route, AntigravityModelOutcome outcome, DateTime at, IEnumerable<IPAddress> smartDnsAddresses)
         {
             if ((route != null && route.PublicProxy) ||

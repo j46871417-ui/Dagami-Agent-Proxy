@@ -16,6 +16,71 @@ class ProxyFailureChecks {
  static int checks;
  static void Assert(bool ok,string message){checks++;if(!ok)throw new Exception(message);}
 
+ sealed class CaptureProgress<T> : IProgress<T> {
+  readonly Action<object> _capture;
+  public CaptureProgress(Action<object> capture) {_capture=capture;}
+  public void Report(T value) {_capture(value);}
+ }
+
+ static void CheckPublicProxyScan() {
+  var assembly=typeof(LocalProxyBridge).Assembly;
+  var scan=assembly.GetType("DevProxyApp.PublicProxyScan");
+  var probeType=assembly.GetType("DevProxyApp.PublicProxyProbe");
+  var search=assembly.GetType("DevProxyApp.PublicProxyCandidates").GetMethod("Scan",BindingFlags.Static|BindingFlags.NonPublic);
+  var members=BindingFlags.Instance|BindingFlags.NonPublic;
+  var snapshots=new List<object>();
+  var progress=Activator.CreateInstance(typeof(CaptureProgress<>).MakeGenericType(scan),new object[]{new Action<object>(snapshots.Add)});
+  var catalog=Enumerable.Range(1,15).Select(i=>new Uri("http://192.0.2."+i+":8080")).ToArray();
+  Func<object,string,int> count=(value,name)=>(int)scan.GetField(name,members).GetValue(value);
+  Func<bool,string,object> answer=(responded,failure)=>Activator.CreateInstance(probeType,members,null,new object[]{responded,failure},null);
+  var candidate=Expression.Parameter(typeof(Uri));
+  Func<Func<Uri,object>,Delegate> verifier=run=>Expression.Lambda(
+   typeof(Func<,>).MakeGenericType(typeof(Uri),probeType),
+   Expression.Convert(Expression.Invoke(Expression.Constant(run),candidate),probeType),candidate).Compile();
+  var probe=verifier(uri=>{
+   if(uri==catalog[12])throw new TimeoutException();
+   return answer(true,uri==catalog[13]?null:"прокси ответил HTTP 403");
+  });
+  var result=search.Invoke(null,new object[]{catalog,12,probe,progress});
+  Assert(snapshots.Select(s=>count(s,"Checked")).SequenceEqual(new[]{0,1,2,3}),"Concurrent progress overwrote an earlier result");
+  Assert(count(result,"Total")==15&&count(result,"Checked")==3&&count(result,"Passed")==1&&count(result,"Responded")==2,
+   "Skipped catalog entries counted as failures");
+  Assert(count(result,"SelectedNumber")==14&&
+   (string)scan.GetProperty("Proxy",members).GetValue(result,null)=="http://192.0.2.14:8080","Wrong number for later batch winner");
+  string report=(string)scan.GetMethod("Details",members).Invoke(result,new object[]{14});
+  Assert(report.Contains("№13 — истёк тайм-аут")&&report.Contains("№14 — прошёл, подключён")&&report.Contains("№15 — прокси ответил HTTP 403")&&
+   !report.Contains("192.0.2."),"Report misstated failures or exposed addresses");
+  var firstBatch=search.Invoke(null,new object[]{catalog,0,verifier(_=>answer(false,"нет ответа")),null});
+  Assert(count(firstBatch,"Checked")==12&&count(firstBatch,"SelectedNumber")==0&&count(firstBatch,"Responded")==0,
+   "Batch limit or empty result handling broke");
+  var alternatives=search.Invoke(null,new object[]{catalog,12,verifier(_=>answer(true,null)),null});
+  var other=(IEnumerable<int>)scan.GetMethod("OtherPassedNumbers",members).Invoke(alternatives,null);
+  Assert(other.Concat(new[]{count(alternatives,"SelectedNumber")}).OrderBy(i=>i).SequenceEqual(new[]{13,14,15}),
+   "Verified public alternatives were lost");
+  var server=new TcpListener(IPAddress.Loopback,0);
+  server.Start();
+  var worker=new Thread(()=>{
+   try {
+    using(var peer=server.AcceptTcpClient()) {
+     var stream=peer.GetStream();
+     stream.ReadTimeout=3000;
+     Header(stream);
+     byte[] reply=Encoding.ASCII.GetBytes("HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\n\r\n");
+     stream.Write(reply,0,reply.Length);
+    }
+   } catch(IOException) {}
+   catch(SocketException) {}
+  }){IsBackground=true};
+  worker.Start();
+  try {
+   var upstream=new Uri("http://127.0.0.1:"+((IPEndPoint)server.LocalEndpoint).Port);
+   var check=assembly.GetType("DevProxyApp.AutomaticAiRoute").GetMethod("ProbePublic",BindingFlags.Static|BindingFlags.NonPublic);
+   var refusal=check.Invoke(null,new object[]{upstream,"Codex"});
+   Assert((bool)probeType.GetField("Responded",members).GetValue(refusal)&&probeType.GetField("Failure",members).GetValue(refusal)!=null,
+    "The bridge reported an actual upstream 403 as no response or a usable route");
+  } finally {server.Stop();worker.Join(1000);}
+ }
+
  static void CheckAntigravityModelFeedback() {
   var assembly=typeof(LocalProxyBridge).Assembly;
   var parser=assembly.GetType("DevProxyApp.AntigravityModelLog");
@@ -108,8 +173,28 @@ class ProxyFailureChecks {
    if(proxy.GetValue(item)!=null&&dns.GetValue(item)!=null)combo=item;
   }
   Assert(dnsDefaults==1&&combo!=null,"DNS deduplication or combined route is missing");
+  var background=chooser.GetMethod("BackgroundAntigravityCandidates",flags);
+  var proxyRecovery=(IList)background.Invoke(null,new object[]{plan,plan[0],true,false,"dns.dagami.ru"});
+  Assert(proxyRecovery.Count==1&&(string)proxy.GetValue(proxyRecovery[0])=="http://127.0.0.1:1234",
+   "Background recovery reused a refused route or enabled an unselected DNS or paid pool");
+  var dnsRecovery=(IList)background.Invoke(null,new object[]{plan,null,false,true,"dns.geohide.ru"});
+  Assert(dnsRecovery.Count==3&&dnsRecovery.Cast<object>().All(item=>proxy.GetValue(item)==null)&&
+   dnsRecovery.Cast<object>().Any(item=>(string)dns.GetValue(item)=="dns.geohide.ru"),
+   "Background recovery ignored the saved DNS or tried an unselected provider");
+  var paid=plan.Cast<object>().Single(item=>(string)proxy.GetValue(item)==ManagedAccess.PaidProfile);
+  Assert(((IList)background.Invoke(null,new object[]{plan,paid,true,true,"dns.dagami.ru"})).Count==0,
+   "Background recovery escaped the selected paid pool");
   var routeHistoryType=assembly.GetType("DevProxyApp.AntigravityRouteHistory");
   var modelOutcome=assembly.GetType("DevProxyApp.AntigravityModelOutcome");
+  using(var session=new NativeSession()) {
+   var sessionType=session.GetType();
+   sessionType.GetField("ModelRoute",fields).SetValue(session,combo);
+   sessionType.GetField("ModelRouteObserved",fields).SetValue(session,true);
+   sessionType.GetField("ModelOutcome",fields).SetValue(session,Enum.Parse(modelOutcome,"RegionRejected"));
+   var summary=(string)routeHistoryType.GetMethod("DiagnosticSummary",flags).Invoke(null,new object[]{session,false});
+   Assert(summary.Contains("Подготовка клиента")&&summary.Contains("Маршрут API: свой прокси")&&
+    summary.Contains("региональный отказ")&&!summary.Contains("127.0.0.1:1234"),"Diagnostic summary conflated the outcome and route or leaked the proxy address");
+  }
   var history=Activator.CreateInstance(routeHistoryType,true);
   var record=routeHistoryType.GetMethod("Record",fields);
   var prioritize=routeHistoryType.GetMethod("Prioritize",fields);
@@ -142,14 +227,29 @@ class ProxyFailureChecks {
   Assert(nonGoogle.Count==1&&dns.GetValue(nonGoogle[0])==null,"Codex was credited with an unrelated DNS route");
   Assert(route.GetMethod("ProbeDns",fields).Invoke(combo,new object[]{"Gemini"})==null,"Gemini check ignores its proxy-only launcher");
   var chosen=select.Invoke(null,new object[]{plan,probe(candidate=>Object.ReferenceEquals(candidate,combo)?null:"HTTP 403"),
-   new Func<string>(()=>{throw new Exception("Public source contacted with a verified private route");})});
+    new Func<string>(()=>{throw new Exception("Public source contacted with a verified private route");}),null});
   var winner=chosen.GetType().GetField("Route",fields);
   Assert(Object.ReferenceEquals(winner.GetValue(chosen),combo),"Failed route was chosen before verified alternative");
-  var none=select.Invoke(null,new object[]{plan,probe(candidate=>"HTTP 429"),null});
+   var none=select.Invoke(null,new object[]{plan,probe(candidate=>"HTTP 429"),null,null});
   Assert(winner.GetValue(none)==null,"A throttled route was chosen with public fallback disabled");
   int fetches=0;
-  var fallback=select.Invoke(null,new object[]{plan,probe(candidate=>"HTTP 502"),new Func<string>(()=>{fetches++;return "http://192.0.2.4:8080";})});
+   var fallback=select.Invoke(null,new object[]{plan,probe(candidate=>"HTTP 502"),new Func<string>(()=>{fetches++;return "http://192.0.2.4:8080";}),null});
   Assert(fetches==1&&(bool)publicFlag.GetValue(winner.GetValue(fallback)),"Public fallback failed or ran more than once");
+   var ready=select.Invoke(null,new object[]{plan,probe(candidate=>ReferenceEquals(candidate,plan[0])?"HTTP 403":null),null,null});
+   var alternates=(IList)ready.GetType().GetField("Alternatives",fields).GetValue(ready);
+   Assert(ReferenceEquals(winner.GetValue(ready),plan[1])&&alternates.Cast<object>().SequenceEqual(plan.Cast<object>().Skip(2)),
+    "Verified alternatives were lost or ranked by completion order");
+   var interrupted=select.Invoke(null,new object[]{plan,probe(candidate=>{
+    if(ReferenceEquals(candidate,plan[0]))throw new IOException();
+    return null;
+   }),null,null});
+   Assert(ReferenceEquals(winner.GetValue(interrupted),plan[1]),"One transient I/O failure stopped route selection");
+   var fast=select.Invoke(null,new object[]{plan,probe(candidate=>{
+    if(!ReferenceEquals(candidate,plan[0]))throw new Exception("Unnecessary route probe");
+    return null;
+   }),null,null});
+   var fastProgress=fast.GetType().GetField("Progress",fields).GetValue(fast);
+   Assert((int)fastProgress.GetType().GetField("Checked",fields).GetValue(fastProgress)==1,"First healthy route failed to skip other probes");
   var antigravityChecks=(Array)chooser.GetMethod("Checks",flags).Invoke(null,new object[]{"Antigravity"});
   var check=antigravityChecks.GetType().GetElementType();
   var byHost=antigravityChecks.Cast<object>().ToDictionary(item=>(string)check.GetField("Host",fields).GetValue(item));
@@ -293,6 +393,7 @@ class ProxyFailureChecks {
  static int Main(){try {
   CheckAntigravityModelFeedback();
   CheckAutomaticAiRoutes();
+  CheckPublicProxyScan();
   string builtInPac=SelectiveProxyRules.BuiltInPac(53200);
   Assert(builtInPac.Contains("gemini.google.com")&&builtInPac.Contains("ttvnw.net")&&!builtInPac.Contains("test-dns.dagami.ru"),"Packaged PAC rules are missing or route the gateway");
   Assert(!builtInPac.Contains("PROXY 127.0.0.1:53200; DIRECT"),"Browser fallback leaked into Windows PAC");

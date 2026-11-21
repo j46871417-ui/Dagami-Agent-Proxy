@@ -25,7 +25,7 @@ import (
 
 const nativeExe = "DagamiAgentProxy.exe"
 
-var nativeSources = strings.Fields(`DevProxyApp.cs NativeUi.cs FluentUi.cs SimpleUi.cs DnsBenchmark.cs AnswerSanity.cs LocalPort53.cs BrowserDiagnostics.cs AntigravityIntegration.cs AntigravityModelFeedback.cs CliRegionGate.cs ProxyDiagnostics.cs AutomaticAiRoute.cs AutomaticSystemRoute.cs DnsProviders.cs DnsTransport.cs DnsAgent.cs DpiDesync.cs DpiPacketSplitter.cs WinDivertPacketTest.cs SelectiveProxyRules.cs AntigravityUi.cs AntigravityLogin.cs NativeShortcuts.cs NativeLaunchBroker.cs NativeSessions.cs SystemDnsManager.cs NativeCli.cs Brand.cs ProxyAccess.cs ProxyEnvironment.cs RecoveryTool.cs GatewayTransport.cs RouteHealth.cs AppProxyPolicy.cs ApplicationSupport.cs JetBrainsProxySettings.cs ApplicationDiscovery.cs NativeCliApps.cs BugReports.cs NativeUpdates.cs UpdateInstaller.cs UpdateUi.cs NativeStartup.cs ManagedAccess.cs HttpWire.cs LoopbackPeer.cs`)
+var nativeSources = strings.Fields(`DevProxyApp.cs NativeUi.cs FluentUi.cs SimpleUi.cs DnsBenchmark.cs AnswerSanity.cs LocalPort53.cs BrowserDiagnostics.cs AntigravityIntegration.cs AntigravityModelFeedback.cs CliRegionGate.cs ProxyDiagnostics.cs AutomaticAiRoute.cs AutomaticSystemRoute.cs DnsProviders.cs DnsCatalogue.cs DnsTransport.cs DnsAgent.cs DpiDesync.cs DpiPacketSplitter.cs WinDivertPacketTest.cs SelectiveProxyRules.cs AntigravityUi.cs AntigravityLogin.cs NativeShortcuts.cs NativeLaunchBroker.cs NativeSessions.cs SystemDnsManager.cs NativeCli.cs Brand.cs ProxyAccess.cs ProxyEnvironment.cs RecoveryTool.cs GatewayTransport.cs RouteHealth.cs AppProxyPolicy.cs ApplicationSupport.cs JetBrainsProxySettings.cs ApplicationDiscovery.cs NativeCliApps.cs BugReports.cs NativeUpdates.cs UpdateInstaller.cs UpdateUi.cs NativeStartup.cs ManagedAccess.cs HttpWire.cs LoopbackPeer.cs`)
 var references = strings.Fields("System.dll System.Core.dll System.Drawing.dll System.Windows.Forms.dll System.Security.dll System.Web.Extensions.dll System.IO.Compression.dll System.Xml.dll System.ServiceProcess.dll")
 var targets = []string{"windows/amd64", "darwin/amd64", "darwin/arm64", "linux/amd64", "linux/arm64"}
 var secretPatterns = map[string]*regexp.Regexp{
@@ -470,6 +470,9 @@ func sourceZip(path string) error {
 		"android/app/src/main/java/ru/dagami/agentproxy/MainActivity.java",
 		"android/app/src/main/java/ru/dagami/agentproxy/KeystoreSigner.java")
 	names = append(names, "docs/QUICK_START.md", "docs/USER_GUIDE.md", "docs/FORKING.md", "AGENTS.md", "bug_reports/README.md")
+	names = append(names, "deployment/dns-catalogue/README.md", "deployment/dns-catalogue/providers.json",
+		"deployment/dns-catalogue/refresh.py", "deployment/dns-catalogue/dagami-dns-catalogue.service",
+		"deployment/dns-catalogue/dagami-dns-catalogue.timer", "deployment/dns-catalogue/test_refresh.py")
 	for _, file := range browserExtensionFiles {
 		names = append(names, "browser-extension/"+file)
 	}

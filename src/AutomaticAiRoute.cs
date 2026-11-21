@@ -28,7 +28,15 @@ namespace DevProxyApp {
 
  internal sealed class AiRouteSelection {
   internal AiRoute Route;
+  internal AiRouteProgress Progress;
+  internal readonly List<AiRoute> Alternatives=new List<AiRoute>();
   internal readonly List<string> Report=new List<string>();
+ }
+
+ internal sealed class AiRouteProgress {
+  internal readonly int Checked, Total, Passed;
+  internal AiRouteProgress(int completed,int total,int passed) {Checked=completed;Total=total;Passed=passed;}
+  internal string Summary {get {return "Маршруты · проверено "+Checked+"/"+Total+" · прошли "+Passed+" · не прошли "+(Checked-Passed);}}
  }
 
  internal static class AutomaticAiRoute {
@@ -97,6 +105,7 @@ namespace DevProxyApp {
     if(service=="Antigravity")add(new AiRoute("MagicDNS",null,DnsProviders.MagicDnsHost));
     add(new AiRoute("Comss.one",null,"dns.comss.one"));
     add(new AiRoute("GeoHide",null,"dns.geohide.ru"));
+    foreach(var provider in DnsCatalogue.Options().Take(4))add(new AiRoute(provider.Name,null,provider.Url));
     if(service=="Antigravity"&&custom!=null&&custom!="direct")
      add(new AiRoute("Smart DNS + свой прокси",custom,dns??"dns.dagami.ru"));
    }
@@ -104,10 +113,28 @@ namespace DevProxyApp {
    return routes;
   }
 
+  internal static List<AiRoute> BackgroundAntigravityCandidates(IEnumerable<AiRoute> candidates,AiRoute current,
+   bool proxyEnabled,bool dnsEnabled,string savedDns) {
+   if(current!=null&&ManagedAccess.IsPaidProfile(current.Proxy))return new List<AiRoute>();
+   return candidates.Where(route=>!route.PublicProxy&&!route.SameRoute(current)&&
+    (route.Proxy==null||proxyEnabled&&route.Proxy!="direct")&&
+    !ManagedAccess.IsPaidProfile(route.Proxy)&&
+    (route.Dns==null||dnsEnabled&&(route.Dns==savedDns||route.Dns=="dns.dagami.ru"||route.Dns==DagamiReserveDoh))).ToList();
+  }
+
   internal static string Probe(AiRoute route,string service) {
    using(var bridge=new LocalProxyBridge()) {
     if(!bridge.Start(0,route.Proxy??"direct",route.ProbeDns(service)))return "временный мост не запустился";
     return VerifyRunning(bridge.BoundPort,service);
+   }
+  }
+
+  internal static PublicProxyProbe ProbePublic(Uri proxy,string service) {
+   using(var bridge=new LocalProxyBridge()) {
+    if(!bridge.Start(0,proxy.AbsoluteUri))return new PublicProxyProbe(false,"временный мост не запустился");
+    string failure=VerifyRunning(bridge.BoundPort,service);
+    if(!bridge.UpstreamAnswered)return new PublicProxyProbe(false,failure??"ответ прокси не подтверждён");
+    return new PublicProxyProbe(true,failure);
    }
   }
 
@@ -205,19 +232,36 @@ namespace DevProxyApp {
    persist();
   }
 
-  internal static AiRouteSelection Select(IList<AiRoute> routes,Func<AiRoute,string> probe,Func<string> findPublic) {
+  internal static AiRouteSelection Select(IList<AiRoute> routes,Func<AiRoute,string> probe,Func<string> findPublic,
+   IProgress<AiRouteProgress> progress=null) {
    var result=new AiRouteSelection();
-   if(routes.Count>0) {
-    string initial=probe(routes[0]);
-    if(initial==null) {result.Route=routes[0];return result;}
-    result.Report.Add(routes[0].Name+" — "+initial);
-   }
    var errors=new string[routes.Count];
-   if(routes.Count>1)Parallel.For(1,routes.Count,new ParallelOptions{MaxDegreeOfParallelism=4},i=>errors[i]=probe(routes[i]));
-   for(int i=1;i<routes.Count;i++) {
-    if(errors[i]==null&&result.Route==null)result.Route=routes[i];
-    else if(errors[i]!=null)result.Report.Add(routes[i].Name+" — "+errors[i]);
+   var gate=new object();
+   int completed=0,passed=0;
+   Action<int> check=index=>{
+    try {errors[index]=probe(routes[index]);}
+    catch(IOException error) {errors[index]="сбой подключения ("+error.GetType().Name+")";}
+    catch(TimeoutException) {errors[index]="истёк тайм-аут";}
+    lock(gate) {
+     if(errors[index]==null)passed++;
+     completed++;
+     if(progress!=null)progress.Report(new AiRouteProgress(completed,routes.Count,passed));
+    }
+   };
+   if(routes.Count>0) {
+    if(progress!=null)progress.Report(new AiRouteProgress(0,routes.Count,0));
+    check(0);
+    if(errors[0]==null)result.Route=routes[0];
+    else {
+     if(routes.Count>1)Parallel.For(1,routes.Count,new ParallelOptions{MaxDegreeOfParallelism=4},check);
+     for(int i=0;i<routes.Count;i++) {
+      if(errors[i]!=null)result.Report.Add("№"+(i+1)+" "+routes[i].Name+" — "+errors[i]);
+      else if(result.Route==null)result.Route=routes[i];
+      else result.Alternatives.Add(routes[i]);
+     }
+    }
    }
+   result.Progress=new AiRouteProgress(completed,routes.Count,passed);
    if(result.Route!=null||findPublic==null)return result;
    try {
     string proxy=findPublic();

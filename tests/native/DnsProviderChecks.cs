@@ -10,6 +10,36 @@ class DnsProviderChecks {
  static int checks;static void Assert(bool value,string message){checks++;if(!value)throw new Exception(message);}
  sealed class TrackingStream:MemoryStream {public int Writes;public override void Write(byte[] data,int offset,int count){if(count>0)Writes++;base.Write(data,offset,count);}}
  static void Reject(Action action,string message){bool failed=false;try{action();}catch{failed=true;}Assert(failed,message);}
+ static void CheckSharedCatalogue(string root) {
+  var shared=typeof(DnsProviders).Assembly.GetType("DevProxyApp.DnsCatalogue");
+  const BindingFlags methods=BindingFlags.Static|BindingFlags.NonPublic;
+  var parse=shared.GetMethod("Parse",methods);
+  var refresh=shared.GetMethod("Refresh",methods);
+  string cache=Path.Combine(root,"shared.json"),url="https://resolver.fixture.net/query";
+  shared.GetMethod("Initialize",methods).Invoke(null,new object[]{cache});
+  string json="{\"Version\":1,\"Providers\":[{\"Id\":\"test\",\"Name\":\"Fixture\",\"Url\":\""+url+
+   "\",\"Addresses\":[\"1.1.1.1\",\"8.8.8.8\"],\"VerifiedAt\":null}]}";
+  Action<string,Func<DnsEndpoint,bool>> update=(source,verify)=>refresh.Invoke(null,
+   new object[]{new Func<byte[]>(()=>Encoding.UTF8.GetBytes(source)),verify});
+  foreach(string value in new[]{"127.0.0.1","192.0.2.1","100.64.0.1","192.168.50.1"})
+   Reject(()=>parse.Invoke(null,new object[]{Encoding.UTF8.GetBytes(json.Replace("8.8.8.8",value))}),"Shared catalogue accepted a reserved address");
+  update(json,ep=>ep.Address=="1.1.1.1");
+  var current=DnsProviders.ForServer(url);
+  Assert(current.Length==1&&current[0].Address=="1.1.1.1"&&current[0].Host=="resolver.fixture.net"&&current[0].Path=="/query"&&
+   current[0].Provider=="catalogue/test","Only locally verified DoH addresses should enter the catalogue");
+  string saved=File.ReadAllText(cache);
+  update("{\"Version\":2}",ep=>true);
+  Assert(File.ReadAllText(cache)==saved,"An invalid update overwrote the last verified copy");
+  update(json,ep=>false);
+  Assert(DnsProviders.ForServer(url)[0].Address=="1.1.1.1","Temporary outage erased the last verified address");
+  string changed=json.Replace("https://resolver.fixture.net/query","tls://resolver.fixture.net:853");
+  update(changed,ep=>ep.Address=="8.8.8.8");
+  var dot=DnsProviders.ForServer("tls://resolver.fixture.net:853");
+  Assert(dot.Length==1&&dot[0].Port==853&&dot[0].Protocol=="TLS"&&dot[0].Address=="8.8.8.8","DoT changed authority or ignored the updated address");
+  update("{\"Version\":1,\"Providers\":[]}",ep=>true);
+  var options=(Array)shared.GetMethod("Options",methods).Invoke(null,null);
+  Assert(options.Length==0,"A removed DNS provider remained available for selection");
+ }
  static byte[] Profile(string provider,params string[] addresses){var values=new StringBuilder();foreach(string address in addresses)values.Append("<string>"+address+"</string>");string path=provider=="magicdns"?"/rpc":"/dns-query";return Encoding.UTF8.GetBytes("<?xml version='1.0'?><!DOCTYPE plist PUBLIC '-//Apple//DTD PLIST 1.0//EN' 'http://www.apple.com/DTDs/PropertyList-1.0.dtd'><plist><dict><key>PayloadContent</key><array><dict><key>DNSSettings</key><dict><key>DNSProtocol</key><string>HTTPS</string><key>ServerURL</key><string>https://"+DnsProviders.HostFor(provider)+path+"</string><key>ServerAddresses</key><array>"+values+"</array></dict></dict></array></dict></plist>");}
  static byte[] ReadHttp(string response){try{return (byte[])typeof(DnsHttpsTransport).GetMethod("ReadResponse",BindingFlags.Static|BindingFlags.NonPublic).Invoke(null,new object[]{new MemoryStream(Encoding.ASCII.GetBytes(response)),32,"application/dns-message",Stopwatch.StartNew(),1000,false});}catch(TargetInvocationException error){throw error.InnerException;}}
  static uint Checksum(uint sum,byte[] b,int offset,int length){for(int i=0;i<length;i+=2)sum+=(uint)(b[offset+i]<<8)|(uint)(i+1<length?b[offset+i+1]:0);while((sum>>16)!=0)sum=(sum&65535)+(sum>>16);return sum;}
@@ -30,6 +60,7 @@ class DnsProviderChecks {
  }
  static int Main(){string root=Path.Combine(Path.GetTempPath(),"Dagami-provider-check-"+Guid.NewGuid().ToString("N"));Directory.CreateDirectory(root);try{
   typeof(Logger).GetField("_logFilePath",BindingFlags.Static|BindingFlags.NonPublic).SetValue(null,Path.Combine(root,"proxy.log"));
+  CheckSharedCatalogue(root);
   var freshConfig=new ConfigManager();
   Assert(freshConfig.DnsHost=="api.magicinfo.art"&&!freshConfig.UseDagamiDns,"A new profile must select MagicDNS without activating it");
   var parseConfig=typeof(ConfigManager).GetMethod("ParseJsonConfig",BindingFlags.Instance|BindingFlags.NonPublic);

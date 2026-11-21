@@ -37,7 +37,8 @@ class UpdateRouteChecks {
   var chooser=assembly.GetType("DevProxyApp.AutomaticAiRoute");
   var candidates=(System.Collections.IList)chooser.GetMethod("Candidates",BindingFlags.Static|BindingFlags.NonPublic).Invoke(null,new object[]{"Codex",null,false,null,null,true});
   Assert(candidates.Count==0,"Keyed private pool was offered without an active key");
-  Assert(UpdateVersion.Parse("v0.8.0-beta").CompareTo(UpdateVersion.Parse("v0.7.4-beta"))>0,"Previous release cannot recognise the new version");
+  foreach(string oldVersion in new[]{"v0.8.0-beta","v0.7.4-beta","v0.7.0-beta"})
+   Assert(UpdateVersion.Parse("v0.8.1-beta").CompareTo(UpdateVersion.Parse(oldVersion))>0,"Previous release cannot recognise the new version");
   var device=(ManagedAccess)Activator.CreateInstance(typeof(ManagedAccess),BindingFlags.Instance|BindingFlags.NonPublic,null,new object[]{new Uri(ManagedAccess.Bootstrap),Convert.FromBase64String(ManagedAccess.CreateKey())},null);
   typeof(ManagedAccess).GetProperty("PaidPool").GetSetMethod(true).Invoke(device,new object[]{true});
   string request=device.ConnectRequest("api.openai.com:443");
