@@ -531,7 +531,8 @@ func (d *desktop) recovery() {
 					return text, nil
 				})
 			})
-		}), action("Назад", func() { d.page, d.status = "apps", ""; d.render() })}})}
+		}), action("Назад", func() { d.page, d.status = "apps", ""; d.render() }),
+	}})
 }
 func (f field) private() bool {
 	label := strings.ToLower(f.label)
