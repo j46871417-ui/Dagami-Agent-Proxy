@@ -83,7 +83,8 @@ func (d *desktop) showPage(v view) {
 			continue
 		}
 		if entry.id != "dns" || !portable.RoutingOnly {
-			v.nav = append(v.nav, action(entry.label, func() { d.page, d.status = entry.id, ""; d.render() }))
+			pageID := entry.id
+			v.nav = append(v.nav, action(entry.label, func() { d.page, d.status = pageID, ""; d.render() }))
 		}
 	}
 	if d.preview {
@@ -530,7 +531,7 @@ func (d *desktop) recovery() {
 					return text, nil
 				})
 			})
-		}), action("Назад", d.render)}})
+		}), action("Назад", func() { d.page, d.status = "apps", ""; d.render() })}})}
 }
 func (f field) private() bool {
 	label := strings.ToLower(f.label)
