@@ -23,12 +23,16 @@ func TestLaunchProxySettings(t *testing.T) {
 		{"gemini-windows", "windows", "GeminiAppLauncher.exe", false, true, true},
 		{"gemini-mac", "darwin", "Gemini", false, false, false},
 		{"unrelated", "linux", "cursor-tools", false, false, false},
+		{"antigravity-linux", "linux", "antigravity", false, true, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			app := App{Name: "Cursor (profile)", Path: tc.path, Console: tc.console, Args: []string{"--existing-arg"}}
 			args, env := launchProxySettings(app, local, tc.platform)
 			if args[0] != app.Args[0] || slices.Contains(args, "--proxy-server="+local) != tc.chromium {
 				t.Fatalf("arguments = %q", args)
+			}
+			if tc.platform == "linux" && tc.chromium && !slices.Contains(args, "--no-sandbox") {
+				t.Fatalf("missing --no-sandbox on linux: %q", args)
 			}
 			if !slices.Contains(env, "HTTPS_PROXY="+local) || !slices.Contains(env, "no_proxy=localhost,127.0.0.1,::1") || slices.Contains(env, "HTTPS_PROXY=http://127.0.0.1:54321") {
 				t.Fatal("inherited proxy was not replaced or loopback bypass is missing")
