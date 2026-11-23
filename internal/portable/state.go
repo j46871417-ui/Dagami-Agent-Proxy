@@ -432,6 +432,13 @@ func (c *Controller) Launch(id string) error {
 	cmd := exec.Command(app.Path, args...)
 	cmd.Env = env
 	cmd.Dir = filepath.Dir(app.Path)
+	if runtime.GOOS == "linux" {
+		if logf, lerr := os.OpenFile(filepath.Join(os.TempDir(), "dagami-app.log"), os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0600); lerr == nil {
+			cmd.Stdout = logf
+			cmd.Stderr = logf
+			defer logf.Close()
+		}
+	}
 	prepareProcess(cmd)
 	if e = cmd.Start(); e != nil {
 		closeBridge()

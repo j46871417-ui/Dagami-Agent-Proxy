@@ -295,6 +295,8 @@ func (d *desktop) profiles(snapshot portable.Snapshot) {
 			})
 		}),
 		action("Проверить связь", d.probe),
+		action("Публичный прокси", d.publicProxy),
+		action("Локальный VPN", d.localVpnPreset),
 		action("Dagami через бота", d.managedPair),
 		action("Приватные прокси по ключу", func() {
 			d.run("Приватные прокси", func() (string, error) {
@@ -303,6 +305,49 @@ func (d *desktop) profiles(snapshot portable.Snapshot) {
 		}),
 	}
 	d.showPage(v)
+}
+
+func (d *desktop) publicProxy() {
+	search := func(requireGemini bool) func() {
+		return func() {
+			label := "Поиск публичного прокси"
+			d.run(label, func() (string, error) {
+				return d.controller.FindPublicProxy(d.ctx, requireGemini)
+			})
+		}
+	}
+	d.showPage(view{
+		title:  "Публичный прокси",
+		detail: "Автопоиск бесплатного рабочего HTTPS-прокси с проверкой CONNECT и TLS (включает встроенный резервный список).",
+		actions: []button{
+			action("Найти (Gemini / Antigravity)", search(true)),
+			action("Найти (GitHub / ChatGPT)", search(false)),
+			action("Назад", d.render),
+		},
+	})
+}
+
+func (d *desktop) localVpnPreset() {
+	setLocal := func(name, rawProxy string) func() {
+		return func() {
+			d.run("Подключение "+name, func() (string, error) {
+				if err := d.controller.SaveProfile(name, rawProxy); err != nil {
+					return "", err
+				}
+				return "Профиль «" + name + "» (" + rawProxy + ") сохранён и готов к использованию.\nУбедитесь, что ваш VPN-клиент запущен.", nil
+			})
+		}
+	}
+	d.showPage(view{
+		title:  "Локальный VPN (SOCKS5 / HTTP)",
+		detail: "Быстрое подключение к локальному VPN-клиенту (Hiddify, Nekoray, v2rayA, Clash, Zapret).",
+		actions: []button{
+			action("Hiddify (SOCKS 2080)", setLocal("Hiddify SOCKS", "socks5://127.0.0.1:2080")),
+			action("Nekoray / v2rayA (SOCKS 1080)", setLocal("Nekoray SOCKS", "socks5://127.0.0.1:1080")),
+			action("Clash / Mihomo (HTTP 7890)", setLocal("Clash HTTP", "http://127.0.0.1:7890")),
+			action("Назад", d.render),
+		},
+	})
 }
 
 func (d *desktop) managedPair() {
